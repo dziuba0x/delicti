@@ -51,7 +51,9 @@ A receipt proves *registration*. "A false claim can be immutably registered." DE
 | `Bond.sol` — `challengeFalsePayment`: anchored receipt × FDC `ReferencedPaymentNonexistence` → slash | tests pass (mock FDC); live `FdcVerification` resolution verified on a Coston2 fork |
 | `Receipts.sol` — normalized "overt act" leaf bound to the original third-party receipt | done |
 | `scripts/contradicted-deed.sh` — live end-to-end on Coston2: testXRP nonexistence → FDC proof → slash | **done, executed on Coston2** |
-| flario: `mandate_ref` in `x402_receipt` | next |
+| flario `x402_receipt` v2 with `mandate_ref` + optional effector-side mandate gate (`DELICTI_REGISTRY`, `DELICTI_REQUIRE_MANDATE`) | patch for [flario](https://github.com/dziuba0x/flario) ready |
+| `Bond.challengeBudgetOverrunERC20` — the real x402 case: settlement is `transferWithAuthorization` on the token, native value is 0, the deed is the `Transfer` event inside the FDC proof | tests pass |
+| `tools/delicti.py` — normalize a flario receipt into a leaf (bit-identical to `Receipts.hash`), evidence class, sorted-pair Merkle tree + proofs | done |
 | `Bond.challengeBudgetOverrun` + `scripts/structuring.sh` — five 1-FLR deeds under a 4-FLR budget, each corroborated by FDC `EVMTransaction`, sum convicts | **done, executed on Coston2** |
 
 ### Live on Coston2 (2026-09-08)
@@ -78,6 +80,16 @@ forge test --fork-url coston2 --match-contract Coston2ForkTest -vv   # live wiri
 ```
 
 Deploy to Coston2: `forge script script/Deploy.s.sol --rpc-url coston2 --broadcast --private-key $PK`
+
+## Witness 1 from a real effector
+
+flario (an MCP server for Flare) is the first effector that speaks DELICTI. The paying agent adds `mandate_id` (and optionally `mandate_registry`) to its x402 payload; the server binds it into the receipt (`flario-receipt/2`, field `mandate_ref`) and, if `DELICTI_REGISTRY` is set, **refuses the payment before funds move** when the mandate is not live or the payer is not the mandated agent. The effector is the final common pathway — a deed with no mandate is a muscle moving with no signal, so the effector may simply not move.
+
+```
+x402 payload  →  flario checks MandateRegistry.isLive + agent  →  settles  →  x402_receipt{mandate_ref, fdc_attestation_ref}
+tools/delicti.py normalize receipt.json   →  leaf + leafHash (== Receipts.hash on-chain)
+tools/delicti.py tree leaf*.json          →  root for AnchorLog.anchor + per-leaf proofs for Bond
+```
 
 ## Evidence classes
 

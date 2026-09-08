@@ -165,3 +165,62 @@ contract StructuringTest is Test {
         bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, victim);
     }
 }
+
+/// x402 reality: the settlement tx calls the token, native value is 0, the deed is a Transfer event.
+contract StructuringERC20Test is StructuringTest {
+    address token = makeAddr("usdt0");
+
+    function _erc20Proof(uint256 i) internal view returns (IEVMTransaction.Proof memory p) {
+        p = _evmProof(i);
+        p.data.responseBody.receivingAddress = token; // tx target is the token contract
+        p.data.responseBody.value = 0; // no native value moved
+        p.data.responseBody.events = new IEVMTransaction.Event[](1);
+        bytes32[] memory topics = new bytes32[](3);
+        topics[0] = keccak256("Transfer(address,address,uint256)");
+        topics[1] = bytes32(uint256(uint160(agent)));
+        topics[2] = bytes32(uint256(uint160(merchant)));
+        p.data.responseBody.events[0] = IEVMTransaction.Event({
+            logIndex: uint32(i), emitterAddress: token, topics: topics, data: abi.encode(EACH), removed: false
+        });
+    }
+
+    function _bundleErc20(uint256 k)
+        internal
+        view
+        returns (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory proofs)
+    {
+        (idx, ls, paths,) = _bundle(k);
+        proofs = new IEVMTransaction.Proof[](k);
+        for (uint256 i = 0; i < k; i++) proofs[i] = _erc20Proof(i);
+    }
+
+    function test_erc20_salami_slash() public {
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
+        vm.prank(challenger);
+        bond.challengeBudgetOverrunERC20(mandateId, token, idx, ls, paths, pr, victim);
+        assertTrue(bond.slashed(mandateId));
+    }
+
+    function test_erc20_revert_nativePathRejectsTokenTx() public {
+        // the native-value path must NOT be fooled by a token tx (value == 0 != leaf.amount)
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
+        vm.prank(challenger);
+        vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, victim);
+    }
+
+    function test_erc20_revert_wrongTokenEmitter() public {
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
+        vm.prank(challenger);
+        vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
+        bond.challengeBudgetOverrunERC20(mandateId, makeAddr("other-token"), idx, ls, paths, pr, victim);
+    }
+
+    function test_erc20_revert_transferFromSomeoneElse() public {
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
+        pr[2].data.responseBody.events[0].topics[1] = bytes32(uint256(uint160(makeAddr("stranger"))));
+        vm.prank(challenger);
+        vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
+        bond.challengeBudgetOverrunERC20(mandateId, token, idx, ls, paths, pr, victim);
+    }
+}

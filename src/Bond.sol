@@ -209,6 +209,77 @@ contract Bond {
         _slash(mandateId, amount, victim);
     }
 
+    /// @notice STRUCTURING over ERC-20 payments (the real x402 case). An x402 settlement is
+    ///         `transferWithAuthorization` on the token contract, so the tx's native `value` is 0
+    ///         and the deed lives in the `Transfer(from,to,value)` event. The FDC EVMTransaction
+    ///         proof must be requested with `listEvents = true` and the log index of that event.
+    /// @param asset   the ERC-20 the mandate budget is denominated in (must be the event emitter)
+    function challengeBudgetOverrunERC20(
+        uint256 mandateId,
+        address asset,
+        uint256[] calldata episodeIndices,
+        Receipts.Leaf[] calldata leaves,
+        bytes32[][] calldata merkleProofs,
+        IEVMTransaction.Proof[] calldata fdcProofs,
+        address payable victim
+    ) external {
+        if (slashed[mandateId]) revert AlreadySlashed();
+        uint256 amount = bondOf[mandateId];
+        if (amount == 0) revert NothingToSlash();
+        uint256 n = leaves.length;
+        if (n == 0 || episodeIndices.length != n || merkleProofs.length != n || fdcProofs.length != n) {
+            revert LengthMismatch();
+        }
+        MandateRegistry.Mandate memory m = registry.get(mandateId);
+
+        uint256 spent;
+        bytes32 lastTx;
+        for (uint256 i = 0; i < n; i++) {
+            Receipts.Leaf calldata leaf = leaves[i];
+            if (leaf.kind != Receipts.KIND_EVM_TX) revert WrongReceiptKind();
+            if (leaf.mandateId != mandateId) revert ProofDoesNotMatchClaim();
+
+            bytes32 leafHash = Receipts.hash(leaf);
+            AnchorLog.Episode memory ep = log.episode(mandateId, episodeIndices[i]);
+            if (!Merkle.verify(merkleProofs[i], ep.root, leafHash)) revert LeafNotAnchored();
+
+            IEVMTransaction.Proof calldata pr = fdcProofs[i];
+            if (!fdc().verifyEVMTransaction(pr)) revert FdcProofInvalid();
+            bytes32 txh = pr.data.requestBody.transactionHash;
+            if (txh <= lastTx) revert UnorderedTxs();
+            lastTx = txh;
+            if (txh != leaf.ref || pr.data.sourceId != leaf.sourceId) revert ProofDoesNotMatchClaim();
+            IEVMTransaction.ResponseBody calldata rb = pr.data.responseBody;
+            if (rb.status != 1) revert TxNotSuccessful();
+
+            // find the Transfer(agent → payee) emitted by `asset`
+            uint256 v = _erc20TransferValue(rb.events, asset, m.agent, address(uint160(uint256(leaf.destinationAddressHash))));
+            if (v == 0 || v != leaf.amount) revert ProofDoesNotMatchClaim();
+            spent += v;
+        }
+        if (spent <= m.budget) revert WithinBudget();
+
+        emit BudgetOverrunProven(mandateId, spent, m.budget, n, msg.sender, amount);
+        _slash(mandateId, amount, victim);
+    }
+
+    bytes32 private constant TRANSFER_SIG = keccak256("Transfer(address,address,uint256)");
+
+    function _erc20TransferValue(IEVMTransaction.Event[] calldata events, address asset, address from, address to)
+        internal
+        pure
+        returns (uint256 total)
+    {
+        for (uint256 i = 0; i < events.length; i++) {
+            IEVMTransaction.Event calldata e = events[i];
+            if (e.removed || e.emitterAddress != asset || e.topics.length != 3) continue;
+            if (e.topics[0] != TRANSFER_SIG) continue;
+            if (address(uint160(uint256(e.topics[1]))) != from) continue;
+            if (address(uint160(uint256(e.topics[2]))) != to) continue;
+            total += abi.decode(e.data, (uint256));
+        }
+    }
+
     function _slash(uint256 mandateId, uint256 amount, address payable victim) internal {
         slashed[mandateId] = true;
         bondOf[mandateId] = 0;

@@ -19,9 +19,17 @@ DELICTI is a corroboration-and-consequence layer for the actions of autonomous A
 | `AnchorLog.sol` — per-mandate sequence of Merkle roots over receipts; refuses dead mandates | tests pass |
 | `Bond.sol` — `challengeFalsePayment`: anchored receipt × FDC `ReferencedPaymentNonexistence` → slash | tests pass (mock FDC); live `FdcVerification` resolution verified on a Coston2 fork |
 | `Receipts.sol` — normalized "overt act" leaf bound to the original third-party receipt | done |
-| FDC request script (testXRP nonexistence → proof → challenge) | next |
+| `scripts/contradicted-deed.sh` — live end-to-end on Coston2: testXRP nonexistence → FDC proof → slash | **done, executed on Coston2** |
 | flario: `mandate_ref` in `x402_receipt` | next |
 | Budget-overrun challenge via FDC `EVMTransaction` (structuring demo) | next |
+
+### First contradicted deed on Coston2 (2026-09-08)
+
+Deployed: `MandateRegistry` `0x307cF47DB74a48CFC9813c59F29B1a2c546746d5`, `AnchorLog` `0xed65258EC80fAE6b780215aA17E1AB7A321d41E8`, `Bond` `0x6b4Dc7E1F6eda9B8D2ECa97dDF35e1E19A3E1ed2`.
+
+- FDC request (`ReferencedPaymentNonexistence`, testXRP, round 1448919): `0x2fb195a324e9eb4cf518e6cb88a234ec037e03be274ea6ec7d17a5b20460d13e`
+- mandate #1 committed: `0x8e6bae06d25aa959a73080a7902ffc34aa1c0be7284e66168df8295f65393c92`; false receipt anchored: `0x43c8bd629abdb551cfaeee84906546fd21170f0b89b3ba1c4ae352f500f95ace`; bond 1 C2FLR: `0x0bc4f479decb87abdac5059c93f6527d2cfe2251030db69845db91140662181b`
+- **challenge with the real FDC proof → slashed, mandate revoked**: `0x91bb190933e9e0d5abbc8efc2816ba26d475c2fa3cfbfb2636ae656e3c5fdc91` (159,787 gas)
 
 Verified on Coston2 (chain 114): `FdcVerification` `0x906507E0B64bcD494Db73bd0459d1C667e14B933`, `Relay` `0xa10B672D1c62e5457b17af63d4302add6A99d7dE`, FDC protocol id `200`.
 

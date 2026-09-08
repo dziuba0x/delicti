@@ -74,6 +74,10 @@ Current deployment (v0.2, `Receipts.Leaf.ref`): `MandateRegistry` `0x52A61f0B931
 
 Verified on Coston2 (chain 114): `FdcVerification` `0x906507E0B64bcD494Db73bd0459d1C667e14B933`, `Relay` `0xa10B672D1c62e5457b17af63d4302add6A99d7dE`, FDC protocol id `200`.
 
+## Release notes
+
+See [CHANGELOG.md](CHANGELOG.md). Proposal to the receipt ecosystems: [docs/proposals/kya-os-mandate-ref.md](docs/proposals/kya-os-mandate-ref.md).
+
 ## Specification
 
 The vocabulary, trust model, evidence classes, challenge invariants, and non-claims are fixed in [SPEC.md](SPEC.md) (v0.1 draft).

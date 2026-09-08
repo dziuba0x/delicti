@@ -10,6 +10,7 @@ via_ir = true
 remappings = [
     "@flarenetwork/=node_modules/@flarenetwork/",
     "forge-std/=lib/forge-std/src/",
+    "@openzeppelin/=node_modules/@openzeppelin/",
 ]
 
 [rpc_endpoints]

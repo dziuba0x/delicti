@@ -54,9 +54,13 @@ A receipt proves *registration*. "A false claim can be immutably registered." DE
 | flario `x402_receipt` v2 with `mandate_ref` + optional effector-side mandate gate (`DELICTI_REGISTRY`, `DELICTI_REQUIRE_MANDATE`) | patch for [flario](https://github.com/dziuba0x/flario) ready |
 | `Bond.challengeBudgetOverrunERC20` — the real x402 case: settlement is `transferWithAuthorization` on the token, native value is 0, the deed is the `Transfer` event inside the FDC proof | tests pass |
 | `tools/delicti.py` — normalize a flario receipt into a leaf (bit-identical to `Receipts.hash`), evidence class, sorted-pair Merkle tree + proofs | done |
+| `scripts/x402-structuring.sh` — end-to-end with real EIP-3009 settlements, real flario v2 receipts, FDC proofs with events, ERC-20 challenge | **done, executed on Coston2** |
 | `Bond.challengeBudgetOverrun` + `scripts/structuring.sh` — five 1-FLR deeds under a 4-FLR budget, each corroborated by FDC `EVMTransaction`, sum convicts | **done, executed on Coston2** |
 
 ### Live on Coston2 (2026-09-08)
+
+**The real x402 salami (v0.3 deployment, mandate #3):** five genuine EIP-3009 `transferWithAuthorization` settlements of 1 mUSDT0 each (agent signs typed data, facilitator submits — exactly flario's x402 path), each wrapped in a genuine `flario-receipt/2` carrying `mandate_ref` (witness 1), each corroborated by an FDC `EVMTransaction` proof carrying the `Transfer` event (witness 2), under a 4 mUSDT0 mandate — `challengeBudgetOverrunERC20`: `0x19c738500129ff4447802561a804b92620e47f3222fa70a76c6ad781ce014ed1` (325,410 gas) → slashed, mandate revoked. Script: `scripts/x402-structuring.sh`. Deployment: `MandateRegistry` `0x73109d769878cA2Cf0Ba180CF4f1a24b404F3f48`, `AnchorLog` `0x8eC9C70f9615804259c16e811dC428Db7a1522Fe`, `Bond` `0xBA146240AC394E64ca50CaC40100A2cdAE241e4e`, `MockUSDT0` (EIP-3009, public mint) `0x9Eea43feA502609d0D88DAfd1d64B4e929BF18C2`.
+
 
 Current deployment (v0.2, `Receipts.Leaf.ref`): `MandateRegistry` `0x52A61f0B9312042c514B0aC5C053747B0EdF0C17`, `AnchorLog` `0x10F4e4bc90d483B9E1D6c90EE6d6275FF825D2ae`, `Bond` `0x84Da6082Ba9f453d6aE59A0A3f868F6A1C35046E`.
 

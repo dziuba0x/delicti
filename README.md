@@ -1,5 +1,9 @@
 # DELICTI
 
+[![test](https://github.com/dziuba0x/delicti/actions/workflows/test.yml/badge.svg)](https://github.com/dziuba0x/delicti/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Coston2](https://img.shields.io/badge/live%20on-Flare%20Coston2-e62058)
+
 **Corpus delicti for AI agents.** Before anyone is judged, prove the deed happened.
 
 DELICTI is a corroboration-and-consequence layer for the actions of autonomous AI agents, anchored on [Flare](https://flare.network). It does not define yet another receipt format. It takes the signed receipts that effectors already produce (KYA-OS / Checkpoint `_meta` proofs, ACTA / ASQAV receipts, flario `x402_receipt`s) and adds the four things none of them have:
@@ -10,6 +14,33 @@ DELICTI is a corroboration-and-consequence layer for the actions of autonomous A
 4. **Consequence without a court** — a bond is slashed on proof, pattern lifted from FAssets' challenger role. Challenger gets 10%, the harmed party gets the rest.
 
 > When a mind becomes alien, its words stop being evidence. Its deeds, confirmed independently, remain. — the thesis, after J. Pachocki's *An Alien Mind*.
+
+## The loop
+
+```mermaid
+flowchart LR
+    P[Principal] -- "commit(mandate)" --> MR[(MandateRegistry)]
+    A[Agent] -- acts through --> E[Effector<br/>MCP server / x402]
+    E -- "signed receipt<br/>(witness 1)" --> AL[(AnchorLog<br/>Merkle root)]
+    W[World<br/>XRPL / EVM / BTC] -- "FDC attestation<br/>(witness 2)" --> B{Bond}
+    AL --> B
+    MR --> B
+    B -- "witnesses agree" --> OK[evidence class A]
+    B -- "witnesses disagree<br/>or sum > budget" --> S[slash → victim + challenger<br/>mandate revoked]
+```
+
+## Why signed receipts are not enough
+
+| | KYA-OS / Checkpoint | ACTA / ASQAV | AP2 mandates | OAP (pre-action) | **DELICTI** |
+|---|---|---|---|---|---|
+| Effector-signed receipt | yes | gateway/operator | yes | gateway | consumes theirs |
+| Commitment *before* the act | – | – | payments only | policy hash | on-chain, with budget + delegation tree |
+| Independent confirmation the effect happened | – | – | – | – | **FDC (second witness)** |
+| Detects structuring across many small calls | – | – | – | admitted gap | **sum over sequence** |
+| Consequence without a court | – | – | – | – | **bonded slash** |
+| Survives the operator's bankruptcy | if they keep logs | Bitcoin/Rekor anchor | – | – | neutral chain |
+
+A receipt proves *registration*. "A false claim can be immutably registered." DELICTI proves the *deed* — or proves the receipt lied.
 
 ## Status — Sprint 0 (Coston2)
 

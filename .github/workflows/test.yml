@@ -1,0 +1,15 @@
+name: test
+on: [push, pull_request]
+jobs:
+  forge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+      - uses: foundry-rs/foundry-toolchain@v1
+        with: { version: stable }
+      - run: forge build
+      - run: forge test -vv

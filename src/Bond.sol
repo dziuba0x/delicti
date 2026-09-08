@@ -4,6 +4,7 @@ pragma solidity ^0.8.28;
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
 import {IReferencedPaymentNonexistence} from
     "@flarenetwork/flare-periphery-contracts/coston2/IReferencedPaymentNonexistence.sol";
+import {IEVMTransaction} from "@flarenetwork/flare-periphery-contracts/coston2/IEVMTransaction.sol";
 import {ContractRegistry} from "@flarenetwork/flare-periphery-contracts/coston2/ContractRegistry.sol";
 import {MandateRegistry} from "./MandateRegistry.sol";
 import {AnchorLog} from "./AnchorLog.sol";
@@ -45,7 +46,16 @@ contract Bond {
         uint256 slashedAmount
     );
 
+    event BudgetOverrunProven(
+        uint256 indexed mandateId, uint256 spent, uint256 budget, uint256 deeds, address indexed challenger, uint256 slashedAmount
+    );
+
     error NothingToSlash();
+    error NotAgentTx();
+    error TxNotSuccessful();
+    error UnorderedTxs();
+    error WithinBudget();
+    error LengthMismatch();
     error AlreadySlashed();
     error LeafNotAnchored();
     error LeafConsumed();
@@ -123,7 +133,7 @@ contract Bond {
         // the proof must be about exactly the payment the receipt claims
         if (
             rq.destinationAddressHash != leaf.destinationAddressHash || rq.amount != leaf.amount
-                || rq.standardPaymentReference != leaf.standardPaymentReference
+                || rq.standardPaymentReference != leaf.ref
                 || fdcProof.data.sourceId != leaf.sourceId
         ) revert ProofDoesNotMatchClaim();
 
@@ -137,16 +147,75 @@ contract Bond {
 
         // --- consequence ---
         consumedLeaf[leafHash] = true;
+        emit FalsePaymentProven(mandateId, episodeIndex, leafHash, msg.sender, amount);
+        _slash(mandateId, amount, victim);
+    }
+
+    /// @notice Challenge: STRUCTURING. Every anchored deed may sit inside its own limit, but the
+    ///         sum of what the agent provably did on-chain (FDC `EVMTransaction`, sourceAddress ==
+    ///         the mandated agent) exceeds the mandate's cumulative budget. This is the "salami"
+    ///         pattern pre-action gates cannot see, because each call passes on its own.
+    /// @dev    Deeds must be supplied in strictly increasing tx-hash order (dedup without storage).
+    ///         Each deed needs BOTH witnesses: the anchored leaf (agent asserted it) and the FDC
+    ///         proof (world confirms it). Evidence class A only.
+    function challengeBudgetOverrun(
+        uint256 mandateId,
+        uint256[] calldata episodeIndices,
+        Receipts.Leaf[] calldata leaves,
+        bytes32[][] calldata merkleProofs,
+        IEVMTransaction.Proof[] calldata fdcProofs,
+        address payable victim
+    ) external {
+        if (slashed[mandateId]) revert AlreadySlashed();
+        uint256 amount = bondOf[mandateId];
+        if (amount == 0) revert NothingToSlash();
+        uint256 n = leaves.length;
+        if (n == 0 || episodeIndices.length != n || merkleProofs.length != n || fdcProofs.length != n) {
+            revert LengthMismatch();
+        }
+        MandateRegistry.Mandate memory m = registry.get(mandateId);
+
+        uint256 spent;
+        bytes32 lastTx;
+        for (uint256 i = 0; i < n; i++) {
+            Receipts.Leaf calldata leaf = leaves[i];
+            if (leaf.kind != Receipts.KIND_EVM_TX) revert WrongReceiptKind();
+            if (leaf.mandateId != mandateId) revert ProofDoesNotMatchClaim();
+
+            // witness 1
+            bytes32 leafHash = Receipts.hash(leaf);
+            AnchorLog.Episode memory ep = log.episode(mandateId, episodeIndices[i]);
+            if (!Merkle.verify(merkleProofs[i], ep.root, leafHash)) revert LeafNotAnchored();
+
+            // witness 2
+            IEVMTransaction.Proof calldata pr = fdcProofs[i];
+            if (!fdc().verifyEVMTransaction(pr)) revert FdcProofInvalid();
+            bytes32 txh = pr.data.requestBody.transactionHash;
+            if (txh <= lastTx) revert UnorderedTxs();
+            lastTx = txh;
+            if (txh != leaf.ref || pr.data.sourceId != leaf.sourceId) revert ProofDoesNotMatchClaim();
+            IEVMTransaction.ResponseBody calldata rb = pr.data.responseBody;
+            if (rb.sourceAddress != m.agent) revert NotAgentTx();
+            if (rb.status != 1) revert TxNotSuccessful();
+            if (rb.value != leaf.amount || bytes32(uint256(uint160(rb.receivingAddress))) != leaf.destinationAddressHash)
+            {
+                revert ProofDoesNotMatchClaim();
+            }
+            spent += rb.value;
+        }
+        if (spent <= m.budget) revert WithinBudget();
+
+        emit BudgetOverrunProven(mandateId, spent, m.budget, n, msg.sender, amount);
+        _slash(mandateId, amount, victim);
+    }
+
+    function _slash(uint256 mandateId, uint256 amount, address payable victim) internal {
         slashed[mandateId] = true;
         bondOf[mandateId] = 0;
         registry.revokeByBond(mandateId);
-
         uint256 reward = (amount * CHALLENGER_BPS) / 10_000;
-        uint256 rest = amount - reward;
-        emit FalsePaymentProven(mandateId, episodeIndex, leafHash, msg.sender, amount);
-
         (bool ok1,) = payable(msg.sender).call{value: reward}("");
-        (bool ok2,) = victim.call{value: rest}("");
+        (bool ok2,) = victim.call{value: amount - reward}("");
         if (!ok1 || !ok2) revert TransferFailed();
     }
 }

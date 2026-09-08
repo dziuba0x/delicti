@@ -17,7 +17,7 @@ library Receipts {
         bytes32 sourceId; // FDC source id, e.g. "testXRP" padded, for kind 2/3
         bytes32 destinationAddressHash; // FDC standard address hash (kind 3)
         uint256 amount; // in source chain base units (drops / sats)
-        bytes32 standardPaymentReference; // 32-byte memo / OP_RETURN reference (kind 3)
+        bytes32 ref; // kind 3: 32-byte memo / OP_RETURN payment reference; kind 2: EVM tx hash
         uint64 claimedTimestamp; // when the effector says the deed happened
         uint256 mandateId; // mandate the effector was acting under
     }

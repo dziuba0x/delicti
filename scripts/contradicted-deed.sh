@@ -11,14 +11,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."; set -a; . ./.env; set +a
 RPC=$COSTON2_RPC
-REG=${REG:-0x307cF47DB74a48CFC9813c59F29B1a2c546746d5}
-LOG=${LOG:-0xed65258EC80fAE6b780215aA17E1AB7A321d41E8}
-BOND=${BOND:-0x6b4Dc7E1F6eda9B8D2ECa97dDF35e1E19A3E1ed2}
+REG=${REG:-0x52A61f0B9312042c514B0aC5C053747B0EdF0C17}
+LOG=${LOG:-0x10F4e4bc90d483B9E1D6c90EE6d6275FF825D2ae}
+BOND=${BOND:-0x84Da6082Ba9f453d6aE59A0A3f868F6A1C35046E}
 VICTIM=${VICTIM:-0x1111111111111111111111111111111111111111}
 ME=$(cast wallet address --private-key "$PRIVATE_KEY")
 FLARE_REG=0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019
 
-pad() { printf '0x%s' "$(printf '%s' "$1" | xxd -p | tr -d '\n' | head -c 64 | awk '{printf "%-64s",$0}' | tr ' ' '0')"; }
+pad() { python3 -c "import sys;print('0x'+sys.argv[1].encode().hex().ljust(64,'0'))" "$1"; }
 
 echo "== 1. XRPL testnet: latest validated ledger + a real account to 'pay'"
 XRPL=$(curl -s -m 20 -X POST https://testnet.xrpl-labs.com/ -H 'Content-Type: application/json' \

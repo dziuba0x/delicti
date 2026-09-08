@@ -73,7 +73,7 @@ contract BondTest is Test {
             sourceId: SRC_TESTXRP,
             destinationAddressHash: DEST,
             amount: AMOUNT,
-            standardPaymentReference: REF,
+            ref: REF,
             claimedTimestamp: uint64(block.timestamp + 100),
             mandateId: mandateId
         });

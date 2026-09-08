@@ -21,11 +21,15 @@ DELICTI is a corroboration-and-consequence layer for the actions of autonomous A
 | `Receipts.sol` — normalized "overt act" leaf bound to the original third-party receipt | done |
 | `scripts/contradicted-deed.sh` — live end-to-end on Coston2: testXRP nonexistence → FDC proof → slash | **done, executed on Coston2** |
 | flario: `mandate_ref` in `x402_receipt` | next |
-| Budget-overrun challenge via FDC `EVMTransaction` (structuring demo) | next |
+| `Bond.challengeBudgetOverrun` + `scripts/structuring.sh` — five 1-FLR deeds under a 4-FLR budget, each corroborated by FDC `EVMTransaction`, sum convicts | **done, executed on Coston2** |
 
-### First contradicted deed on Coston2 (2026-09-08)
+### Live on Coston2 (2026-09-08)
 
-Deployed: `MandateRegistry` `0x307cF47DB74a48CFC9813c59F29B1a2c546746d5`, `AnchorLog` `0xed65258EC80fAE6b780215aA17E1AB7A321d41E8`, `Bond` `0x6b4Dc7E1F6eda9B8D2ECa97dDF35e1E19A3E1ed2`.
+Current deployment (v0.2, `Receipts.Leaf.ref`): `MandateRegistry` `0x52A61f0B9312042c514B0aC5C053747B0EdF0C17`, `AnchorLog` `0x10F4e4bc90d483B9E1D6c90EE6d6275FF825D2ae`, `Bond` `0x84Da6082Ba9f453d6aE59A0A3f868F6A1C35046E`.
+
+**Structuring proven (mandate #4):** five transfers of 1 C2FLR to `0x2222…2222` under a 4 C2FLR budget — each one legal alone, each corroborated by its own FDC `EVMTransaction` proof (rounds 1448936–1448937, `sourceAddress` == the mandated agent) — then `challengeBudgetOverrun` with all five: `0xa547ebada6b01953100ed2fad6abdead1b3122d3d280ad302040e69b3f96557f` (291,855 gas) → slashed, mandate revoked. This is the pattern pre-action gates cannot see, because every call passes on its own.
+
+**First contradicted deed (v0.1 deployment):** `MandateRegistry` `0x307cF47DB74a48CFC9813c59F29B1a2c546746d5`, `AnchorLog` `0xed65258EC80fAE6b780215aA17E1AB7A321d41E8`, `Bond` `0x6b4Dc7E1F6eda9B8D2ECa97dDF35e1E19A3E1ed2`.
 
 - FDC request (`ReferencedPaymentNonexistence`, testXRP, round 1448919): `0x2fb195a324e9eb4cf518e6cb88a234ec037e03be274ea6ec7d17a5b20460d13e`
 - mandate #1 committed: `0x8e6bae06d25aa959a73080a7902ffc34aa1c0be7284e66168df8295f65393c92`; false receipt anchored: `0x43c8bd629abdb551cfaeee84906546fd21170f0b89b3ba1c4ae352f500f95ace`; bond 1 C2FLR: `0x0bc4f479decb87abdac5059c93f6527d2cfe2251030db69845db91140662181b`

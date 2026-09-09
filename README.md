@@ -56,8 +56,14 @@ A receipt proves *registration*. "A false claim can be immutably registered." DE
 | `tools/delicti.py` — normalize a flario receipt into a leaf (bit-identical to `Receipts.hash`), evidence class, sorted-pair Merkle tree + proofs | done |
 | `scripts/x402-structuring.sh` — end-to-end with real EIP-3009 settlements, real flario v2 receipts, FDC proofs with events, ERC-20 challenge | **done, executed on Coston2** |
 | `Bond.challengeBudgetOverrun` + `scripts/structuring.sh` — five 1-FLR deeds under a 4-FLR budget, each corroborated by FDC `EVMTransaction`, sum convicts | **done, executed on Coston2** |
-| `scripts/mcp-structuring.sh` — the same salami, but every deed is a paid MCP call to a running flario server: witness 1 is emitted by the effector process, not hand-built | written, **not yet executed on Coston2** |
-| `scripts/brake-test.sh` — the effector-side brake (SPEC §7) live: a live mandate pays; a missing, revoked or borrowed mandate is refused before any funds move | written, **not yet executed on Coston2** |
+| `scripts/mcp-structuring.sh` — the same salami, but every deed is a paid MCP call to a running flario server: witness 1 is emitted by the effector process, not hand-built | **done, executed on Coston2** |
+| `scripts/brake-test.sh` — the effector-side brake (SPEC §7) live: a live mandate pays; a missing, revoked or borrowed mandate is refused before any funds move | **done, executed on Coston2** |
+
+### Live on Coston2 (2026-09-09)
+
+**The loop through a running effector (mandate #8).** Every deed here is a paid MCP tool call: the agent is an MCP client, the flario server is the effector, it settles the EIP-3009 authorization itself and answers with its own `flario-receipt/2` carrying `mandate_ref`. Nothing about witness 1 is hand-built. Five calls of 1 mUSDT0 under a 4 mUSDT0 mandate, each corroborated by an FDC `EVMTransaction` proof carrying its `Transfer` event — `challengeBudgetOverrunERC20`: `0x118bc48692b986875c2153492ff81757da9d9bf18e4201341cb2711f50d922f0` (327,144 gas) → slashed, mandate revoked. Script: `scripts/mcp-structuring.sh`.
+
+**The brake (SPEC §7), live.** Four calls against the same server: a live mandate with the correct agent pays (`0x2b59d401f8819c24c8e6b89841f35b7df09a4282dd1b7607ad4db7505a277664`, mandate #5); a call with no `mandate_id` under `DELICTI_REQUIRE_MANDATE=1`, a call under revoked mandate #6, and a call under mandate #7 belonging to another address are all refused **before any funds move** — the payer's token balance is unchanged across all three. Script: `scripts/brake-test.sh`.
 
 ### Live on Coston2 (2026-09-08)
 

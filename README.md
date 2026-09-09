@@ -51,11 +51,13 @@ A receipt proves *registration*. "A false claim can be immutably registered." DE
 | `Bond.sol` — `challengeFalsePayment`: anchored receipt × FDC `ReferencedPaymentNonexistence` → slash | tests pass (mock FDC); live `FdcVerification` resolution verified on a Coston2 fork |
 | `Receipts.sol` — normalized "overt act" leaf bound to the original third-party receipt | done |
 | `scripts/contradicted-deed.sh` — live end-to-end on Coston2: testXRP nonexistence → FDC proof → slash | **done, executed on Coston2** |
-| flario `x402_receipt` v2 with `mandate_ref` + optional effector-side mandate gate (`DELICTI_REGISTRY`, `DELICTI_REQUIRE_MANDATE`) | patch for [flario](https://github.com/dziuba0x/flario) ready |
+| flario `x402_receipt` v2 with `mandate_ref` + effector-side mandate gate (`DELICTI_REGISTRY`, `DELICTI_REQUIRE_MANDATE`) on both the MCP and the HTTP path | shipped in [flario](https://github.com/dziuba0x/flario) |
 | `Bond.challengeBudgetOverrunERC20` — the real x402 case: settlement is `transferWithAuthorization` on the token, native value is 0, the deed is the `Transfer` event inside the FDC proof | tests pass |
 | `tools/delicti.py` — normalize a flario receipt into a leaf (bit-identical to `Receipts.hash`), evidence class, sorted-pair Merkle tree + proofs | done |
 | `scripts/x402-structuring.sh` — end-to-end with real EIP-3009 settlements, real flario v2 receipts, FDC proofs with events, ERC-20 challenge | **done, executed on Coston2** |
 | `Bond.challengeBudgetOverrun` + `scripts/structuring.sh` — five 1-FLR deeds under a 4-FLR budget, each corroborated by FDC `EVMTransaction`, sum convicts | **done, executed on Coston2** |
+| `scripts/mcp-structuring.sh` — the same salami, but every deed is a paid MCP call to a running flario server: witness 1 is emitted by the effector process, not hand-built | written, **not yet executed on Coston2** |
+| `scripts/brake-test.sh` — the effector-side brake (SPEC §7) live: a live mandate pays; a missing, revoked or borrowed mandate is refused before any funds move | written, **not yet executed on Coston2** |
 
 ### Live on Coston2 (2026-09-08)
 

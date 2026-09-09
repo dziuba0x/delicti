@@ -1,4 +1,4 @@
-# DELICTI Specification — v0.1 (draft)
+# DELICTI Specification — v0.2 (draft)
 
 *Corpus delicti for autonomous agents: prove the deed happened before anyone is judged.*
 
@@ -34,8 +34,8 @@ What each party can and cannot do:
 |---|---|---|
 | Agent | act; omit receipts; anchor false receipts | make a false receipt corroborate; anchor under a dead mandate; escape a challenge once anchored |
 | Effector | sign false receipts | make the FDC confirm a payment that did not happen; forge a `Transfer` event inside an FDC proof |
-| Principal | set the envelope; revoke; withdraw bond after expiry | rewrite a mandate after commit; withdraw while live; suppress a challenge |
-| Challenger | anyone; bring proofs; earn 10 % | slash without both witnesses; slash twice; reuse a leaf |
+| Principal | set the envelope; revoke; withdraw bond after expiry **and the cooling window** | rewrite a mandate after commit; withdraw while live; **shorten the challenger's runway by revoking early**; suppress a challenge |
+| Challenger | anyone; bring proofs; earn 10 % | slash without both witnesses; slash twice; reuse a leaf; **choose who receives the remainder**; **burn a leaf under a mandate it does not name** |
 | FDC | attest facts on supported chains and allow-listed Web2 sources | attest facts it does not index (see class B) |
 
 An omitted receipt is not invisible: a mandate whose budget is drawn down on-chain without matching leaves is itself evidence (§6.4, roadmap).
@@ -80,7 +80,14 @@ A **contradicted deed** is a class-A *negative*: the receipt is anchored and the
 
 ## 6. Challenges (v0.1)
 
-All challenges are permissionless, require both witnesses, and pay 10 % of the slashed bond to the challenger and the remainder to a named victim. A mandate is slashed at most once; a leaf is consumed at most once.
+All challenges are permissionless, require both witnesses, and pay 10 % of the slashed bond to the challenger and the remainder **to the mandate's principal** — the harmed party of §1. Neither is pushed: both are credited and pulled with `claim()`, so a recipient that reverts on receive cannot make a mandate unslashable. A mandate is slashed at most once; a leaf is consumed at most once **per mandate**.
+
+Three invariants exist because their absence was exploitable, and each has a regression test:
+
+- **The leaf must name the mandate being challenged** (`leaf.mandateId == mandateId`), in every challenge. Without it, and with a globally-keyed consumption set, anyone could anchor a copy of someone else's leaf under a throwaway mandate, slash themselves for 1 wei, and make that evidence permanently unusable against its real subject.
+- **The remainder is not a parameter.** It used to be. A challenge carries its finished proofs in public calldata, so the whole transaction could be copied from the mempool with that one field changed and the bond returned in full to whoever posted it.
+- **A nonexistence proof scoped to source addresses proves nothing here.** `ReferencedPaymentNonexistence` takes `checkSourceAddresses`/`sourceAddressesRoot`; scoped that way it truthfully says *those* addresses did not pay. A leaf carries no source address to compare against, so such a proof is refused rather than used to convict an agent who paid from elsewhere.
+- **A cumulative budget only counts deeds inside the mandate's window.** Both budget challenges require the FDC-proven `timestamp` of each deed to fall in `[validFrom, validUntil]`.
 
 ### 6.1 False payment (`challengeFalsePayment`)
 Kind-3 leaf in an anchored root + `ReferencedPaymentNonexistence` proof whose `(destinationAddressHash, amount, standardPaymentReference, sourceId)` equal the leaf's and whose proven window `[minimalBlockTimestamp, deadlineTimestamp]` contains `claimedTimestamp`, with the search having overflowed the deadline. *Executed live on Coston2.*
@@ -106,7 +113,7 @@ FDC finality is minutes; DELICTI is evidence after the fact. But the effector is
 
 - Anyone may post bond under a mandate: the agent, the operator, an insurer. Bond is in the chain's native asset in v0.1.
 - Sizing is a market question, not a protocol constant. A rational counterparty should require `bond ≥ budget × k` for some `k ≥ 1`; the protocol does not enforce it and exposes the ratio for anyone to read.
-- Withdrawal only after the mandate is dead and nothing was slashed. A cooling window after expiry (to let late challenges land) is a v0.2 item and is the most important hardening gap today.
+- Withdrawal only after the mandate is dead, nothing was slashed, and a **cooling window of 24 h** measured from `deathTime()` — the earliest death in the mandate's ancestry — has elapsed. The window is not decoration: a challenge is not instant (an on-chain FDC request, a voting round, a DA fetch, then the challenge), the principal is an authority in `revoke()`, and the FDC request itself announces the coming challenge minutes ahead. Without the window `revoke(); withdraw();` in one transaction emptied the bond, and measuring from the moment of death rather than from the withdrawal attempt is what stops an early revocation from shortening the runway.
 - Challenger reward is 10 %. It must be large enough to pay for FDC fees and gas (trivial on Flare) and small enough that the victim is made mostly whole.
 
 ## 9. Privacy
@@ -120,6 +127,10 @@ Nothing sensitive is on-chain: mandate envelopes and receipts live off-chain; th
 - It does not stop a deed in real time by itself; the brake in §7 does, and only for liveness and identity.
 - It does not see effects the FDC cannot index (class B). It says so, per deed.
 - It does not know that an envelope was *complete* — only that the deed exceeded the envelope that was committed.
+- It does not yet protect the challenger's 10 % from being front-run. Proofs travel in public calldata and the FDC request precedes the challenge by minutes, so a copier can win the reward without paying the monitoring cost. Commit–reveal — with the commitment made *before* the attestation request — is specified as the fix and is not implemented.
+- It does not bind the ERC-20 `asset` or the `sourceId` to the mandate on-chain; both live in the off-chain envelope. Until they do, a bond posted by a party other than the principal should be read with that in mind.
+- The slash is all-or-nothing, which makes the penalty a step function and the deed's optimal size, conditional on breaching, the largest one available. Proportional slashing is a design decision, not an oversight, and is open.
+- Every implemented challenge starts from an anchored leaf, so consequence today reaches only agents that anchored their own breach. `challengeUnanchoredDeed` (§6.4) is what closes that, and it requires bonding an *address*, not only a mandate.
 
 ## 11. Metrics this makes possible
 

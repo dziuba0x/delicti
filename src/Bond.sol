@@ -29,15 +29,32 @@ contract Bond {
 
     uint256 public constant CHALLENGER_BPS = 1000; // 10% of slashed bond to the challenger
 
+    /// @notice How long the bond stays frozen after the mandate's authority died.
+    /// @dev    A challenge is not instant: the challenger must request an FDC attestation
+    ///         on-chain, wait for the voting round to finalise (~90 s rounds, minutes
+    ///         end-to-end on Coston2), pull the proof from the DA layer and only then send
+    ///         the challenge. Without a window the principal — who is also an authority in
+    ///         `revoke()` — can empty the bond in the same transaction that kills the mandate,
+    ///         and the FDC request itself announces the challenge minutes in advance. 24 h is
+    ///         ~100x the observed proof latency and far below the DA layer's retention.
+    uint64 public constant COOLING_WINDOW = 24 hours;
+
     // mandateId => posted bond (wei)
     mapping(uint256 => uint256) public bondOf;
     // mandateId => slashed?
     mapping(uint256 => bool) public slashed;
-    // leaf hash => already used in a successful challenge (no double-slash on one receipt)
-    mapping(bytes32 => bool) public consumedLeaf;
+    // mandateId => leaf hash => already used in a successful challenge on THAT mandate.
+    // Scoped per mandate on purpose: a global key let anyone burn a leaf under a throwaway
+    // mandate of their own and make the same evidence permanently unusable elsewhere.
+    mapping(uint256 => mapping(bytes32 => bool)) public consumedLeaf;
+
+    // Slash proceeds and challenger rewards, held for pull-withdrawal. Pushing value inside
+    // the challenge would let a reverting recipient block the consequence entirely.
+    mapping(address => uint256) public owed;
 
     event BondPosted(uint256 indexed mandateId, address indexed by, uint256 amount, uint256 total);
     event BondWithdrawn(uint256 indexed mandateId, address indexed to, uint256 amount);
+    event Claimed(address indexed who, uint256 amount);
     event FalsePaymentProven(
         uint256 indexed mandateId,
         uint256 indexed episodeIndex,
@@ -66,6 +83,9 @@ contract Bond {
     error MandateStillLive();
     error NotPrincipal();
     error TransferFailed();
+    error CoolingWindow();
+    error NothingOwed();
+    error BondSlashed();
 
     constructor(MandateRegistry _registry, AnchorLog _log, IFdcVerification fdcOverride) {
         registry = _registry;
@@ -80,20 +100,38 @@ contract Bond {
 
     /// @notice Anyone may post bond under a mandate (agent, operator, or an insurer).
     function post(uint256 mandateId) external payable {
+        // A mandate can only be slashed once. Funding one that was already slashed buys the
+        // depositor nothing and would look like collateral to a counterparty reading the chain.
+        if (slashed[mandateId]) revert BondSlashed();
         bondOf[mandateId] += msg.value;
         emit BondPosted(mandateId, msg.sender, msg.value, bondOf[mandateId]);
     }
 
-    /// @notice Principal may withdraw only after the mandate has expired/been revoked
-    ///         and nothing was slashed — a cooling window is a v0.2 hardening item.
+    /// @notice Principal may withdraw only after the mandate's authority died AND the cooling
+    ///         window has elapsed, and only if nothing was slashed.
+    /// @dev    The window runs from `registry.deathTime()` — the earliest death in the mandate's
+    ///         ancestry — not from the moment of this call, so revoking early does not shorten it.
     function withdraw(uint256 mandateId, address payable to) external {
         MandateRegistry.Mandate memory m = registry.get(mandateId);
         if (msg.sender != m.principal) revert NotPrincipal();
+        if (slashed[mandateId]) revert AlreadySlashed();
         if (registry.isLive(mandateId)) revert MandateStillLive();
+        uint64 death = registry.deathTime(mandateId);
+        if (death == type(uint64).max || block.timestamp < uint256(death) + COOLING_WINDOW) revert CoolingWindow();
         uint256 amt = bondOf[mandateId];
         bondOf[mandateId] = 0;
         emit BondWithdrawn(mandateId, to, amt);
         (bool ok,) = to.call{value: amt}("");
+        if (!ok) revert TransferFailed();
+    }
+
+    /// @notice Pull whatever a slash credited you: 10% as challenger, the remainder as principal.
+    function claim() external {
+        uint256 amt = owed[msg.sender];
+        if (amt == 0) revert NothingOwed();
+        owed[msg.sender] = 0;
+        emit Claimed(msg.sender, amt);
+        (bool ok,) = payable(msg.sender).call{value: amt}("");
         if (!ok) revert TransferFailed();
     }
 
@@ -104,23 +142,29 @@ contract Bond {
     /// @param leaf          the receipt leaf (witness 1) as anchored
     /// @param merkleProof   inclusion path of keccak256(abi.encode(leaf)) in the episode root
     /// @param fdcProof      FDC ReferencedPaymentNonexistence proof (witness 2)
-    /// @param victim        who receives the slashed remainder (the harmed party)
+    /// @dev    There is deliberately no `victim` parameter. It used to be challenger-supplied,
+    ///         which meant the whole calldata (proofs included) could be copied out of the
+    ///         mempool with that one field changed — the agent's own address — and the slash
+    ///         returned 100% of the bond to the family that posted it. The harmed party is the
+    ///         principal (SPEC 1), so that is who the remainder is credited to.
     function challengeFalsePayment(
         uint256 mandateId,
         uint256 episodeIndex,
         Receipts.Leaf calldata leaf,
         bytes32[] calldata merkleProof,
-        IReferencedPaymentNonexistence.Proof calldata fdcProof,
-        address payable victim
+        IReferencedPaymentNonexistence.Proof calldata fdcProof
     ) external {
         if (slashed[mandateId]) revert AlreadySlashed();
         uint256 amount = bondOf[mandateId];
         if (amount == 0) revert NothingToSlash();
         if (leaf.kind != Receipts.KIND_EXTERNAL_PAYMENT) revert WrongReceiptKind();
+        // The leaf must name the mandate being challenged. Without this the budget paths'
+        // invariant did not hold here, and any leaf could be replayed under a foreign mandate.
+        if (leaf.mandateId != mandateId) revert ProofDoesNotMatchClaim();
 
         // --- witness 1: the agent really asserted this deed (leaf is in an anchored root) ---
         bytes32 leafHash = Receipts.hash(leaf);
-        if (consumedLeaf[leafHash]) revert LeafConsumed();
+        if (consumedLeaf[mandateId][leafHash]) revert LeafConsumed();
         AnchorLog.Episode memory ep = log.episode(mandateId, episodeIndex);
         if (!Merkle.verify(merkleProof, ep.root, leafHash)) revert LeafNotAnchored();
 
@@ -129,6 +173,11 @@ contract Bond {
 
         IReferencedPaymentNonexistence.RequestBody calldata rq = fdcProof.data.requestBody;
         IReferencedPaymentNonexistence.ResponseBody calldata rs = fdcProof.data.responseBody;
+
+        // A nonexistence proof scoped to a set of source addresses proves only that THOSE
+        // addresses did not pay. The leaf carries no source address to compare it against, so
+        // such a proof would convict an agent who really did pay, from another address.
+        if (rq.checkSourceAddresses) revert ProofDoesNotMatchClaim();
 
         // the proof must be about exactly the payment the receipt claims
         if (
@@ -146,9 +195,9 @@ contract Bond {
         ) revert ClaimOutsideProvenRange();
 
         // --- consequence ---
-        consumedLeaf[leafHash] = true;
+        consumedLeaf[mandateId][leafHash] = true;
         emit FalsePaymentProven(mandateId, episodeIndex, leafHash, msg.sender, amount);
-        _slash(mandateId, amount, victim);
+        _slash(mandateId, amount);
     }
 
     /// @notice Challenge: STRUCTURING. Every anchored deed may sit inside its own limit, but the
@@ -163,8 +212,7 @@ contract Bond {
         uint256[] calldata episodeIndices,
         Receipts.Leaf[] calldata leaves,
         bytes32[][] calldata merkleProofs,
-        IEVMTransaction.Proof[] calldata fdcProofs,
-        address payable victim
+        IEVMTransaction.Proof[] calldata fdcProofs
     ) external {
         if (slashed[mandateId]) revert AlreadySlashed();
         uint256 amount = bondOf[mandateId];
@@ -197,6 +245,9 @@ contract Bond {
             IEVMTransaction.ResponseBody calldata rb = pr.data.responseBody;
             if (rb.sourceAddress != m.agent) revert NotAgentTx();
             if (rb.status != 1) revert TxNotSuccessful();
+            // A budget is cumulative over the mandate's life, so only deeds inside its window
+            // may be summed against it — otherwise older activity convicts a fresh mandate.
+            if (rb.timestamp < m.validFrom || rb.timestamp > m.validUntil) revert ClaimOutsideProvenRange();
             if (rb.value != leaf.amount || bytes32(uint256(uint160(rb.receivingAddress))) != leaf.destinationAddressHash)
             {
                 revert ProofDoesNotMatchClaim();
@@ -206,7 +257,7 @@ contract Bond {
         if (spent <= m.budget) revert WithinBudget();
 
         emit BudgetOverrunProven(mandateId, spent, m.budget, n, msg.sender, amount);
-        _slash(mandateId, amount, victim);
+        _slash(mandateId, amount);
     }
 
     /// @notice STRUCTURING over ERC-20 payments (the real x402 case). An x402 settlement is
@@ -220,8 +271,7 @@ contract Bond {
         uint256[] calldata episodeIndices,
         Receipts.Leaf[] calldata leaves,
         bytes32[][] calldata merkleProofs,
-        IEVMTransaction.Proof[] calldata fdcProofs,
-        address payable victim
+        IEVMTransaction.Proof[] calldata fdcProofs
     ) external {
         if (slashed[mandateId]) revert AlreadySlashed();
         uint256 amount = bondOf[mandateId];
@@ -251,6 +301,7 @@ contract Bond {
             if (txh != leaf.ref || pr.data.sourceId != leaf.sourceId) revert ProofDoesNotMatchClaim();
             IEVMTransaction.ResponseBody calldata rb = pr.data.responseBody;
             if (rb.status != 1) revert TxNotSuccessful();
+            if (rb.timestamp < m.validFrom || rb.timestamp > m.validUntil) revert ClaimOutsideProvenRange();
 
             // find the Transfer(agent → payee) emitted by `asset`
             uint256 v = _erc20TransferValue(rb.events, asset, m.agent, address(uint160(uint256(leaf.destinationAddressHash))));
@@ -260,7 +311,7 @@ contract Bond {
         if (spent <= m.budget) revert WithinBudget();
 
         emit BudgetOverrunProven(mandateId, spent, m.budget, n, msg.sender, amount);
-        _slash(mandateId, amount, victim);
+        _slash(mandateId, amount);
     }
 
     bytes32 private constant TRANSFER_SIG = keccak256("Transfer(address,address,uint256)");
@@ -280,13 +331,14 @@ contract Bond {
         }
     }
 
-    function _slash(uint256 mandateId, uint256 amount, address payable victim) internal {
+    function _slash(uint256 mandateId, uint256 amount) internal {
         slashed[mandateId] = true;
         bondOf[mandateId] = 0;
         registry.revokeByBond(mandateId);
         uint256 reward = (amount * CHALLENGER_BPS) / 10_000;
-        (bool ok1,) = payable(msg.sender).call{value: reward}("");
-        (bool ok2,) = victim.call{value: amount - reward}("");
-        if (!ok1 || !ok2) revert TransferFailed();
+        // Credit, never push: a recipient that reverts on receive would otherwise be able to
+        // make a mandate unslashable. Both parties pull with claim().
+        owed[msg.sender] += reward;
+        owed[registry.get(mandateId).principal] += amount - reward;
     }
 }

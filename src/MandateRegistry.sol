@@ -27,6 +27,19 @@ contract MandateRegistry {
     uint256 public nextId = 1;
     mapping(uint256 => Mandate) private _mandates;
 
+    /// @notice When a mandate was revoked (0 = never). Needed because the Bond's cooling
+    ///         window must run from the moment authority actually died, and revocation can
+    ///         happen long before `validUntil`.
+    mapping(uint256 => uint64) public revokedAt;
+
+    /// @notice The Bond allowed to call `revokeByBond`. Set once, by the deployer.
+    address public bond;
+    address private immutable _deployer;
+
+    constructor() {
+        _deployer = msg.sender;
+    }
+
     event MandateCommitted(
         uint256 indexed id,
         uint256 indexed parentId,
@@ -46,6 +59,8 @@ contract MandateRegistry {
     error ExceedsParent();
     error NotAuthorized();
     error ZeroAgent();
+    error NotBond();
+    error BondAlreadySet();
 
     /// @notice Commit a mandate. For a child mandate, msg.sender must be the parent's agent
     ///         (the delegating agent), and the child must be within the parent's envelope.
@@ -87,18 +102,34 @@ contract MandateRegistry {
         emit MandateCommitted(id, parentId, agent, msg.sender, mandateHash, authorityRef, budget, validFrom, validUntil);
     }
 
+    /// @notice Bind the Bond permitted to revoke on a proven violation. Set once, by the
+    ///         deployer, because Bond and MandateRegistry cannot both be constructor
+    ///         arguments to each other.
+    function setBond(address b) external {
+        if (msg.sender != _deployer) revert NotAuthorized();
+        if (bond != address(0)) revert BondAlreadySet();
+        bond = b;
+    }
+
     /// @notice Principal (or any ancestor principal) may revoke. Revocation is sticky.
     function revoke(uint256 id) external {
         if (!_isAuthority(id, msg.sender)) revert NotAuthorized();
-        _mandates[id].revoked = true;
-        emit MandateRevoked(id, msg.sender);
+        _revoke(id);
     }
 
-    /// @notice Bond contract calls this on proven violation (sticky revoke by authority = bond).
+    /// @notice Bond calls this on a proven violation (sticky revoke by authority = bond).
+    /// @dev    Access control matters beyond tidiness: revocation kills `isLive`, which stops
+    ///         the agent anchoring anything (AnchorLog), makes a DELICTI-aware effector refuse
+    ///         to act (SPEC 7), and opens the principal's withdrawal path. An unguarded
+    ///         revoke is censorship of the evidence layer for the price of one transaction.
     function revokeByBond(uint256 id) external {
-        // Minimal trust model for Sprint 0: anyone can call, but only Bond is expected to.
-        // Hardening (access control to a registered Bond) is a v0.2 item.
+        if (msg.sender != bond || bond == address(0)) revert NotBond();
+        _revoke(id);
+    }
+
+    function _revoke(uint256 id) internal {
         _mandates[id].revoked = true;
+        if (revokedAt[id] == 0) revokedAt[id] = uint64(block.timestamp);
         emit MandateRevoked(id, msg.sender);
     }
 
@@ -117,7 +148,31 @@ contract MandateRegistry {
             cur = m.parentId;
             guard++;
         }
-        return id != 0;
+        // Fail closed: a delegation chain deeper than the guard is treated as dead, not alive.
+        // The other way round, 65 self-delegations would make a mandate unrevokable by its root.
+        return id != 0 && cur == 0;
+    }
+
+    /// @notice The moment this mandate's authority died (or will die): the earliest of its own
+    ///         and every ancestor's revocation time or `validUntil`. `type(uint64).max` while
+    ///         the answer is unknowable (chain deeper than the guard, or unknown mandate).
+    /// @dev    The Bond's cooling window runs from here, so a principal cannot shorten a
+    ///         challenger's runway by revoking early.
+    function deathTime(uint256 id) external view returns (uint64) {
+        if (id == 0) return type(uint64).max;
+        uint256 cur = id;
+        uint256 guard = 0;
+        uint64 death = type(uint64).max;
+        while (cur != 0 && guard < 64) {
+            Mandate storage m = _mandates[cur];
+            if (m.agent == address(0)) return type(uint64).max;
+            uint64 own = revokedAt[cur] != 0 && revokedAt[cur] < m.validUntil ? revokedAt[cur] : m.validUntil;
+            if (own < death) death = own;
+            cur = m.parentId;
+            guard++;
+        }
+        if (cur != 0) return type(uint64).max;
+        return death;
     }
 
     function _isAuthority(uint256 id, address who) internal view returns (bool) {

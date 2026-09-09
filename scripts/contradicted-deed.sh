@@ -3,7 +3,7 @@
 #
 #   witness 1: the agent anchors a receipt claiming "I paid 1 XRP to <dest> with reference R".
 #   witness 2: FDC ReferencedPaymentNonexistence on testXRP proves no such payment exists.
-#   consequence: Bond.challengeFalsePayment slashes the bond (10% challenger, 90% victim)
+#   consequence: Bond.challengeFalsePayment slashes the bond (10% challenger, 90% principal — both pull with claim())
 #                and revokes the mandate.
 #
 # Requires: foundry (cast), curl, python3, and a .env with PRIVATE_KEY, COSTON2_RPC,
@@ -14,7 +14,6 @@ RPC=$COSTON2_RPC
 REG=${REG:-0x52A61f0B9312042c514B0aC5C053747B0EdF0C17}
 LOG=${LOG:-0x10F4e4bc90d483B9E1D6c90EE6d6275FF825D2ae}
 BOND=${BOND:-0x84Da6082Ba9f453d6aE59A0A3f868F6A1C35046E}
-VICTIM=${VICTIM:-0x1111111111111111111111111111111111111111}
 ME=$(cast wallet address --private-key "$PRIVATE_KEY")
 FLARE_REG=0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019
 
@@ -72,6 +71,6 @@ MP=$(echo "$R" | python3 -c "import sys,json;print('['+','.join(json.load(sys.st
 DATA=$(cast abi-decode "f()(bytes32,bytes32,uint64,uint64,(uint64,uint64,uint64,bytes32,uint256,bytes32,bool,bytes32),(uint64,uint64,uint64))" $RESP | sed -E 's/ \[[0-9.e]+\]//g' | python3 -c "import sys;l=[x.strip() for x in sys.stdin if x.strip()];print('('+','.join(l)+')')")
 
 echo "== 6. Bond.challengeFalsePayment — two witnesses disagree → slash"
-SIG="challengeFalsePayment(uint256,uint256,(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256),bytes32[],(bytes32[],(bytes32,bytes32,uint64,uint64,(uint64,uint64,uint64,bytes32,uint256,bytes32,bool,bytes32),(uint64,uint64,uint64))),address)"
-cast send $BOND "$SIG" $MID 0 "$LEAF" "[$SIB]" "($MP,$DATA)" $VICTIM --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'])"
+SIG="challengeFalsePayment(uint256,uint256,(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256),bytes32[],(bytes32[],(bytes32,bytes32,uint64,uint64,(uint64,uint64,uint64,bytes32,uint256,bytes32,bool,bytes32),(uint64,uint64,uint64))))"
+cast send $BOND "$SIG" $MID 0 "$LEAF" "[$SIB]" "($MP,$DATA)" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'])"
 echo "   bondOf=$(cast call $BOND 'bondOf(uint256)(uint256)' $MID --rpc-url $RPC) slashed=$(cast call $BOND 'slashed(uint256)(bool)' $MID --rpc-url $RPC) mandateLive=$(cast call $REG 'isLive(uint256)(bool)' $MID --rpc-url $RPC)"

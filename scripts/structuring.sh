@@ -9,7 +9,6 @@ RPC=$COSTON2_RPC
 REG=${REG:-0x52A61f0B9312042c514B0aC5C053747B0EdF0C17}
 LOG=${LOG:-0x10F4e4bc90d483B9E1D6c90EE6d6275FF825D2ae}
 BOND=${BOND:-0x84Da6082Ba9f453d6aE59A0A3f868F6A1C35046E}
-VICTIM=${VICTIM:-0x1111111111111111111111111111111111111111}
 MERCHANT=${MERCHANT:-0x2222222222222222222222222222222222222222}
 N=${N:-5}; EACH=1000000000000000000; BUDGET=4000000000000000000
 ME=$(cast wallet address --private-key "$PRIVATE_KEY")
@@ -65,6 +64,6 @@ ORDER=$(python3 -c "import sys;t=sys.argv[1:];print(' '.join(str(i) for i in sor
 IDX="["; LS="["; PS="["; PRS="["
 for i in $ORDER; do IDX+="$i,"; LS+="${LEAVES[$i]},"; PS+="[],"; PRS+="(${MPS[$i]},${DATAS[$i]}),"; done
 IDX="${IDX%,}]"; LS="${LS%,}]"; PS="${PS%,}]"; PRS="${PRS%,}]"
-SIG="challengeBudgetOverrun(uint256,uint256[],(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256)[],bytes32[][],(bytes32[],(bytes32,bytes32,uint64,uint64,(bytes32,uint16,bool,bool,uint32[]),(uint64,uint64,address,bool,address,uint256,bytes,uint8,(uint32,address,bytes32[],bytes,bool)[])))[],address)"
-cast send $BOND "$SIG" $MID "$IDX" "$LS" "$PS" "$PRS" $VICTIM --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
+SIG="challengeBudgetOverrun(uint256,uint256[],(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256)[],bytes32[][],(bytes32[],(bytes32,bytes32,uint64,uint64,(bytes32,uint16,bool,bool,uint32[]),(uint64,uint64,address,bool,address,uint256,bytes,uint8,(uint32,address,bytes32[],bytes,bool)[])))[])"
+cast send $BOND "$SIG" $MID "$IDX" "$LS" "$PS" "$PRS" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
 echo "   bondOf=$(cast call $BOND 'bondOf(uint256)(uint256)' $MID --rpc-url $RPC) slashed=$(cast call $BOND 'slashed(uint256)(bool)' $MID --rpc-url $RPC) mandateLive=$(cast call $REG 'isLive(uint256)(bool)' $MID --rpc-url $RPC)"

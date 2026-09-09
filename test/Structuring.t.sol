@@ -48,6 +48,7 @@ contract StructuringTest is Test {
         anchorLog = new AnchorLog(reg);
         mock = new MockFdcEvm();
         bond = new Bond(reg, anchorLog, IFdcVerification(address(mock)));
+        reg.setBond(address(bond));
         vm.warp(1_800_000_000);
 
         vm.prank(principal);
@@ -120,10 +121,10 @@ contract StructuringTest is Test {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) =
             _bundle(5);
         vm.prank(challenger);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, victim);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr);
         assertTrue(bond.slashed(mandateId));
-        assertEq(victim.balance, 9 ether);
-        assertEq(challenger.balance, 1 ether);
+        assertEq(bond.owed(principal), 9 ether);
+        assertEq(bond.owed(challenger), 1 ether);
         assertFalse(reg.isLive(mandateId));
     }
 
@@ -132,7 +133,7 @@ contract StructuringTest is Test {
             _bundle(4);
         vm.prank(challenger);
         vm.expectRevert(Bond.WithinBudget.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, victim);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr);
     }
 
     function test_revert_duplicateDeedSmuggledIn() public {
@@ -144,7 +145,7 @@ contract StructuringTest is Test {
         pr[4] = _evmProof(3);
         vm.prank(challenger);
         vm.expectRevert(Bond.UnorderedTxs.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, victim);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr);
     }
 
     function test_revert_txNotByAgent() public {
@@ -153,7 +154,7 @@ contract StructuringTest is Test {
         pr[2].data.responseBody.sourceAddress = makeAddr("someone-else");
         vm.prank(challenger);
         vm.expectRevert(Bond.NotAgentTx.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, victim);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr);
     }
 
     function test_revert_worldDisagreesWithReceipt() public {
@@ -162,8 +163,20 @@ contract StructuringTest is Test {
         pr[1].data.responseBody.value = EACH / 2; // chain says half of what the receipt claims
         vm.prank(challenger);
         vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, victim);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr);
     }
+
+    /// A cumulative budget covers the mandate's life. Deeds from before it must not count,
+    /// or old activity convicts a fresh mandate.
+    function test_revert_deedOutsideMandateWindow() public {
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) =
+            _bundle(5);
+        pr[2].data.responseBody.timestamp = uint64(block.timestamp - 1);
+        vm.prank(challenger);
+        vm.expectRevert(Bond.ClaimOutsideProvenRange.selector);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr);
+    }
+
 }
 
 /// x402 reality: the settlement tx calls the token, native value is 0, the deed is a Transfer event.
@@ -197,7 +210,7 @@ contract StructuringERC20Test is StructuringTest {
     function test_erc20_salami_slash() public {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
         vm.prank(challenger);
-        bond.challengeBudgetOverrunERC20(mandateId, token, idx, ls, paths, pr, victim);
+        bond.challengeBudgetOverrunERC20(mandateId, token, idx, ls, paths, pr);
         assertTrue(bond.slashed(mandateId));
     }
 
@@ -206,14 +219,14 @@ contract StructuringERC20Test is StructuringTest {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
         vm.prank(challenger);
         vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, victim);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr);
     }
 
     function test_erc20_revert_wrongTokenEmitter() public {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
         vm.prank(challenger);
         vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrunERC20(mandateId, makeAddr("other-token"), idx, ls, paths, pr, victim);
+        bond.challengeBudgetOverrunERC20(mandateId, makeAddr("other-token"), idx, ls, paths, pr);
     }
 
     function test_erc20_revert_transferFromSomeoneElse() public {
@@ -221,6 +234,6 @@ contract StructuringERC20Test is StructuringTest {
         pr[2].data.responseBody.events[0].topics[1] = bytes32(uint256(uint160(makeAddr("stranger"))));
         vm.prank(challenger);
         vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrunERC20(mandateId, token, idx, ls, paths, pr, victim);
+        bond.challengeBudgetOverrunERC20(mandateId, token, idx, ls, paths, pr);
     }
 }

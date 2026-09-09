@@ -15,10 +15,13 @@ contract Deploy is Script {
         MandateRegistry reg = new MandateRegistry();
         AnchorLog anchorLog = new AnchorLog(reg);
         Bond bond = new Bond(reg, anchorLog, IFdcVerification(address(0))); // resolve via ContractRegistry
+        // Only this Bond may revoke on a proven violation. Set once, by the deployer.
+        reg.setBond(address(bond));
         vm.stopBroadcast();
         console.log("MandateRegistry:", address(reg));
         console.log("AnchorLog:      ", address(anchorLog));
         console.log("Bond:           ", address(bond));
         console.log("FdcVerification:", address(bond.fdc()));
+        console.log("registry.bond:  ", reg.bond());
     }
 }

@@ -20,12 +20,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."; set -a; . ./.env; set +a
 RPC=$COSTON2_RPC
 FLARIO_DIR=${FLARIO_DIR:-../flario}
-REG=${REG:-0x73109d769878cA2Cf0Ba180CF4f1a24b404F3f48}
-LOG=${LOG:-0x8eC9C70f9615804259c16e811dC428Db7a1522Fe}
-BOND=${BOND:-0xBA146240AC394E64ca50CaC40100A2cdAE241e4e}
+REG=${REG:-0x1e85be1CD6D499f5E8AE12C6Fa1336949188FbB7}
+LOG=${LOG:-0x14E65D83032b85241B764f5fbbEE532a90403D23}
+BOND=${BOND:-0x9bDFE9C95980E7676E64779Cabe1948Ce6F04ae8}
 TOKEN=${TOKEN:-0x9Eea43feA502609d0D88DAfd1d64B4e929BF18C2}   # MockUSDT0 (EIP-3009), 6 dec
 PAYEE=${PAYEE:-0x2222222222222222222222222222222222222222}
-VICTIM=${VICTIM:-0x1111111111111111111111111111111111111111}
 N=${N:-5}; EACH=1000000; BUDGET=4000000; PRICE=${PRICE:-1}
 ME=$(cast wallet address --private-key "$PRIVATE_KEY")   # agent == payer == facilitator gas payer
 FLARE_REG=0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019
@@ -94,7 +93,7 @@ ORDER=$(python3 -c "import sys;t=sys.argv[1:];print(' '.join(str(i) for i in sor
 IDX="["; LS="["; PS="["; PRS="["
 for i in $ORDER; do IDX+="$i,"; LS+="$(python3 -c "import json;print(json.load(open('$OUT/leaf$i.json'))['_tuple'])"),"; PS+="[],"; PRS+="(${MPS[$i]},${DATAS[$i]}),"; done
 IDX="${IDX%,}]"; LS="${LS%,}]"; PS="${PS%,}]"; PRS="${PRS%,}]"
-TI="${T:1:-1}"; SIG="challengeBudgetOverrunERC20(uint256,address,uint256[],(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256)[],bytes32[][],(bytes32[],$TI)[],address)"
-cast send $BOND "$SIG" $MID $TOKEN "$IDX" "$LS" "$PS" "$PRS" $VICTIM --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
+TI="${T:1:-1}"; SIG="challengeBudgetOverrunERC20(uint256,address,uint256[],(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256)[],bytes32[][],(bytes32[],$TI)[])"
+cast send $BOND "$SIG" $MID $TOKEN "$IDX" "$LS" "$PS" "$PRS" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
 echo "   bondOf=$(cast call $BOND 'bondOf(uint256)(uint256)' $MID --rpc-url $RPC) slashed=$(cast call $BOND 'slashed(uint256)(bool)' $MID --rpc-url $RPC) mandateLive=$(cast call $REG 'isLive(uint256)(bool)' $MID --rpc-url $RPC)"
 echo "receipts (from the flario server) + leaves kept in $OUT"

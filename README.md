@@ -59,6 +59,12 @@ A receipt proves *registration*. "A false claim can be immutably registered." DE
 | `scripts/mcp-structuring.sh` — the same salami, but every deed is a paid MCP call to a running flario server: witness 1 is emitted by the effector process, not hand-built | **done, executed on Coston2** |
 | `scripts/brake-test.sh` — the effector-side brake (SPEC §7) live: a live mandate pays; a missing, revoked or borrowed mandate is refused before any funds move | **done, executed on Coston2** |
 
+### Live on Coston2 (2026-09-09) — v0.5 hardening
+
+**The same loop, against the hardened deployment (mandate #1).** Five paid MCP calls through the flario server, five FDC proofs with `Transfer` events, `challengeBudgetOverrunERC20`: `0xc3ec30648c7e9869cc101a0b58b041d8260103cf4f9b49f8645fe842a48c5fc4` (361,940 gas) → slashed. The proceeds are now credited, not pushed: `claim()` `0x458855019abfa0511329e3e5891febdeae9e0d940b51266a28dde129008a0bf3`. Deployment: `MandateRegistry` `0x1e85be1CD6D499f5E8AE12C6Fa1336949188FbB7`, `AnchorLog` `0x14E65D83032b85241B764f5fbbEE532a90403D23`, `Bond` `0x9bDFE9C95980E7676E64779Cabe1948Ce6F04ae8`.
+
+**The hardening, verified on-chain rather than only in tests.** `revoke()` followed immediately by `withdraw()` reverts `CoolingWindow()` (`0x3f93322d`) and the bond stays posted; `revokeByBond` from an address that is not the registered Bond reverts `NotBond()` (`0x799e4159`). CHANGELOG v0.5.0 says what each of those was protecting against.
+
 ### Live on Coston2 (2026-09-09)
 
 **The loop through a running effector (mandate #8).** Every deed here is a paid MCP tool call: the agent is an MCP client, the flario server is the effector, it settles the EIP-3009 authorization itself and answers with its own `flario-receipt/2` carrying `mandate_ref`. Nothing about witness 1 is hand-built. Five calls of 1 mUSDT0 under a 4 mUSDT0 mandate, each corroborated by an FDC `EVMTransaction` proof carrying its `Transfer` event — `challengeBudgetOverrunERC20`: `0x118bc48692b986875c2153492ff81757da9d9bf18e4201341cb2711f50d922f0` (327,144 gas) → slashed, mandate revoked. Script: `scripts/mcp-structuring.sh`.

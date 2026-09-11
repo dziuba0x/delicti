@@ -72,10 +72,23 @@ SBN=$(echo "$STX" | python3 -c "import sys,json;print(int(json.load(sys.stdin)['
 STS=$(cast block $SBN --rpc-url $RPC --json | python3 -c "import sys,json;print(int(json.load(sys.stdin)['timestamp'],16))")
 ROUND=$(( (STS - T0) / DUR ))
 T="((bytes32,bytes32,uint64,uint64,(bytes32,uint16,bool,bool,uint32[]),(uint64,uint64,address,bool,address,uint256,bytes,uint8,(uint32,address,bytes32[],bytes,bool)[])))"
-for t in $(seq 1 24); do
+# The DA layer answers `attestation request not found` until the round finalises. How long
+# that takes is not ours to control, so be patient and, if it never lands, say what it said —
+# a bare KeyError tells you nothing about whether the round, the request or the network failed.
+TRIES=${POLL_TRIES:-40}
+echo "   polling DA for round $ROUND (up to $((TRIES*20))s)"
+for t in $(seq 1 $TRIES); do
   R=$(curl -s -m 30 -X POST "$DA_URL/api/v1/fdc/proof-by-request-round-raw" -H "X-API-KEY: $VERIFIER_API_KEY" -H "Content-Type: application/json" -d "{\"votingRoundId\":$ROUND,\"requestBytes\":\"$REQ\"}")
-  echo "$R" | grep -q '"response_hex"' && break; sleep 20
+  echo "$R" | grep -q '"response_hex"' && { echo "   proof arrived after $((t*20))s"; break; }
+  [ $((t % 5)) -eq 0 ] && echo "   ...${t}/${TRIES}: $(echo "$R" | head -c 160)"
+  sleep 20
 done
+if ! echo "$R" | grep -q '"response_hex"'; then
+  echo "   DA never returned a proof for round $ROUND. Last answer:"; echo "$R" | head -c 500; echo
+  echo "   The attestation request is already paid for, so re-poll it later with:"
+  echo "   curl -s -X POST \"$DA_URL/api/v1/fdc/proof-by-request-round-raw\" -H \"X-API-KEY: $VERIFIER_API_KEY\" -H 'Content-Type: application/json' -d '{\"votingRoundId\":$ROUND,\"requestBytes\":\"$REQ\"}'"
+  exit 1
+fi
 RESP=$(echo "$R" | python3 -c "import sys,json;print(json.load(sys.stdin)['response_hex'])")
 MP=$(echo "$R" | python3 -c "import sys,json;print('['+','.join(json.load(sys.stdin)['proof'])+']')")
 DATA=$(cast abi-decode "f()$T" $RESP | sed -E 's/([0-9]) \[[0-9.e]+\]/\1/g')

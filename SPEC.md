@@ -1,4 +1,4 @@
-# DELICTI Specification — v0.2 (draft)
+# DELICTI Specification — v0.3 (draft)
 
 *Corpus delicti for autonomous agents: prove the deed happened before anyone is judged.*
 
@@ -100,10 +100,24 @@ As 6.2, but the deed is a `Transfer(agent → payee, value)` event emitted by th
 
 Why the sum: a pre-action gate sees one call at a time and passes each of five legal calls. Structuring — many small deeds each inside a limit — is the canonical way a constrained actor drains a budget, and it is the gap the pre-action standards themselves admit. DELICTI judges the sequence because the mandate is a budget, not a per-call limit.
 
-### 6.4 Roadmap challenges (specified, not implemented)
-- **Mandate-less deed.** An FDC-proven transaction from a bonded agent's address with no anchored leaf referencing it: a muscle moving with no signal. Requires the agent to bond an *address*, not only a mandate.
+### 6.4 Mandate-less deed (`accuseUnanchoredDeed` / `answerAccusation` / `resolveAccusation`)
+
+An FDC-proven transaction from the mandate's agent, inside the mandate's window, with no anchored leaf behind it: a muscle moving with no signal. Every other challenge starts from an anchored leaf, which means consequence reached only agents that had already confessed — not anchoring was free, and an agent optimising its public corroboration rate should anchor the easy deeds and stay quiet about the rest. This is the challenge that reaches silence.
+
+**Why it is shaped as an accusation.** Proving a negative on-chain would need a non-inclusion proof over every episode of the mandate — a sorted or sparse tree, and a proof per episode. Instead the burden is inverted the way an accusation is: the challenger names the deed, brings the FDC proof, and posts a stake; the agent has a `responseWindow` to produce the leaf it says it wrote; silence resolves against it. Anyone may answer, because it is the evidence that speaks, and anyone may resolve once the window closes — the challenger's 10 % follows the accusation, not the caller.
+
+**What stops the obvious defences.**
+- *Anchoring after the accusation.* The answering episode must have been anchored no later than `deedTime + anchorGrace`. Anchoring later is a cover story, not a receipt — and a revoked mandate cannot anchor at all.
+- *Accusing an agent that never promised anything.* An address may legitimately do things outside one mandate, so the challenge applies only to mandates where the **agent itself** called `declareExclusive`: a promise that inside this window, this address acts only under this mandate. Only the agent can make it, and it is sticky — otherwise it would be withdrawn the moment the agent wanted to act unobserved.
+- *Griefing.* A false accusation forfeits its stake to the principal.
+- *Accusing faster than the agent can write.* Deeds inside `anchorGrace` cannot be accused at all.
+
+`anchorGrace` (1 h) and `responseWindow` (24 h) are constructor immutables, so a testnet deployment can demonstrate the whole loop without waiting out production timers. Unlike the cooling window, `responseWindow` is not waiting on the FDC: the answer is data the agent already holds.
+
+### 6.5 Roadmap challenges (specified, not implemented)
 - **Wrong counterparty.** Proven effect to an address outside the envelope's disclosed allow-list (needs selective disclosure of that list — Merkle leaf per counterparty).
 - **Class-B escalation.** Web2 effects via FDC `Web2Json` for allow-listed sources.
+- **Under-reporting.** A second witness over the *tally* rather than over a single deed: an effector anchoring its own count of deeds performed for a mandate, so a divergence from the agent's `receiptCount` is itself challengeable.
 
 ## 7. The effector-side brake (optional, recommended)
 
@@ -130,14 +144,15 @@ Nothing sensitive is on-chain: mandate envelopes and receipts live off-chain; th
 - It does not yet protect the challenger's 10 % from being front-run. Proofs travel in public calldata and the FDC request precedes the challenge by minutes, so a copier can win the reward without paying the monitoring cost. Commit–reveal — with the commitment made *before* the attestation request — is specified as the fix and is not implemented.
 - It does not bind the ERC-20 `asset` or the `sourceId` to the mandate on-chain; both live in the off-chain envelope. Until they do, a bond posted by a party other than the principal should be read with that in mind.
 - The slash is all-or-nothing, which makes the penalty a step function and the deed's optimal size, conditional on breaching, the largest one available. Proportional slashing is a design decision, not an oversight, and is open.
-- Every implemented challenge starts from an anchored leaf, so consequence today reaches only agents that anchored their own breach. `challengeUnanchoredDeed` (§6.4) is what closes that, and it requires bonding an *address*, not only a mandate.
+- Silence is challengeable only for mandates whose agent declared exclusivity (§6.4). An agent that never makes that promise is still judged on what it anchors — the promise is the price of being trusted, not a protocol guarantee.
 
 ## 11. Metrics this makes possible
 
 Because every judged deed has a class, an agent, a mandate, and a verdict, two new safety-relevant quantities become measurable across operators without trusting any of them:
 
+- **coverage rate** — share of an agent's FDC-observable deeds that were anchored at all. Under an exclusivity declaration (§6.4) the denominator is public and outside the agent's control: every transaction from that address inside the window. This is the metric that matters first, because the two below are conditional on it;
 - **corroboration rate** — share of an agent's claimed deeds that reach class A;
-- **contradiction rate** — share of anchored receipts proven false or overrun.
+- **contradiction rate** — share of anchored receipts proven false or overrun. Weigh it by value, not by count: leaves are cheap, and an agent with one contradiction can otherwise dilute it with ten thousand dust deeds.
 
 These are properties of *deeds*, not of models, and they can be computed by anyone from public data. That is the point.
 

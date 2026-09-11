@@ -14,7 +14,7 @@ contract Coston2ForkTest is Test {
         if (block.chainid != 114) return; // Coston2 only
         MandateRegistry reg = new MandateRegistry();
         AnchorLog anchorLog = new AnchorLog(reg);
-        Bond bond = new Bond(reg, anchorLog, IFdcVerification(address(0)));
+        Bond bond = new Bond(reg, anchorLog, IFdcVerification(address(0)), 24 hours, 1 hours);
         IFdcVerification fdc = bond.fdc();
         assertTrue(address(fdc) != address(0), "FdcVerification resolved");
         assertTrue(address(fdc).code.length > 0, "has code");

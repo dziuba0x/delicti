@@ -14,7 +14,10 @@ contract Deploy is Script {
         vm.startBroadcast();
         MandateRegistry reg = new MandateRegistry();
         AnchorLog anchorLog = new AnchorLog(reg);
-        Bond bond = new Bond(reg, anchorLog, IFdcVerification(address(0))); // resolve via ContractRegistry
+        // 24 h in production; RESPONSE_WINDOW lets a testnet deployment show the full loop in one sitting.
+        uint64 responseWindow = uint64(vm.envOr("RESPONSE_WINDOW", uint256(24 hours)));
+        uint64 anchorGrace = uint64(vm.envOr("ANCHOR_GRACE", uint256(1 hours)));
+        Bond bond = new Bond(reg, anchorLog, IFdcVerification(address(0)), responseWindow, anchorGrace); // FDC via ContractRegistry
         // Only this Bond may revoke on a proven violation. Set once, by the deployer.
         reg.setBond(address(bond));
         vm.stopBroadcast();
@@ -23,5 +26,7 @@ contract Deploy is Script {
         console.log("Bond:           ", address(bond));
         console.log("FdcVerification:", address(bond.fdc()));
         console.log("registry.bond:  ", reg.bond());
+        console.log("responseWindow: ", bond.responseWindow());
+        console.log("anchorGrace:    ", bond.anchorGrace());
     }
 }

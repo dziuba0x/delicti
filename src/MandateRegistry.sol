@@ -32,6 +32,13 @@ contract MandateRegistry {
     ///         happen long before `validUntil`.
     mapping(uint256 => uint64) public revokedAt;
 
+    /// @notice Mandates whose agent has declared that, inside the mandate's window, this
+    ///         address acts ONLY under this mandate — so every FDC-observable deed from it
+    ///         must show up as an anchored leaf. Declared by the agent, never by anyone else:
+    ///         it is a promise the agent makes about itself, and it is what makes silence
+    ///         challengeable (SPEC 6.4). Sticky, like revocation.
+    mapping(uint256 => bool) public exclusive;
+
     /// @notice The Bond allowed to call `revokeByBond`. Set once, by the deployer.
     address public bond;
     address private immutable _deployer;
@@ -52,6 +59,7 @@ contract MandateRegistry {
         uint64 validUntil
     );
     event MandateRevoked(uint256 indexed id, address indexed by);
+    event ExclusiveDeclared(uint256 indexed id, address indexed agent);
 
     error InvalidWindow();
     error ParentNotFound();
@@ -61,6 +69,8 @@ contract MandateRegistry {
     error ZeroAgent();
     error NotBond();
     error BondAlreadySet();
+    error NotAgent();
+    error MandateNotLive();
 
     /// @notice Commit a mandate. For a child mandate, msg.sender must be the parent's agent
     ///         (the delegating agent), and the child must be within the parent's envelope.
@@ -109,6 +119,17 @@ contract MandateRegistry {
         if (msg.sender != _deployer) revert NotAuthorized();
         if (bond != address(0)) revert BondAlreadySet();
         bond = b;
+    }
+
+    /// @notice The agent binds its own address to this mandate for the mandate's window:
+    ///         every deed from it that the FDC can see is expected to be anchored. Only the
+    ///         agent can make this promise, and it cannot be taken back — otherwise an agent
+    ///         would simply withdraw it the moment it wanted to act unobserved.
+    function declareExclusive(uint256 id) external {
+        if (msg.sender != _mandates[id].agent) revert NotAgent();
+        if (!isLive(id)) revert MandateNotLive();
+        exclusive[id] = true;
+        emit ExclusiveDeclared(id, msg.sender);
     }
 
     /// @notice Principal (or any ancestor principal) may revoke. Revocation is sticky.

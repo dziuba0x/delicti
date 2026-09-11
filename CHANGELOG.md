@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased (v0.6.0-dev) — the deed nobody wrote down
+
+Until now every challenge started from an anchored leaf, so the bond punished only agents that had already confessed: **not anchoring was free**, and the dominant strategy was to anchor the easy deeds and stay quiet about the rest. SPEC §6.4 called that roadmap; it was load-bearing.
+
+- **`MandateRegistry.declareExclusive(id)`** — the agent, and only the agent, promises that inside this mandate's window its address acts under this mandate alone, so every FDC-observable deed from it is expected to be anchored. Sticky, like revocation.
+- **`Bond.accuseUnanchoredDeed` / `answerAccusation` / `resolveAccusation`** — proving a negative on-chain would need a non-inclusion proof over every episode, so the burden is inverted: the challenger names the deed with an FDC proof and posts a 0.1 FLR stake, the agent has `responseWindow` to produce the leaf, and silence resolves against it. Anyone may answer (the evidence speaks, not the speaker) and anyone may resolve once the window closes — the challenger's 10 % follows the accusation, not the caller.
+- Retroactive anchoring is not a defence: the answering episode must have been anchored by `deedTime + anchorGrace`. A false accusation forfeits its stake to the principal. Deeds still inside the grace cannot be accused at all.
+- `anchorGrace` (1 h) and `responseWindow` (24 h) are constructor immutables so a testnet deployment can show the whole loop without waiting out production timers.
+- `scripts/unanchored-deed.sh` — live end-to-end, `MODE=silence` (accuse → window closes → slash) or `MODE=answer` (accuse → receipt produced → dismissed).
+- SPEC v0.3: §6.4 promoted from roadmap to implemented; §11 puts **coverage rate** first, since corroboration and contradiction rates are conditional on a denominator the agent used to choose for itself.
+- 42 tests pass (was 31). Slither run over `src/` at medium+ severity: five findings, all false positives (Solidity zero-initialises locals; the `revokedAt == 0` sentinel is deliberate).
+
+**Not yet deployed.** The sandbox lost RPC access to Coston2 mid-session (gateway 403), so v0.6 is tested but unverified on-chain — deploy and live-run commands are in the handoff note.
+
 ## v0.5.0 — 2026-09-09 — hardening
 
 Five holes, found by an adversarial pass over the deployed code, each with a regression test. 31 tests pass; the loop was re-run live on Coston2 against the new deployment.

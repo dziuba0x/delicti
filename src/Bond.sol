@@ -39,6 +39,23 @@ contract Bond {
     ///         ~100x the observed proof latency and far below the DA layer's retention.
     uint64 public constant COOLING_WINDOW = 24 hours;
 
+    /// @notice How long after a deed the agent has to anchor it before silence is challengeable.
+    /// @dev    1 hour in production. Immutable rather than constant for the same reason as
+    ///         `responseWindow`: a testnet deployment has to be able to show the whole loop
+    ///         without waiting out production timers. Both values are read off the contract.
+    uint64 public immutable anchorGrace;
+
+    /// @notice Stake an accuser must put up. Returned if the accusation stands, forfeited to the
+    ///         principal if the agent answers it — accusing is cheap, but not free.
+    uint256 public constant ACCUSATION_STAKE = 0.1 ether;
+
+    /// @notice How long the agent has to answer an accusation of an unanchored deed.
+    /// @dev    Unlike the cooling window this is not waiting on the FDC: the answer is data the
+    ///         agent already holds (its own leaf and the episode it sits in), so the window is
+    ///         about liveness, not proof latency. Production value is 24 h; it is a constructor
+    ///         argument so a testnet deployment can demonstrate the full loop in one sitting.
+    uint64 public immutable responseWindow;
+
     // mandateId => posted bond (wei)
     mapping(uint256 => uint256) public bondOf;
     // mandateId => slashed?
@@ -61,6 +78,14 @@ contract Bond {
         bytes32 leafHash,
         address indexed challenger,
         uint256 slashedAmount
+    );
+
+    event DeedAccused(
+        uint256 indexed accusationId, uint256 indexed mandateId, bytes32 txHash, uint64 deedTime, address indexed challenger
+    );
+    event AccusationAnswered(uint256 indexed accusationId, uint256 indexed mandateId, bytes32 leafHash, uint256 episodeIndex);
+    event UnanchoredDeedProven(
+        uint256 indexed accusationId, uint256 indexed mandateId, bytes32 txHash, address indexed challenger, uint256 slashedAmount
     );
 
     event BudgetOverrunProven(
@@ -86,12 +111,45 @@ contract Bond {
     error CoolingWindow();
     error NothingOwed();
     error BondSlashed();
+    error BadStake();
+    error NotExclusive();
+    error DeedWithinGrace();
+    error AlreadyAccused();
+    error AccusationClosed();
+    error ResponseWindowOpen();
+    error AnchoredInTime();
+    error AnchoredTooLate();
+    error WrongDeed();
 
-    constructor(MandateRegistry _registry, AnchorLog _log, IFdcVerification fdcOverride) {
+    constructor(
+        MandateRegistry _registry,
+        AnchorLog _log,
+        IFdcVerification fdcOverride,
+        uint64 responseWindow_,
+        uint64 anchorGrace_
+    ) {
         registry = _registry;
         log = _log;
         _fdcOverride = fdcOverride;
+        responseWindow = responseWindow_;
+        anchorGrace = anchorGrace_;
     }
+
+    /// @notice An open claim that a deed happened with no receipt behind it. Resolved either by
+    ///         the agent producing the anchored leaf, or by the clock running out.
+    struct Accusation {
+        uint256 mandateId;
+        bytes32 txHash;
+        uint64 deedTime;
+        uint64 deadline;
+        address challenger;
+        bool closed;
+    }
+
+    uint256 public nextAccusationId = 1;
+    mapping(uint256 => Accusation) public accusations;
+    // mandateId => tx hash => already accused (one open question per deed)
+    mapping(uint256 => mapping(bytes32 => bool)) public accused;
 
     function fdc() public view returns (IFdcVerification) {
         if (address(_fdcOverride) != address(0)) return _fdcOverride;
@@ -314,6 +372,98 @@ contract Bond {
         _slash(mandateId, amount);
     }
 
+    // -----------------------------------------------------------------------------------
+    // Mandate-less deed (SPEC 6.4): a muscle moving with no signal.
+    //
+    // Every other challenge starts from an anchored leaf, so consequence reached only agents
+    // that had already confessed: not anchoring was free, and an agent maximising its public
+    // corroboration rate should anchor the easy deeds and stay quiet about the rest.
+    //
+    // You cannot prove a negative cheaply on-chain — enumerating "no leaf references this tx"
+    // would need a non-inclusion proof over every episode. So the burden is inverted, the way
+    // an accusation works: the challenger states the deed and posts a stake, and the agent has
+    // a window to produce the receipt it says it wrote. Silence resolves against it. Retroactive
+    // anchoring does not help, because the episode must have been anchored within anchorGrace
+    // of the deed, and a revoked mandate cannot anchor at all.
+    // -----------------------------------------------------------------------------------
+
+    /// @notice Accuse a bonded agent of a deed with no anchored receipt behind it.
+    /// @param proof FDC EVMTransaction proof that the mandate's agent really made this transaction
+    function accuseUnanchoredDeed(uint256 mandateId, IEVMTransaction.Proof calldata proof)
+        external
+        payable
+        returns (uint256 id)
+    {
+        if (slashed[mandateId]) revert AlreadySlashed();
+        if (bondOf[mandateId] == 0) revert NothingToSlash();
+        if (msg.value != ACCUSATION_STAKE) revert BadStake();
+        // Only an agent that promised exclusivity can be asked to account for every deed.
+        if (!registry.exclusive(mandateId)) revert NotExclusive();
+
+        MandateRegistry.Mandate memory m = registry.get(mandateId);
+        if (!fdc().verifyEVMTransaction(proof)) revert FdcProofInvalid();
+        IEVMTransaction.ResponseBody calldata rb = proof.data.responseBody;
+        if (rb.sourceAddress != m.agent) revert NotAgentTx();
+        if (rb.status != 1) revert TxNotSuccessful();
+        if (rb.timestamp < m.validFrom || rb.timestamp > m.validUntil) revert ClaimOutsideProvenRange();
+        // The agent is allowed to be slower than the chain; only silence past the grace counts.
+        if (block.timestamp < uint256(rb.timestamp) + anchorGrace) revert DeedWithinGrace();
+
+        bytes32 txh = proof.data.requestBody.transactionHash;
+        if (accused[mandateId][txh]) revert AlreadyAccused();
+        accused[mandateId][txh] = true;
+
+        id = nextAccusationId++;
+        accusations[id] = Accusation({
+            mandateId: mandateId,
+            txHash: txh,
+            deedTime: rb.timestamp,
+            deadline: uint64(block.timestamp) + responseWindow,
+            challenger: msg.sender,
+            closed: false
+        });
+        emit DeedAccused(id, mandateId, txh, rb.timestamp, msg.sender);
+    }
+
+    /// @notice Answer an accusation by producing the anchored receipt for that deed. Anyone may
+    ///         do it — the evidence speaks, not the speaker. The accuser's stake goes to the
+    ///         principal: a false accusation costs something.
+    function answerAccusation(
+        uint256 accusationId,
+        uint256 episodeIndex,
+        Receipts.Leaf calldata leaf,
+        bytes32[] calldata merkleProof
+    ) external {
+        Accusation storage a = accusations[accusationId];
+        if (a.challenger == address(0) || a.closed) revert AccusationClosed();
+        if (leaf.mandateId != a.mandateId || leaf.ref != a.txHash) revert WrongDeed();
+
+        AnchorLog.Episode memory ep = log.episode(a.mandateId, episodeIndex);
+        // Anchoring after the fact is not a receipt, it is a cover story.
+        if (ep.anchoredAt > a.deedTime + anchorGrace) revert AnchoredTooLate();
+        bytes32 leafHash = Receipts.hash(leaf);
+        if (!Merkle.verify(merkleProof, ep.root, leafHash)) revert LeafNotAnchored();
+
+        a.closed = true;
+        owed[registry.get(a.mandateId).principal] += ACCUSATION_STAKE;
+        emit AccusationAnswered(accusationId, a.mandateId, leafHash, episodeIndex);
+    }
+
+    /// @notice The window closed with no receipt produced. The deed stands unaccounted for.
+    function resolveAccusation(uint256 accusationId) external {
+        Accusation storage a = accusations[accusationId];
+        if (a.challenger == address(0) || a.closed) revert AccusationClosed();
+        if (block.timestamp <= a.deadline) revert ResponseWindowOpen();
+        if (slashed[a.mandateId]) revert AlreadySlashed();
+        uint256 amount = bondOf[a.mandateId];
+        if (amount == 0) revert NothingToSlash();
+
+        a.closed = true;
+        owed[a.challenger] += ACCUSATION_STAKE; // stake back
+        emit UnanchoredDeedProven(accusationId, a.mandateId, a.txHash, a.challenger, amount);
+        _slashTo(a.mandateId, amount, a.challenger);
+    }
+
     bytes32 private constant TRANSFER_SIG = keccak256("Transfer(address,address,uint256)");
 
     function _erc20TransferValue(IEVMTransaction.Event[] calldata events, address asset, address from, address to)
@@ -332,13 +482,19 @@ contract Bond {
     }
 
     function _slash(uint256 mandateId, uint256 amount) internal {
+        _slashTo(mandateId, amount, msg.sender);
+    }
+
+    /// @param beneficiary who earns the challenger's share — not always `msg.sender`, since an
+    ///        accusation may be resolved by anyone once its window has closed.
+    function _slashTo(uint256 mandateId, uint256 amount, address beneficiary) internal {
         slashed[mandateId] = true;
         bondOf[mandateId] = 0;
         registry.revokeByBond(mandateId);
         uint256 reward = (amount * CHALLENGER_BPS) / 10_000;
         // Credit, never push: a recipient that reverts on receive would otherwise be able to
         // make a mandate unslashable. Both parties pull with claim().
-        owed[msg.sender] += reward;
+        owed[beneficiary] += reward;
         owed[registry.get(mandateId).principal] += amount - reward;
     }
 }

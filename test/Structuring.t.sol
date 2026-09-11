@@ -47,7 +47,7 @@ contract StructuringTest is Test {
         reg = new MandateRegistry();
         anchorLog = new AnchorLog(reg);
         mock = new MockFdcEvm();
-        bond = new Bond(reg, anchorLog, IFdcVerification(address(mock)));
+        bond = new Bond(reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours);
         reg.setBond(address(bond));
         vm.warp(1_800_000_000);
 

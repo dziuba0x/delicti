@@ -29,6 +29,21 @@ flowchart LR
     B -- "witnesses disagree<br/>or sum > budget" --> S[slash → victim + challenger<br/>mandate revoked]
 ```
 
+## Proven on Coston2 — click any of them
+
+Nothing below is a claim about what the contracts would do. Each line is a transaction anyone can open.
+
+| What was proven | Transaction |
+|---|---|
+| A receipt that lied: the agent's anchored receipt claims an XRPL payment, FDC `ReferencedPaymentNonexistence` proves it never happened → slash | [`0x91bb1909…5fdc91`](https://coston2-explorer.flare.network/tx/0x91bb190933e9e0d5abbc8efc2816ba26d475c2fa3cfbfb2636ae656e3c5fdc91) |
+| Structuring, native: five 1-FLR deeds under a 4-FLR budget, each legal alone, each corroborated by FDC — the sum convicts | [`0xa547ebad…96557f`](https://coston2-explorer.flare.network/tx/0xa547ebada6b01953100ed2fad6abdead1b3122d3d280ad302040e69b3f96557f) |
+| Structuring over x402: five genuine EIP-3009 settlements, genuine `flario-receipt/2`, FDC proofs carrying the `Transfer` event | [`0x19c73850…014ed1`](https://coston2-explorer.flare.network/tx/0x19c738500129ff4447802561a804b92620e47f3222fa70a76c6ad781ce014ed1) |
+| The same loop driven through a **running flario MCP server** — witness 1 emitted by the effector process, not hand-built | [`0x118bc486…d922f0`](https://coston2-explorer.flare.network/tx/0x118bc48692b986875c2153492ff81757da9d9bf18e4201341cb2711f50d922f0) |
+| The effector-side brake: a live mandate pays, while a missing, revoked or borrowed one is refused **before any funds move** | [`0x2b59d401…277664`](https://coston2-explorer.flare.network/tx/0x2b59d401f8819c24c8e6b89841f35b7df09a4282dd1b7607ad4db7505a277664) |
+| The hardened v0.5 contracts, same loop again, proceeds now credited and pulled with `claim()` | [`0xc3ec3064…8c5fc4`](https://coston2-explorer.flare.network/tx/0xc3ec30648c7e9869cc101a0b58b041d8260103cf4f9b49f8645fe842a48c5fc4) |
+
+Still unproven, and marked as such below: the §6.4 accusation loop (`accuseUnanchoredDeed`). It is deployed and covered by tests; no accusation has been resolved on-chain yet.
+
 ## Why signed receipts are not enough
 
 | | KYA-OS / Checkpoint | ACTA / ASQAV | AP2 mandates | OAP (pre-action) | **DELICTI** |
@@ -42,7 +57,7 @@ flowchart LR
 
 A receipt proves *registration*. "A false claim can be immutably registered." DELICTI proves the *deed* — or proves the receipt lied.
 
-## Status — Sprint 0 (Coston2)
+## Status
 
 | Piece | State |
 |---|---|
@@ -62,38 +77,38 @@ A receipt proves *registration*. "A false claim can be immutably registered." DE
 
 ### Coston2 (2026-09-11) — v0.6 deployed, accusation loop not yet demonstrated
 
-`MandateRegistry` `0x401C07e28db3464ab2013C36Babf4701cD8dC6bd`, `AnchorLog` `0x2FbcF31FC3a66BbfbA30743aab932d7AE78FDf56`, `Bond` `0xc42A87F8E005B231819b16E46B119b90228b86A6`. Testnet timers: `responseWindow = 600 s`, `anchorGrace = 300 s` (production values are 24 h and 1 h — both are constructor immutables so the whole loop can be shown in one sitting).
+`MandateRegistry` [`0x401C07e28db3464ab2013C36Babf4701cD8dC6bd`](https://coston2-explorer.flare.network/address/0x401C07e28db3464ab2013C36Babf4701cD8dC6bd), `AnchorLog` [`0x2FbcF31FC3a66BbfbA30743aab932d7AE78FDf56`](https://coston2-explorer.flare.network/address/0x2FbcF31FC3a66BbfbA30743aab932d7AE78FDf56), `Bond` [`0xc42A87F8E005B231819b16E46B119b90228b86A6`](https://coston2-explorer.flare.network/address/0xc42A87F8E005B231819b16E46B119b90228b86A6). Testnet timers: `responseWindow = 600 s`, `anchorGrace = 300 s` (production values are 24 h and 1 h — both are constructor immutables so the whole loop can be shown in one sitting).
 
 What is **not** claimed yet: no accusation has been resolved on-chain. `scripts/unanchored-deed.sh` reached the FDC step and the data-availability layer kept answering `attestation request not found` for the deed's voting round, far past the 2–4 minutes these rounds usually take, with Coston2 gas at 1500–2000 gwei instead of the usual ~25. The contracts are covered by 42 tests; the live demonstration is pending, and this section will say so until it is not.
 
 ### Live on Coston2 (2026-09-09) — v0.5 hardening
 
-**The same loop, against the hardened deployment (mandate #1).** Five paid MCP calls through the flario server, five FDC proofs with `Transfer` events, `challengeBudgetOverrunERC20`: `0xc3ec30648c7e9869cc101a0b58b041d8260103cf4f9b49f8645fe842a48c5fc4` (361,940 gas) → slashed. The proceeds are now credited, not pushed: `claim()` `0x458855019abfa0511329e3e5891febdeae9e0d940b51266a28dde129008a0bf3`. Deployment: `MandateRegistry` `0x1e85be1CD6D499f5E8AE12C6Fa1336949188FbB7`, `AnchorLog` `0x14E65D83032b85241B764f5fbbEE532a90403D23`, `Bond` `0x9bDFE9C95980E7676E64779Cabe1948Ce6F04ae8`.
+**The same loop, against the hardened deployment (mandate #1).** Five paid MCP calls through the flario server, five FDC proofs with `Transfer` events, `challengeBudgetOverrunERC20`: [`0xc3ec3064…8c5fc4`](https://coston2-explorer.flare.network/tx/0xc3ec30648c7e9869cc101a0b58b041d8260103cf4f9b49f8645fe842a48c5fc4) (361,940 gas) → slashed. The proceeds are now credited, not pushed: `claim()` [`0x45885501…8a0bf3`](https://coston2-explorer.flare.network/tx/0x458855019abfa0511329e3e5891febdeae9e0d940b51266a28dde129008a0bf3). Deployment: `MandateRegistry` [`0x1e85be1CD6D499f5E8AE12C6Fa1336949188FbB7`](https://coston2-explorer.flare.network/address/0x1e85be1CD6D499f5E8AE12C6Fa1336949188FbB7), `AnchorLog` [`0x14E65D83032b85241B764f5fbbEE532a90403D23`](https://coston2-explorer.flare.network/address/0x14E65D83032b85241B764f5fbbEE532a90403D23), `Bond` [`0x9bDFE9C95980E7676E64779Cabe1948Ce6F04ae8`](https://coston2-explorer.flare.network/address/0x9bDFE9C95980E7676E64779Cabe1948Ce6F04ae8).
 
 **The hardening, verified on-chain rather than only in tests.** `revoke()` followed immediately by `withdraw()` reverts `CoolingWindow()` (`0x3f93322d`) and the bond stays posted; `revokeByBond` from an address that is not the registered Bond reverts `NotBond()` (`0x799e4159`). CHANGELOG v0.5.0 says what each of those was protecting against.
 
 ### Live on Coston2 (2026-09-09)
 
-**The loop through a running effector (mandate #8).** Every deed here is a paid MCP tool call: the agent is an MCP client, the flario server is the effector, it settles the EIP-3009 authorization itself and answers with its own `flario-receipt/2` carrying `mandate_ref`. Nothing about witness 1 is hand-built. Five calls of 1 mUSDT0 under a 4 mUSDT0 mandate, each corroborated by an FDC `EVMTransaction` proof carrying its `Transfer` event — `challengeBudgetOverrunERC20`: `0x118bc48692b986875c2153492ff81757da9d9bf18e4201341cb2711f50d922f0` (327,144 gas) → slashed, mandate revoked. Script: `scripts/mcp-structuring.sh`.
+**The loop through a running effector (mandate #8).** Every deed here is a paid MCP tool call: the agent is an MCP client, the flario server is the effector, it settles the EIP-3009 authorization itself and answers with its own `flario-receipt/2` carrying `mandate_ref`. Nothing about witness 1 is hand-built. Five calls of 1 mUSDT0 under a 4 mUSDT0 mandate, each corroborated by an FDC `EVMTransaction` proof carrying its `Transfer` event — `challengeBudgetOverrunERC20`: [`0x118bc486…d922f0`](https://coston2-explorer.flare.network/tx/0x118bc48692b986875c2153492ff81757da9d9bf18e4201341cb2711f50d922f0) (327,144 gas) → slashed, mandate revoked. Script: `scripts/mcp-structuring.sh`.
 
-**The brake (SPEC §7), live.** Four calls against the same server: a live mandate with the correct agent pays (`0x2b59d401f8819c24c8e6b89841f35b7df09a4282dd1b7607ad4db7505a277664`, mandate #5); a call with no `mandate_id` under `DELICTI_REQUIRE_MANDATE=1`, a call under revoked mandate #6, and a call under mandate #7 belonging to another address are all refused **before any funds move** — the payer's token balance is unchanged across all three. Script: `scripts/brake-test.sh`.
+**The brake (SPEC §7), live.** Four calls against the same server: a live mandate with the correct agent pays ([`0x2b59d401…277664`](https://coston2-explorer.flare.network/tx/0x2b59d401f8819c24c8e6b89841f35b7df09a4282dd1b7607ad4db7505a277664), mandate #5); a call with no `mandate_id` under `DELICTI_REQUIRE_MANDATE=1`, a call under revoked mandate #6, and a call under mandate #7 belonging to another address are all refused **before any funds move** — the payer's token balance is unchanged across all three. Script: `scripts/brake-test.sh`.
 
 ### Live on Coston2 (2026-09-08)
 
-**The real x402 salami (v0.3 deployment, mandate #3):** five genuine EIP-3009 `transferWithAuthorization` settlements of 1 mUSDT0 each (agent signs typed data, facilitator submits — exactly flario's x402 path), each wrapped in a genuine `flario-receipt/2` carrying `mandate_ref` (witness 1), each corroborated by an FDC `EVMTransaction` proof carrying the `Transfer` event (witness 2), under a 4 mUSDT0 mandate — `challengeBudgetOverrunERC20`: `0x19c738500129ff4447802561a804b92620e47f3222fa70a76c6ad781ce014ed1` (325,410 gas) → slashed, mandate revoked. Script: `scripts/x402-structuring.sh`. Deployment: `MandateRegistry` `0x73109d769878cA2Cf0Ba180CF4f1a24b404F3f48`, `AnchorLog` `0x8eC9C70f9615804259c16e811dC428Db7a1522Fe`, `Bond` `0xBA146240AC394E64ca50CaC40100A2cdAE241e4e`, `MockUSDT0` (EIP-3009, public mint) `0x9Eea43feA502609d0D88DAfd1d64B4e929BF18C2`.
+**The real x402 salami (v0.3 deployment, mandate #3):** five genuine EIP-3009 `transferWithAuthorization` settlements of 1 mUSDT0 each (agent signs typed data, facilitator submits — exactly flario's x402 path), each wrapped in a genuine `flario-receipt/2` carrying `mandate_ref` (witness 1), each corroborated by an FDC `EVMTransaction` proof carrying the `Transfer` event (witness 2), under a 4 mUSDT0 mandate — `challengeBudgetOverrunERC20`: [`0x19c73850…014ed1`](https://coston2-explorer.flare.network/tx/0x19c738500129ff4447802561a804b92620e47f3222fa70a76c6ad781ce014ed1) (325,410 gas) → slashed, mandate revoked. Script: `scripts/x402-structuring.sh`. Deployment: `MandateRegistry` [`0x73109d769878cA2Cf0Ba180CF4f1a24b404F3f48`](https://coston2-explorer.flare.network/address/0x73109d769878cA2Cf0Ba180CF4f1a24b404F3f48), `AnchorLog` [`0x8eC9C70f9615804259c16e811dC428Db7a1522Fe`](https://coston2-explorer.flare.network/address/0x8eC9C70f9615804259c16e811dC428Db7a1522Fe), `Bond` [`0xBA146240AC394E64ca50CaC40100A2cdAE241e4e`](https://coston2-explorer.flare.network/address/0xBA146240AC394E64ca50CaC40100A2cdAE241e4e), `MockUSDT0` (EIP-3009, public mint) [`0x9Eea43feA502609d0D88DAfd1d64B4e929BF18C2`](https://coston2-explorer.flare.network/address/0x9Eea43feA502609d0D88DAfd1d64B4e929BF18C2).
 
 
-Current deployment (v0.2, `Receipts.Leaf.ref`): `MandateRegistry` `0x52A61f0B9312042c514B0aC5C053747B0EdF0C17`, `AnchorLog` `0x10F4e4bc90d483B9E1D6c90EE6d6275FF825D2ae`, `Bond` `0x84Da6082Ba9f453d6aE59A0A3f868F6A1C35046E`.
+Current deployment (v0.2, `Receipts.Leaf.ref`): `MandateRegistry` [`0x52A61f0B9312042c514B0aC5C053747B0EdF0C17`](https://coston2-explorer.flare.network/address/0x52A61f0B9312042c514B0aC5C053747B0EdF0C17), `AnchorLog` [`0x10F4e4bc90d483B9E1D6c90EE6d6275FF825D2ae`](https://coston2-explorer.flare.network/address/0x10F4e4bc90d483B9E1D6c90EE6d6275FF825D2ae), `Bond` [`0x84Da6082Ba9f453d6aE59A0A3f868F6A1C35046E`](https://coston2-explorer.flare.network/address/0x84Da6082Ba9f453d6aE59A0A3f868F6A1C35046E).
 
-**Structuring proven (mandate #4):** five transfers of 1 C2FLR to `0x2222…2222` under a 4 C2FLR budget — each one legal alone, each corroborated by its own FDC `EVMTransaction` proof (rounds 1448936–1448937, `sourceAddress` == the mandated agent) — then `challengeBudgetOverrun` with all five: `0xa547ebada6b01953100ed2fad6abdead1b3122d3d280ad302040e69b3f96557f` (291,855 gas) → slashed, mandate revoked. This is the pattern pre-action gates cannot see, because every call passes on its own.
+**Structuring proven (mandate #4):** five transfers of 1 C2FLR to `0x2222…2222` under a 4 C2FLR budget — each one legal alone, each corroborated by its own FDC `EVMTransaction` proof (rounds 1448936–1448937, `sourceAddress` == the mandated agent) — then `challengeBudgetOverrun` with all five: [`0xa547ebad…96557f`](https://coston2-explorer.flare.network/tx/0xa547ebada6b01953100ed2fad6abdead1b3122d3d280ad302040e69b3f96557f) (291,855 gas) → slashed, mandate revoked. This is the pattern pre-action gates cannot see, because every call passes on its own.
 
-**First contradicted deed (v0.1 deployment):** `MandateRegistry` `0x307cF47DB74a48CFC9813c59F29B1a2c546746d5`, `AnchorLog` `0xed65258EC80fAE6b780215aA17E1AB7A321d41E8`, `Bond` `0x6b4Dc7E1F6eda9B8D2ECa97dDF35e1E19A3E1ed2`.
+**First contradicted deed (v0.1 deployment):** `MandateRegistry` [`0x307cF47DB74a48CFC9813c59F29B1a2c546746d5`](https://coston2-explorer.flare.network/address/0x307cF47DB74a48CFC9813c59F29B1a2c546746d5), `AnchorLog` [`0xed65258EC80fAE6b780215aA17E1AB7A321d41E8`](https://coston2-explorer.flare.network/address/0xed65258EC80fAE6b780215aA17E1AB7A321d41E8), `Bond` [`0x6b4Dc7E1F6eda9B8D2ECa97dDF35e1E19A3E1ed2`](https://coston2-explorer.flare.network/address/0x6b4Dc7E1F6eda9B8D2ECa97dDF35e1E19A3E1ed2).
 
-- FDC request (`ReferencedPaymentNonexistence`, testXRP, round 1448919): `0x2fb195a324e9eb4cf518e6cb88a234ec037e03be274ea6ec7d17a5b20460d13e`
-- mandate #1 committed: `0x8e6bae06d25aa959a73080a7902ffc34aa1c0be7284e66168df8295f65393c92`; false receipt anchored: `0x43c8bd629abdb551cfaeee84906546fd21170f0b89b3ba1c4ae352f500f95ace`; bond 1 C2FLR: `0x0bc4f479decb87abdac5059c93f6527d2cfe2251030db69845db91140662181b`
-- **challenge with the real FDC proof → slashed, mandate revoked**: `0x91bb190933e9e0d5abbc8efc2816ba26d475c2fa3cfbfb2636ae656e3c5fdc91` (159,787 gas)
+- FDC request (`ReferencedPaymentNonexistence`, testXRP, round 1448919): [`0x2fb195a3…60d13e`](https://coston2-explorer.flare.network/tx/0x2fb195a324e9eb4cf518e6cb88a234ec037e03be274ea6ec7d17a5b20460d13e)
+- mandate #1 committed: [`0x8e6bae06…393c92`](https://coston2-explorer.flare.network/tx/0x8e6bae06d25aa959a73080a7902ffc34aa1c0be7284e66168df8295f65393c92); false receipt anchored: [`0x43c8bd62…f95ace`](https://coston2-explorer.flare.network/tx/0x43c8bd629abdb551cfaeee84906546fd21170f0b89b3ba1c4ae352f500f95ace); bond 1 C2FLR: [`0x0bc4f479…62181b`](https://coston2-explorer.flare.network/tx/0x0bc4f479decb87abdac5059c93f6527d2cfe2251030db69845db91140662181b)
+- **challenge with the real FDC proof → slashed, mandate revoked**: [`0x91bb1909…5fdc91`](https://coston2-explorer.flare.network/tx/0x91bb190933e9e0d5abbc8efc2816ba26d475c2fa3cfbfb2636ae656e3c5fdc91) (159,787 gas)
 
-Verified on Coston2 (chain 114): `FdcVerification` `0x906507E0B64bcD494Db73bd0459d1C667e14B933`, `Relay` `0xa10B672D1c62e5457b17af63d4302add6A99d7dE`, FDC protocol id `200`.
+Verified on Coston2 (chain 114): `FdcVerification` [`0x906507E0B64bcD494Db73bd0459d1C667e14B933`](https://coston2-explorer.flare.network/address/0x906507E0B64bcD494Db73bd0459d1C667e14B933), `Relay` [`0xa10B672D1c62e5457b17af63d4302add6A99d7dE`](https://coston2-explorer.flare.network/address/0xa10B672D1c62e5457b17af63d4302add6A99d7dE), FDC protocol id `200`.
 
 ## Release notes
 

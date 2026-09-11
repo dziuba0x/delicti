@@ -12,7 +12,9 @@ Until now every challenge started from an anchored leaf, so the bond punished on
 - SPEC v0.3: §6.4 promoted from roadmap to implemented; §11 puts **coverage rate** first, since corroboration and contradiction rates are conditional on a denominator the agent used to choose for itself.
 - 42 tests pass (was 31). Slither run over `src/` at medium+ severity: five findings, all false positives (Solidity zero-initialises locals; the `revokedAt == 0` sentinel is deliberate).
 
-**Not yet deployed.** The sandbox lost RPC access to Coston2 mid-session (gateway 403), so v0.6 is tested but unverified on-chain — deploy and live-run commands are in the handoff note.
+**Deployed on Coston2 (2026-09-11), live run pending.** `MandateRegistry` `0x401C07e28db3464ab2013C36Babf4701cD8dC6bd`, `AnchorLog` `0x2FbcF31FC3a66BbfbA30743aab932d7AE78FDf56`, `Bond` `0xc42A87F8E005B231819b16E46B119b90228b86A6` — a testnet deployment, so `responseWindow = 600 s` and `anchorGrace = 300 s` rather than the production 24 h / 1 h. `setBond` wired in the same script.
+
+The accusation loop itself is **not yet demonstrated on-chain**: at the time of writing the FDC data-availability layer kept answering `attestation request not found` for the deed's voting round, well past the usual 2–4 minutes, with Coston2 gas sitting at 1500–2000 gwei instead of the usual ~25. That is a network condition, not a contract result, and nothing is claimed until the run completes.
 
 ## v0.5.0 — 2026-09-09 — hardening
 

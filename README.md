@@ -58,6 +58,13 @@ A receipt proves *registration*. "A false claim can be immutably registered." DE
 | `Bond.challengeBudgetOverrun` + `scripts/structuring.sh` — five 1-FLR deeds under a 4-FLR budget, each corroborated by FDC `EVMTransaction`, sum convicts | **done, executed on Coston2** |
 | `scripts/mcp-structuring.sh` — the same salami, but every deed is a paid MCP call to a running flario server: witness 1 is emitted by the effector process, not hand-built | **done, executed on Coston2** |
 | `scripts/brake-test.sh` — the effector-side brake (SPEC §7) live: a live mandate pays; a missing, revoked or borrowed mandate is refused before any funds move | **done, executed on Coston2** |
+| `Bond.accuseUnanchoredDeed` / `answerAccusation` / `resolveAccusation` + `MandateRegistry.declareExclusive` — the deed nobody wrote down (SPEC §6.4) | tests pass (42); deployed on Coston2, **live run pending** |
+
+### Coston2 (2026-09-11) — v0.6 deployed, accusation loop not yet demonstrated
+
+`MandateRegistry` `0x401C07e28db3464ab2013C36Babf4701cD8dC6bd`, `AnchorLog` `0x2FbcF31FC3a66BbfbA30743aab932d7AE78FDf56`, `Bond` `0xc42A87F8E005B231819b16E46B119b90228b86A6`. Testnet timers: `responseWindow = 600 s`, `anchorGrace = 300 s` (production values are 24 h and 1 h — both are constructor immutables so the whole loop can be shown in one sitting).
+
+What is **not** claimed yet: no accusation has been resolved on-chain. `scripts/unanchored-deed.sh` reached the FDC step and the data-availability layer kept answering `attestation request not found` for the deed's voting round, far past the 2–4 minutes these rounds usually take, with Coston2 gas at 1500–2000 gwei instead of the usual ~25. The contracts are covered by 42 tests; the live demonstration is pending, and this section will say so until it is not.
 
 ### Live on Coston2 (2026-09-09) — v0.5 hardening
 

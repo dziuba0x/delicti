@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {MandateRegistry} from "../src/MandateRegistry.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
 import {Bond} from "../src/Bond.sol";
+import {SpendMeter} from "../src/SpendMeter.sol";
 import {Receipts} from "../src/Receipts.sol";
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
 import {IEVMTransaction} from "@flarenetwork/flare-periphery-contracts/coston2/IEVMTransaction.sol";
@@ -27,6 +28,7 @@ contract UnanchoredTest is Test {
     MandateRegistry reg;
     AnchorLog anchorLog;
     Bond bond;
+    SpendMeter meter;
     MockFdcEvm2 mock;
 
     address principal = makeAddr("principal");
@@ -49,7 +51,8 @@ contract UnanchoredTest is Test {
         reg = new MandateRegistry();
         anchorLog = new AnchorLog(reg);
         mock = new MockFdcEvm2();
-        bond = new Bond(reg, anchorLog, IFdcVerification(address(mock)), RESPONSE, 1 hours);
+        meter = new SpendMeter(reg);
+        bond = new Bond(reg, anchorLog, IFdcVerification(address(mock)), RESPONSE, 1 hours, meter);
         reg.setBond(address(bond));
         vm.warp(1_800_000_000);
 

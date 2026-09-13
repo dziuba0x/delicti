@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {MandateRegistry} from "../src/MandateRegistry.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
 import {Bond} from "../src/Bond.sol";
+import {SpendMeter} from "../src/SpendMeter.sol";
 import {Receipts} from "../src/Receipts.sol";
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
 import {IReferencedPaymentNonexistence} from
@@ -32,6 +33,7 @@ contract BondTest is Test {
     MandateRegistry reg;
     AnchorLog anchorLog;
     Bond bond;
+    SpendMeter meter;
     MockFdc mock;
 
     address principal = makeAddr("principal");
@@ -52,7 +54,8 @@ contract BondTest is Test {
         reg = new MandateRegistry();
         anchorLog = new AnchorLog(reg);
         mock = new MockFdc();
-        bond = new Bond(reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours);
+        meter = new SpendMeter(reg);
+        bond = new Bond(reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours, meter);
         reg.setBond(address(bond));
 
         vm.warp(1_800_000_000);

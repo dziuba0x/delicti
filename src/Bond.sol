@@ -8,6 +8,7 @@ import {IEVMTransaction} from "@flarenetwork/flare-periphery-contracts/coston2/I
 import {ContractRegistry} from "@flarenetwork/flare-periphery-contracts/coston2/ContractRegistry.sol";
 import {MandateRegistry} from "./MandateRegistry.sol";
 import {AnchorLog} from "./AnchorLog.sol";
+import {SpendMeter} from "./SpendMeter.sol";
 import {Receipts} from "./Receipts.sol";
 import {Merkle} from "./Merkle.sol";
 
@@ -25,6 +26,9 @@ import {Merkle} from "./Merkle.sol";
 contract Bond {
     MandateRegistry public immutable registry;
     AnchorLog public immutable log;
+    /// @notice The tally the effectors keep (SpendMeter). Optional: address(0) disables the
+    ///         under-reporting challenge without affecting anything else.
+    SpendMeter public immutable meter;
     IFdcVerification private immutable _fdcOverride; // 0 => resolve via ContractRegistry
 
     uint256 public constant CHALLENGER_BPS = 1000; // 10% of slashed bond to the challenger
@@ -88,6 +92,10 @@ contract Bond {
         uint256 indexed accusationId, uint256 indexed mandateId, bytes32 txHash, address indexed challenger, uint256 slashedAmount
     );
 
+    event UnderReportedSpendProven(
+        uint256 indexed mandateId, uint256 proven, uint256 recorded, uint256 deeds, address indexed challenger, uint256 slashedAmount
+    );
+
     event BudgetOverrunProven(
         uint256 indexed mandateId, uint256 spent, uint256 budget, uint256 deeds, address indexed challenger, uint256 slashedAmount
     );
@@ -120,19 +128,24 @@ contract Bond {
     error AnchoredInTime();
     error AnchoredTooLate();
     error WrongDeed();
+    error NoMeter();
+    error NotMetered();
+    error TallyAgrees();
 
     constructor(
         MandateRegistry _registry,
         AnchorLog _log,
         IFdcVerification fdcOverride,
         uint64 responseWindow_,
-        uint64 anchorGrace_
+        uint64 anchorGrace_,
+        SpendMeter meter_
     ) {
         registry = _registry;
         log = _log;
         _fdcOverride = fdcOverride;
         responseWindow = responseWindow_;
         anchorGrace = anchorGrace_;
+        meter = meter_;
     }
 
     /// @notice An open claim that a deed happened with no receipt behind it. Resolved either by
@@ -462,6 +475,82 @@ contract Bond {
         owed[a.challenger] += ACCUSATION_STAKE; // stake back
         emit UnanchoredDeedProven(accusationId, a.mandateId, a.txHash, a.challenger, amount);
         _slashTo(a.mandateId, amount, a.challenger);
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The tally that lied (SPEC §6.5).
+    //
+    // SpendMeter is the fast half: the effector records every settlement, and reads the tally
+    // before it acts, so structuring is refused in milliseconds instead of slashed in minutes.
+    // An effector can simply not write — and that is what this challenge is for. The meter is
+    // witness 1 over the *sequence*; the FDC proofs are witness 2 over the same sequence. When
+    // the world shows more than the tally admits, both witnesses are present and §5 holds.
+    //
+    // Scope, deliberately narrow: only a mandate that is BOTH metered (the principal named an
+    // effector) and exclusive (the agent promised this address acts under this mandate alone).
+    // Without exclusivity an outflow from the agent's address might be none of the mandate's
+    // business, and slashing on it would convict an honest agent — the same mistake as accepting
+    // a source-scoped nonexistence proof.
+    // -----------------------------------------------------------------------------------
+
+    /// @param asset address(0) to sum native transaction value; otherwise the ERC-20 whose
+    ///        `Transfer` events out of the agent are summed (the x402 case).
+    function challengeUnderReportedSpend(
+        uint256 mandateId,
+        address asset,
+        IEVMTransaction.Proof[] calldata fdcProofs
+    ) external {
+        if (slashed[mandateId]) revert AlreadySlashed();
+        uint256 amount = bondOf[mandateId];
+        if (amount == 0) revert NothingToSlash();
+        if (address(meter) == address(0)) revert NoMeter();
+        if (!meter.metered(mandateId)) revert NotMetered();
+        if (!registry.exclusive(mandateId)) revert NotExclusive();
+
+        uint256 n = fdcProofs.length;
+        if (n == 0) revert LengthMismatch();
+        MandateRegistry.Mandate memory m = registry.get(mandateId);
+
+        uint256 proven;
+        bytes32 lastTx;
+        for (uint256 i = 0; i < n; i++) {
+            IEVMTransaction.Proof calldata pr = fdcProofs[i];
+            if (!fdc().verifyEVMTransaction(pr)) revert FdcProofInvalid();
+            bytes32 txh = pr.data.requestBody.transactionHash;
+            if (txh <= lastTx) revert UnorderedTxs();
+            lastTx = txh;
+            IEVMTransaction.ResponseBody calldata rb = pr.data.responseBody;
+            if (rb.status != 1) revert TxNotSuccessful();
+            if (rb.timestamp < m.validFrom || rb.timestamp > m.validUntil) revert ClaimOutsideProvenRange();
+            if (asset == address(0)) {
+                if (rb.sourceAddress != m.agent) revert NotAgentTx();
+                proven += rb.value;
+            } else {
+                proven += _erc20OutflowFrom(rb.events, asset, m.agent);
+            }
+        }
+
+        uint256 recorded = meter.spent(mandateId);
+        if (proven <= recorded) revert TallyAgrees();
+
+        emit UnderReportedSpendProven(mandateId, proven, recorded, n, msg.sender, amount);
+        _slash(mandateId, amount);
+    }
+
+    /// @dev Every `Transfer` out of `from` emitted by `asset`, whoever the counterparty is.
+    ///      Sound only under an exclusivity declaration — see the note above.
+    function _erc20OutflowFrom(IEVMTransaction.Event[] calldata events, address asset, address from)
+        internal
+        pure
+        returns (uint256 total)
+    {
+        for (uint256 i = 0; i < events.length; i++) {
+            IEVMTransaction.Event calldata e = events[i];
+            if (e.removed || e.emitterAddress != asset || e.topics.length != 3) continue;
+            if (e.topics[0] != TRANSFER_SIG) continue;
+            if (address(uint160(uint256(e.topics[1]))) != from) continue;
+            total += abi.decode(e.data, (uint256));
+        }
     }
 
     bytes32 private constant TRANSFER_SIG = keccak256("Transfer(address,address,uint256)");

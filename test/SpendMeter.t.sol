@@ -1,0 +1,246 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
+
+import {Test} from "forge-std/Test.sol";
+import {MandateRegistry} from "../src/MandateRegistry.sol";
+import {AnchorLog} from "../src/AnchorLog.sol";
+import {Bond} from "../src/Bond.sol";
+import {SpendMeter} from "../src/SpendMeter.sol";
+import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
+import {IEVMTransaction} from "@flarenetwork/flare-periphery-contracts/coston2/IEVMTransaction.sol";
+
+contract MockFdcMeter {
+    bool public verdict = true;
+
+    function setVerdict(bool v) external {
+        verdict = v;
+    }
+
+    function verifyEVMTransaction(IEVMTransaction.Proof calldata) external view returns (bool) {
+        return verdict;
+    }
+}
+
+/// The fast half: structuring refused in milliseconds, and the effector that keeps a false
+/// tally convicted in minutes.
+contract SpendMeterTest is Test {
+    MandateRegistry reg;
+    AnchorLog anchorLog;
+    Bond bond;
+    SpendMeter meter;
+    MockFdcMeter mock;
+
+    address principal = makeAddr("principal");
+    address agent = makeAddr("agent");
+    address effector = makeAddr("effector");
+    address merchant = makeAddr("merchant");
+    address challenger = makeAddr("challenger");
+    address token = makeAddr("usdt0");
+
+    bytes32 constant SRC = bytes32("testFLR");
+    uint256 constant EACH = 1 ether;
+    uint256 constant BUDGET = 4 ether;
+
+    uint256 mandateId;
+
+    function setUp() public {
+        reg = new MandateRegistry();
+        anchorLog = new AnchorLog(reg);
+        mock = new MockFdcMeter();
+        meter = new SpendMeter(reg);
+        bond = new Bond(reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours, meter);
+        reg.setBond(address(bond));
+        vm.warp(1_800_000_000);
+
+        vm.prank(principal);
+        mandateId = reg.commit(
+            agent, keccak256("may spend up to 4 at merchant, metered"), 0, 0, BUDGET,
+            uint64(block.timestamp), uint64(block.timestamp + 7 days)
+        );
+        vm.prank(agent);
+        reg.declareExclusive(mandateId);
+        vm.prank(principal);
+        meter.declareEffector(mandateId, effector);
+
+        vm.deal(principal, 100 ether);
+        vm.prank(principal);
+        bond.post{value: 10 ether}(mandateId);
+    }
+
+    function _proof(uint256 i, uint256 amount, bool erc20) internal view returns (IEVMTransaction.Proof memory p) {
+        p.data.attestationType = bytes32("EVMTransaction");
+        p.data.sourceId = SRC;
+        p.data.requestBody.transactionHash = bytes32(uint256(0x1000 + i)); // strictly increasing
+        p.data.responseBody.blockNumber = uint64(100 + i);
+        p.data.responseBody.timestamp = uint64(block.timestamp + i);
+        p.data.responseBody.sourceAddress = agent;
+        p.data.responseBody.status = 1;
+        if (erc20) {
+            p.data.responseBody.receivingAddress = token;
+            p.data.responseBody.value = 0;
+            bytes32[] memory topics = new bytes32[](3);
+            topics[0] = keccak256("Transfer(address,address,uint256)");
+            topics[1] = bytes32(uint256(uint160(agent)));
+            topics[2] = bytes32(uint256(uint160(merchant)));
+            p.data.responseBody.events = new IEVMTransaction.Event[](1);
+            p.data.responseBody.events[0] = IEVMTransaction.Event({
+                logIndex: uint32(i), emitterAddress: token, topics: topics, data: abi.encode(amount), removed: false
+            });
+        } else {
+            p.data.responseBody.receivingAddress = merchant;
+            p.data.responseBody.value = amount;
+        }
+    }
+
+    function _bundle(uint256 k, bool erc20) internal view returns (IEVMTransaction.Proof[] memory ps) {
+        ps = new IEVMTransaction.Proof[](k);
+        for (uint256 i = 0; i < k; i++) ps[i] = _proof(i, EACH, erc20);
+    }
+
+    // --- the brake: structuring refused before it completes ---
+
+    /// Four slices fit. The fifth is refused by an eth_call, not slashed four minutes later.
+    function test_meterRefusesTheFifthSlice() public {
+        for (uint256 i = 0; i < 4; i++) {
+            assertFalse(meter.wouldExceed(mandateId, EACH), "slice should still fit");
+            vm.prank(effector);
+            meter.note(mandateId, EACH);
+        }
+        assertEq(meter.spent(mandateId), BUDGET);
+        assertEq(meter.headroom(mandateId), 0);
+        assertTrue(meter.wouldExceed(mandateId, 1), "the fifth slice must be refused");
+        assertFalse(meter.exceeded(mandateId), "at budget is not over budget");
+    }
+
+    /// The meter records the truth even past the budget: refusing to record an overrun is
+    /// the same as lying about it, and the next caller has to be able to see it.
+    function test_meterRecordsPastTheBudget() public {
+        vm.startPrank(effector);
+        meter.note(mandateId, BUDGET);
+        meter.note(mandateId, EACH);
+        vm.stopPrank();
+        assertEq(meter.spent(mandateId), BUDGET + EACH);
+        assertTrue(meter.exceeded(mandateId));
+        assertEq(meter.headroom(mandateId), 0);
+    }
+
+    function test_revert_onlyPrincipalDeclaresEffector() public {
+        vm.prank(agent);
+        vm.expectRevert(SpendMeter.NotPrincipal.selector);
+        meter.declareEffector(mandateId, makeAddr("other"));
+    }
+
+    function test_revert_onlyDeclaredEffectorMayNote() public {
+        vm.prank(agent);
+        vm.expectRevert(SpendMeter.NotEffector.selector);
+        meter.note(mandateId, EACH);
+    }
+
+    /// A dead mandate cannot accrue spend — the same rule AnchorLog applies to receipts.
+    function test_revert_noteUnderDeadMandate() public {
+        vm.prank(principal);
+        reg.revoke(mandateId);
+        vm.prank(effector);
+        vm.expectRevert(SpendMeter.MandateNotLive.selector);
+        meter.note(mandateId, EACH);
+    }
+
+    // --- the slow half: the tally that lied ---
+
+    /// The effector recorded two slices and stayed silent about three. The FDC shows five.
+    function test_underReportedSpend_slashes_erc20() public {
+        vm.startPrank(effector);
+        meter.note(mandateId, EACH);
+        meter.note(mandateId, EACH);
+        vm.stopPrank();
+
+        vm.prank(challenger);
+        bond.challengeUnderReportedSpend(mandateId, token, _bundle(5, true));
+
+        assertTrue(bond.slashed(mandateId));
+        assertFalse(reg.isLive(mandateId));
+        assertEq(bond.owed(challenger), 1 ether);
+        assertEq(bond.owed(principal), 9 ether);
+    }
+
+    function test_underReportedSpend_slashes_native() public {
+        vm.prank(effector);
+        meter.note(mandateId, EACH);
+        vm.prank(challenger);
+        bond.challengeUnderReportedSpend(mandateId, address(0), _bundle(3, false));
+        assertTrue(bond.slashed(mandateId));
+    }
+
+    /// An honest effector is not a target: the tally matches what the world shows.
+    function test_revert_whenTallyAgrees() public {
+        vm.startPrank(effector);
+        for (uint256 i = 0; i < 5; i++) meter.note(mandateId, EACH);
+        vm.stopPrank();
+        vm.prank(challenger);
+        vm.expectRevert(Bond.TallyAgrees.selector);
+        bond.challengeUnderReportedSpend(mandateId, token, _bundle(5, true));
+    }
+
+    /// A mandate nobody meters never promised a tally, so it cannot have broken one.
+    function test_revert_whenMandateNotMetered() public {
+        vm.prank(principal);
+        uint256 other = reg.commit(
+            agent, keccak256("unmetered"), 0, 0, BUDGET, uint64(block.timestamp), uint64(block.timestamp + 1 days)
+        );
+        vm.prank(agent);
+        reg.declareExclusive(other);
+        vm.prank(principal);
+        bond.post{value: 1 ether}(other);
+        vm.prank(challenger);
+        vm.expectRevert(Bond.NotMetered.selector);
+        bond.challengeUnderReportedSpend(other, token, _bundle(5, true));
+    }
+
+    /// Without exclusivity an outflow from the agent may be none of this mandate's business.
+    /// Summing it would convict an honest agent, so the challenge refuses to run at all.
+    function test_revert_withoutExclusivity() public {
+        vm.prank(principal);
+        uint256 other = reg.commit(
+            agent, keccak256("metered but not exclusive"), 0, 0, BUDGET,
+            uint64(block.timestamp), uint64(block.timestamp + 1 days)
+        );
+        vm.prank(principal);
+        meter.declareEffector(other, effector);
+        vm.prank(principal);
+        bond.post{value: 1 ether}(other);
+        vm.prank(challenger);
+        vm.expectRevert(Bond.NotExclusive.selector);
+        bond.challengeUnderReportedSpend(other, token, _bundle(5, true));
+    }
+
+    function test_revert_duplicateDeedInBundle() public {
+        IEVMTransaction.Proof[] memory ps = _bundle(3, true);
+        ps[2] = ps[1];
+        vm.prank(challenger);
+        vm.expectRevert(Bond.UnorderedTxs.selector);
+        bond.challengeUnderReportedSpend(mandateId, token, ps);
+    }
+
+    function test_revert_deedOutsideMandateWindow() public {
+        IEVMTransaction.Proof[] memory ps = _bundle(3, true);
+        ps[1].data.responseBody.timestamp = uint64(block.timestamp - 1);
+        vm.prank(challenger);
+        vm.expectRevert(Bond.ClaimOutsideProvenRange.selector);
+        bond.challengeUnderReportedSpend(mandateId, token, ps);
+    }
+
+    function test_revert_nativeDeedByAnotherAddress() public {
+        IEVMTransaction.Proof[] memory ps = _bundle(2, false);
+        ps[0].data.responseBody.sourceAddress = makeAddr("someone else");
+        vm.prank(challenger);
+        vm.expectRevert(Bond.NotAgentTx.selector);
+        bond.challengeUnderReportedSpend(mandateId, address(0), ps);
+    }
+
+    function test_revert_whenFdcRejectsTheProof() public {
+        mock.setVerdict(false);
+        vm.prank(challenger);
+        vm.expectRevert(Bond.FdcProofInvalid.selector);
+        bond.challengeUnderReportedSpend(mandateId, token, _bundle(3, true));
+    }
+}

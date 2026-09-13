@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (v0.7.0-dev) — the fast half
+
+Everything in DELICTI so far was evidence after the fact. An FDC attestation takes ~90 s per voting round and minutes end to end, so a structuring attack **succeeded** and was only punished later; the §7 brake could not see it, because it judges one call at a time and every slice is inside its own limit. The gap was never patience — it was arithmetic. Only a cumulative total can refuse the next slice.
+
+- **`SpendMeter.sol`** — the running tally an effector keeps against a mandate's budget. `wouldExceed()` / `headroom()` are `eth_call`s read before the deed, so the payment path gains no attestation latency; `note()` is one `SSTORE` after it. The principal declares which effectors may write (`declareEffector`), and a dead mandate cannot accrue spend. The meter deliberately **records past the budget** — refusing to record an overrun is a way of lying about it — and deliberately **never slashes on its own**: it is one witness (§5).
+- **`Bond.challengeUnderReportedSpend`** — an effector can defeat the meter by not writing, and this is what makes that expensive. FDC proofs summing to more than the tally admits convict, with no anchored leaves required: the meter is witness 1 over the *sequence*, the proofs are witness 2 over the same sequence. Runs only on mandates that are both metered and exclusive (§6.4), because without exclusivity an outflow from the agent may be none of this mandate's business.
+- `scripts/spend-meter.sh` — `MODE=brake` (four slices fit, the fifth is refused by one `eth_call`, no FDC involved) and `MODE=underreport` (two of five settlements recorded, FDC proves five, slash).
+- SPEC v0.4: §7.1 (the meter), §6.5 (under-reported spend), and §10 updated to say plainly that real-time prevention now exists but only where an effector keeps the tally.
+- 56 tests (was 42). Slither at medium+: three findings, all false positives.
+
 ## Unreleased (v0.6.0-dev) — the deed nobody wrote down
 
 Until now every challenge started from an anchored leaf, so the bond punished only agents that had already confessed: **not anchoring was free**, and the dominant strategy was to anchor the easy deeds and stay quiet about the rest. SPEC §6.4 called that roadmap; it was load-bearing.

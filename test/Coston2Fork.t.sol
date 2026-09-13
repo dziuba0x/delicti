@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {MandateRegistry} from "../src/MandateRegistry.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
 import {Bond} from "../src/Bond.sol";
+import {SpendMeter} from "../src/SpendMeter.sol";
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
 
 /// @dev Runs only with `forge test --fork-url coston2`. Proves the live wiring:
@@ -14,7 +15,7 @@ contract Coston2ForkTest is Test {
         if (block.chainid != 114) return; // Coston2 only
         MandateRegistry reg = new MandateRegistry();
         AnchorLog anchorLog = new AnchorLog(reg);
-        Bond bond = new Bond(reg, anchorLog, IFdcVerification(address(0)), 24 hours, 1 hours);
+        Bond bond = new Bond(reg, anchorLog, IFdcVerification(address(0)), 24 hours, 1 hours, new SpendMeter(reg));
         IFdcVerification fdc = bond.fdc();
         assertTrue(address(fdc) != address(0), "FdcVerification resolved");
         assertTrue(address(fdc).code.length > 0, "has code");

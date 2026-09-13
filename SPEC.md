@@ -1,4 +1,4 @@
-# DELICTI Specification — v0.3 (draft)
+# DELICTI Specification — v0.4 (draft)
 
 *Corpus delicti for autonomous agents: prove the deed happened before anyone is judged.*
 
@@ -23,6 +23,7 @@ Every existing standard for agent accountability signs a *claim*: the operator's
 **Episode** — a batch of leaves anchored under one mandate as one Merkle root.
 **Challenge** — a permissionless on-chain proof that a mandate was breached (§6).
 **Bond** — value staked under a mandate, slashed on a successful challenge.
+**Meter** — the cumulative tally a declared effector keeps on-chain against a mandate's budget. Read before a deed, written after it. The only part of DELICTI that acts in real time on the *sequence*.
 
 ## 2. Trust model
 
@@ -114,7 +115,17 @@ An FDC-proven transaction from the mandate's agent, inside the mandate's window,
 
 `anchorGrace` (1 h) and `responseWindow` (24 h) are constructor immutables, so a testnet deployment can demonstrate the whole loop without waiting out production timers. Unlike the cooling window, `responseWindow` is not waiting on the FDC: the answer is data the agent already holds.
 
-### 6.5 Roadmap challenges (specified, not implemented)
+### 6.5 Under-reported spend (`challengeUnderReportedSpend`)
+
+The meter (§7.1) is what makes structuring refusable while it is still happening, and an effector can defeat it simply by not writing. This is the challenge that makes silence expensive.
+
+N FDC `EVMTransaction` proofs of deeds by the mandate's agent, inside the mandate's window, summing to more than the meter recorded. No anchored leaves are required: the meter is **witness 1 over the sequence** and the proofs are **witness 2 over the same sequence**, so §5 is not weakened — this is a class-A contradiction about a tally rather than about one deed. `asset = address(0)` sums native transaction value; otherwise it sums `Transfer` events out of the agent emitted by that asset (the x402 case).
+
+**Scope is deliberately narrow.** The challenge runs only on a mandate that is both *metered* (§7.1) and *exclusive* (§6.4). Without exclusivity an outflow from the agent's address may be none of this mandate's business, and summing it would convict an honest agent — the same error as accepting a source-scoped nonexistence proof.
+
+**Who is at fault, and who pays.** The effector keeps the tally, but the bond sits on the mandate and the remainder goes to the principal. That is the intended incentive: the principal chose the effector. Picking one that lies, or one that is not DELICTI-aware at all, is a decision with a price.
+
+### 6.6 Roadmap challenges (specified, not implemented)
 - **Wrong counterparty.** Proven effect to an address outside the envelope's disclosed allow-list (needs selective disclosure of that list — Merkle leaf per counterparty).
 - **Class-B escalation.** Web2 effects via FDC `Web2Json` for allow-listed sources.
 - **Under-reporting.** A second witness over the *tally* rather than over a single deed: an effector anchoring its own count of deeds performed for a mandate, so a divergence from the agent's `receiptCount` is itself challengeable.
@@ -122,6 +133,20 @@ An FDC-proven transaction from the mandate's agent, inside the mandate's window,
 ## 7. The effector-side brake (optional, recommended)
 
 FDC finality is minutes; DELICTI is evidence after the fact. But the effector is the final common pathway and can read the chain in milliseconds. A DELICTI-aware effector therefore MAY, before producing the effect, check `MandateRegistry.isLive(mandateId)` and that the requesting agent *is* the mandated agent, and refuse otherwise. A deed with no mandate may be refused outright. flario implements this (`DELICTI_REGISTRY`, `DELICTI_REQUIRE_MANDATE`). The brake cannot see structuring — that remains the challenge's job — but it prevents the two cheapest failure modes: acting under a dead mandate and borrowing someone else's.
+
+### 7.1 The meter — refusing structuring in real time
+
+The brake above sees one call at a time, and every slice of a structuring attack is inside its own limit. It therefore cannot see the attack that §6.2 exists to punish. The gap is not patience, it is arithmetic: only a cumulative total can refuse the next slice.
+
+`SpendMeter` closes it. The principal declares which effectors may keep the tally; each effector reads `wouldExceed(mandateId, amount)` before acting — an `eth_call`, so the payment path gains no attestation latency — and calls `note(mandateId, amount)` after the funds move. The fifth slice of a salami is refused in milliseconds instead of being slashed minutes later.
+
+Three properties are deliberate:
+
+- **The meter records past the budget.** A meter that refuses to record an overrun is a meter that lies about one. The overrun must stay publicly readable — that is what makes `exceeded()` meaningful to the next counterparty.
+- **The meter alone never slashes.** It is one witness. Consequence still requires the divergence in §6.5, which carries both.
+- **Not writing is not a loophole, it is the division of labour.** The fast path protects against a constrained agent; the slow path convicts the effector that lied about what it did. An effector that skips the meter is choosing to be judged by the FDC instead.
+
+The read is free and instant; the write is one `SSTORE`. Against an FDC round of ~90 seconds, this is the difference between prevention and compensation.
 
 ## 8. Bond economics (v0.1, deliberately simple)
 
@@ -138,7 +163,7 @@ Nothing sensitive is on-chain: mandate envelopes and receipts live off-chain; th
 
 - It does not prove intent, alignment, or reasoning. It proves deeds — and the absence of claimed deeds.
 - It does not replace receipts; it consumes them.
-- It does not stop a deed in real time by itself; the brake in §7 does, and only for liveness and identity.
+- It does not stop a deed in real time by itself. The brake in §7 does, for liveness and identity, and the meter in §7.1 does for the cumulative budget — but only where an effector chooses to keep the tally.
 - It does not see effects the FDC cannot index (class B). It says so, per deed.
 - It does not know that an envelope was *complete* — only that the deed exceeded the envelope that was committed.
 - It does not yet protect the challenger's 10 % from being front-run. Proofs travel in public calldata and the FDC request precedes the challenge by minutes, so a copier can win the reward without paying the monitoring cost. Commit–reveal — with the commitment made *before* the attestation request — is specified as the fix and is not implemented.

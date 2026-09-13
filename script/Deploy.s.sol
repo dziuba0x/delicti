@@ -5,6 +5,7 @@ import {Script, console} from "forge-std/Script.sol";
 import {MandateRegistry} from "../src/MandateRegistry.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
 import {Bond} from "../src/Bond.sol";
+import {SpendMeter} from "../src/SpendMeter.sol";
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
 
 /// Usage (Coston2):
@@ -17,12 +18,14 @@ contract Deploy is Script {
         // 24 h in production; RESPONSE_WINDOW lets a testnet deployment show the full loop in one sitting.
         uint64 responseWindow = uint64(vm.envOr("RESPONSE_WINDOW", uint256(24 hours)));
         uint64 anchorGrace = uint64(vm.envOr("ANCHOR_GRACE", uint256(1 hours)));
-        Bond bond = new Bond(reg, anchorLog, IFdcVerification(address(0)), responseWindow, anchorGrace); // FDC via ContractRegistry
+        SpendMeter meter = new SpendMeter(reg);
+        Bond bond = new Bond(reg, anchorLog, IFdcVerification(address(0)), responseWindow, anchorGrace, meter); // FDC via ContractRegistry
         // Only this Bond may revoke on a proven violation. Set once, by the deployer.
         reg.setBond(address(bond));
         vm.stopBroadcast();
         console.log("MandateRegistry:", address(reg));
         console.log("AnchorLog:      ", address(anchorLog));
+        console.log("SpendMeter:     ", address(meter));
         console.log("Bond:           ", address(bond));
         console.log("FdcVerification:", address(bond.fdc()));
         console.log("registry.bond:  ", reg.bond());

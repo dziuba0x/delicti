@@ -11,7 +11,8 @@ DELICTI is a corroboration-and-consequence layer for the actions of autonomous A
 1. **Mandate before act** — a principal commits, on-chain, what the agent may do (budget, window, delegation chain) *before* the episode. Children can only narrow parents.
 2. **Two witnesses to the same overt act** — the effector's receipt is witness one; Flare's Data Connector (FDC) attesting the effect in the world is witness two. Agreement is evidence. Disagreement is a *contradicted deed*.
 3. **Delta over the sequence** — violations are computed against the cumulative budget of the mandate, not per action, so structuring ("salami") is caught.
-4. **Consequence without a court** — a bond is slashed on proof, pattern lifted from FAssets' challenger role. Challenger gets 10%, the harmed party gets the rest.
+4. **A brake that can see the sequence** — the effector reads the mandate's cumulative tally before it acts, so the fifth slice of a salami is refused in milliseconds rather than slashed minutes later. An effector that skips the tally is choosing to be judged by the FDC instead.
+5. **Consequence without a court** — a bond is slashed on proof, pattern lifted from FAssets' challenger role. Challenger gets 10%, the harmed party gets the rest.
 
 > When a mind becomes alien, its words stop being evidence. Its deeds, confirmed independently, remain. — the thesis, after J. Pachocki's *An Alien Mind*.
 
@@ -73,7 +74,8 @@ A receipt proves *registration*. "A false claim can be immutably registered." DE
 | `Bond.challengeBudgetOverrun` + `scripts/structuring.sh` — five 1-FLR deeds under a 4-FLR budget, each corroborated by FDC `EVMTransaction`, sum convicts | **done, executed on Coston2** |
 | `scripts/mcp-structuring.sh` — the same salami, but every deed is a paid MCP call to a running flario server: witness 1 is emitted by the effector process, not hand-built | **done, executed on Coston2** |
 | `scripts/brake-test.sh` — the effector-side brake (SPEC §7) live: a live mandate pays; a missing, revoked or borrowed mandate is refused before any funds move | **done, executed on Coston2** |
-| `Bond.accuseUnanchoredDeed` / `answerAccusation` / `resolveAccusation` + `MandateRegistry.declareExclusive` — the deed nobody wrote down (SPEC §6.4) | tests pass (42); deployed on Coston2, **live run pending** |
+| `Bond.accuseUnanchoredDeed` / `answerAccusation` / `resolveAccusation` + `MandateRegistry.declareExclusive` — the deed nobody wrote down (SPEC §6.4) | tests pass; deployed on Coston2, **live run pending** |
+| `SpendMeter.sol` + `Bond.challengeUnderReportedSpend` — the running tally that refuses structuring in real time (SPEC §7.1), and convicts the effector whose tally lied (§6.5) | tests pass (56); **not yet deployed** |
 
 ### Coston2 (2026-09-11) — v0.6 deployed, accusation loop not yet demonstrated
 

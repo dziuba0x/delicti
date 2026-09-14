@@ -46,8 +46,10 @@ Nothing below is a claim about what the contracts would do. Each line is a trans
 | The effector recorded two settlements out of five; the FDC proved five, and the tally was convicted of the difference | [`0x53664b9f…0b20ff`](https://coston2-explorer.flare.network/tx/0x53664b9f186353821ae8be87e75279d0de6619fd3326f3751974a616fb0b20ff) |
 | A deed with no receipt behind it: nobody answered, the window closed, the bond went | [`0x432ca347…72490b`](https://coston2-explorer.flare.network/tx/0x432ca347481f7a279e377b648c5ad2b776f871b38ed0068b515383d63e72490b) |
 | The same accusation, answered in time with the anchored receipt — dismissed, and the accuser's stake forfeited | [`0x1bbcaf3f…6ae48b`](https://coston2-explorer.flare.network/tx/0x1bbcaf3f0a371facd17b8922d522e59917120f0055a2cca6954c3d38ba6ae48b) |
+| **A copier that lifted a finished challenge out of the mempool — refused, on-chain, because it had not committed in time** | [`0xab529327…4da115`](https://coston2-explorer.flare.network/tx/0xab52932730be8db7a8da1ec37396e5124f2033ec0e92f0baf98388c5464da115) *(reverted, `CommittedTooLate`)* |
+| …and the same calldata, revealed two blocks later by the address that committed first | [`0xdbf70a53…9a7628`](https://coston2-explorer.flare.network/tx/0xdbf70a53b738e793b558b9f09a412f1727ec3c49a8899cd6f6700ab7fa9a7628) |
 
-Every challenge type DELICTI defines has now been executed on Coston2, in both directions where it has two: an accusation that stands and one that is answered.
+Every challenge type DELICTI defines has now been executed on Coston2, in both directions where it has two: an accusation that stands and one that is answered, a challenge that lands and a copy of it that is refused.
 
 ## Why signed receipts are not enough
 
@@ -80,15 +82,27 @@ A receipt proves *registration*. "A false claim can be immutably registered." DE
 | `scripts/brake-test.sh` — the effector-side brake (SPEC §7) live: a live mandate pays; a missing, revoked or borrowed mandate is refused before any funds move | **done, executed on Coston2** |
 | `Bond.accuseUnanchoredDeed` / `answerAccusation` / `resolveAccusation` + `MandateRegistry.declareExclusive` — the deed nobody wrote down (SPEC §6.4) | **done, executed on Coston2** (both outcomes) |
 | `SpendMeter.sol` + `Bond.challengeUnderReportedSpend` — the running tally that refuses structuring in real time (SPEC §7.1), and convicts the effector whose tally lied (§6.5) | **done, executed on Coston2** |
-| `Bond.commitChallenge` — commit–reveal on all five challenges and on the accusation, so the 10 % belongs to whoever detected the violation rather than to whoever copied the calldata (SPEC §6.7) | tests pass (81); **not yet executed on Coston2** |
+| `Bond.commitChallenge` — commit–reveal on all five challenges and on the accusation, so the 10 % belongs to whoever detected the violation rather than to whoever copied the calldata (SPEC §6.7) | **done, executed on Coston2** (both directions) |
 
-### v0.8 — commit–reveal (2026-09-14): written and tested, not yet on-chain
+### Live on Coston2 (2026-09-14) — v0.8, and the copy was refused
 
-Every challenge must now be committed — a bare hash, leaking nothing — **before** the FDC voting round that produces its evidence begins, and the commitment expires an hour later. The reason is that a challenge cannot be assembled in secret: `FdcHub.requestAttestation` is an on-chain call carrying the deed's transaction hash in the clear, minutes before the reveal. Without this, a parasite watching `FdcHub` copies the finished calldata out of the mempool, outbids the gas, and collects the reward having paid for no monitoring at all — so the equilibrium number of real watchers is zero, and a consequence layer nobody watches is theatre. SPEC §6.7 has the rule and the reasoning for each of its clauses.
+Deployment: `MandateRegistry` [`0xC6c27d29Ff33Bb6760e5033f52666fD1acc21c3f`](https://coston2-explorer.flare.network/address/0xC6c27d29Ff33Bb6760e5033f52666fD1acc21c3f), `AnchorLog` [`0x1A1A7E88C65643F5B91F6C86F1a0b6D2A459EDc0`](https://coston2-explorer.flare.network/address/0x1A1A7E88C65643F5B91F6C86F1a0b6D2A459EDc0), `SpendMeter` [`0x91384a94f6FFd0383BEFB27f3097dc51A4C4A005`](https://coston2-explorer.flare.network/address/0x91384a94f6FFd0383BEFB27f3097dc51A4C4A005), `Bond` [`0x3bb15155E55d8200Cc275204631d6B9033a5f38C`](https://coston2-explorer.flare.network/address/0x3bb15155E55d8200Cc275204631d6B9033a5f38C). Testnet timers: `commitLead` 120 s (production 10 min), `responseWindow` 600 s, `anchorGrace` 300 s. `COMMIT_TTL` is 3600 s and is a constant, not a deployment choice. The voting-round clock resolves to Flare's live `ProtocolsV2` at [`0xA90Db6D10F856799b10ef2A77EBCbF460aC71e52`](https://coston2-explorer.flare.network/address/0xA90Db6D10F856799b10ef2A77EBCbF460aC71e52) — `Bond.protocols()` returns it, so the rule below is enforced against Flare's own clock and not against anything this repo wrote down.
 
-What is **not** claimed: none of this has been executed on Coston2. The unit tests cover the mechanism in both directions — including the copied-calldata regression on the flagship structuring path, the later-round variant that the obvious rule misses, and the stale pre-committed squat — and the voting-round clock is verified against live Coston2 on a fork. But no commitment, no refusal and no reveal exists on-chain yet, and this section will say so until it does. `scripts/structuring.sh` with `SNIPE=1` is what will produce the evidence: it leaves the copier's refusal on-chain as a reverted transaction next to the honest reveal.
+Five 1-C2FLR deeds under a 4-C2FLR mandate, the salami of §6.2, run twice: once by the address that found it, once by a copier.
 
-Two things the audit turned up and this release does **not** fix, both now in SPEC §10 rather than glossed over: a squatter willing to pay rent on every candidate deed set forever can still hold a live commitment (the defence is economic, not cryptographic), and the agent — which has the earliest knowledge of its own violation by construction — can self-slash ahead of a real watcher.
+**The honest challenger.** Committed at `t = 1789422302` — a bare hash, naming nothing. The FDC voting round that produced the evidence, 1455472, began at `t = 1789422480`: 178 seconds later, against a required lead of 120. Reveal: [`0xdbf70a53…9a7628`](https://coston2-explorer.flare.network/tx/0xdbf70a53b738e793b558b9f09a412f1727ec3c49a8899cd6f6700ab7fa9a7628) (358,026 gas) → `bondOf = 0`, `slashed = true`, mandate revoked, 10 % plus the remainder credited for pull.
+
+**The copier.** Same five proofs, same calldata, a commitment made at `t = 1789422665` — 185 seconds *after* that round had already opened, which is the earliest anyone watching `FdcHub` could have known the case existed. Submitted with a forced gas limit so the refusal would be recorded rather than disappear into a local revert: [`0xab529327…4da115`](https://coston2-explorer.flare.network/tx/0xab52932730be8db7a8da1ec37396e5124f2033ec0e92f0baf98388c5464da115) → **status 0**, revert data `0xc9e9ac51` = `CommittedTooLate()`.
+
+Three details worth more than the headline:
+
+- **The copier burned 271,152 gas before the gate bit.** The commitment is checked after the FDC proofs are verified, because `votingRound` is only trustworthy once the proof has been checked against the Relay root. So a copy is not free to attempt — it pays for the verification and then loses.
+- **Its commitment is still sitting there**, unspent, at [`committedAt`](https://coston2-explorer.flare.network/address/0x3bb15155E55d8200Cc275204631d6B9033a5f38C) `0xa67f9966…6e2d05`. The honest one is gone: consumed on reveal, single-use, as designed.
+- The whole sequence — five deeds, commit, wait out the lead, five attestation requests, five proofs, one refusal, one slash — ran unattended in about ten minutes. Script: `scripts/structuring.sh` with `SNIPE=1` (the default).
+
+For scale, the last native structuring challenge on-chain cost 291,855 gas on the v0.4 deployment; this one cost 358,026. That span covers v0.5's hardening and v0.6/v0.7 as well as commit–reveal, so it is not a clean measurement of this feature — but the order of magnitude is the answer to "what does this cost": one extra ~31k-gas transaction, and a reveal that is tens of thousands of gas heavier.
+
+Two things this does **not** fix, stated in SPEC §10 rather than glossed over: a squatter willing to pay rent on every candidate deed set forever can still hold a live commitment, and the agent — which by construction knows of its own violation first — can self-slash ahead of a real watcher.
 
 ### Live on Coston2 (2026-09-14) — v0.7, and the loop closed in both directions
 

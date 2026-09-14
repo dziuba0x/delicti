@@ -3,6 +3,9 @@
 #
 #   witness 1: the agent anchors a receipt claiming "I paid 1 XRP to <dest> with reference R".
 #   witness 2: FDC ReferencedPaymentNonexistence on testXRP proves no such payment exists.
+#   v0.8: the challenge is committed before the attestation is requested (SPEC §6.7), which is why
+#         the mandate and the receipt now come BEFORE the FDC request — the commitment names the
+#         leaf hash, and the leaf cannot exist until the mandate does.
 #   consequence: Bond.challengeFalsePayment slashes the bond (10% challenger, 90% principal — both pull with claim())
 #                and revokes the mandate.
 #
@@ -10,6 +13,7 @@
 #           VERIFIER_URL, VERIFIER_API_KEY, DA_URL. Deployed addresses via env or defaults below.
 set -euo pipefail
 cd "$(dirname "$0")/.."; set -a; . ./.env; set +a
+. scripts/lib/commit.sh
 RPC=$COSTON2_RPC
 REG=${REG:-0x52A61f0B9312042c514B0aC5C053747B0EdF0C17}
 LOG=${LOG:-0x10F4e4bc90d483B9E1D6c90EE6d6275FF825D2ae}
@@ -30,25 +34,7 @@ DEST=$(cast keccak "$DESTADDR"); REF=$(cast keccak "DELICTI-invoice-$RANDOM"); A
 SRC=$(pad testXRP); ATYPE=$(pad ReferencedPaymentNonexistence)
 echo "   ledger=$LATEST dest=$DESTADDR"
 
-echo "== 2. FDC verifier: prepare nonexistence request"
-BODY=$(printf '{"attestationType":"%s","sourceId":"%s","requestBody":{"minimalBlockNumber":"%s","deadlineBlockNumber":"%s","deadlineTimestamp":"%s","destinationAddressHash":"%s","amount":"%s","standardPaymentReference":"%s","checkSourceAddresses":false,"sourceAddressesRoot":"0x%064d"}}' \
-  "$ATYPE" "$SRC" "$MINB" "$DEADB" "$DEADT" "$DEST" "$AMT" "$REF" 0)
-PREP=$(curl -s -m 60 -X POST "$VERIFIER_URL/verifier/xrp/ReferencedPaymentNonexistence/prepareRequest" -H "X-API-KEY: $VERIFIER_API_KEY" -H "Content-Type: application/json" -d "$BODY")
-echo "   status: $(echo "$PREP" | python3 -c "import sys,json;print(json.load(sys.stdin)['status'])")"
-REQ=$(echo "$PREP" | python3 -c "import sys,json;print(json.load(sys.stdin)['abiEncodedRequest'])")
-
-echo "== 3. FdcHub: pay fee, submit"
-FEECFG=$(cast call $FLARE_REG "getContractAddressByName(string)(address)" FdcRequestFeeConfigurations --rpc-url $RPC)
-HUB=$(cast call $FLARE_REG "getContractAddressByName(string)(address)" FdcHub --rpc-url $RPC)
-FSM=$(cast call $FLARE_REG "getContractAddressByName(string)(address)" FlareSystemsManager --rpc-url $RPC)
-FEE=$(cast call $FEECFG "getRequestFee(bytes)(uint256)" $REQ --rpc-url $RPC | awk '{print $1}')
-T0=$(cast call $FSM "firstVotingRoundStartTs()(uint64)" --rpc-url $RPC | awk '{print $1}'); DUR=$(cast call $FSM "votingEpochDurationSeconds()(uint64)" --rpc-url $RPC | awk '{print $1}')
-TX=$(cast send $HUB "requestAttestation(bytes)" $REQ --value $FEE --private-key $PRIVATE_KEY --rpc-url $RPC --json)
-BN=$(echo "$TX" | python3 -c "import sys,json;print(int(json.load(sys.stdin)['blockNumber'],16))")
-TS=$(cast block $BN --rpc-url $RPC --json | python3 -c "import sys,json;print(int(json.load(sys.stdin)['timestamp'],16))")
-ROUND=$(( (TS - T0) / DUR )); echo "   round=$ROUND fee=$FEE wei"
-
-echo "== 4. Meanwhile: mandate → anchored false receipt → bond"
+echo "== 2. mandate → anchored false receipt → bond"
 NOW=$(date +%s); MH=$(cast keccak "DELICTI mandate: may pay up to 5 XRP to $DESTADDR")
 cast send $REG "commit(address,bytes32,bytes32,uint256,uint256,uint64,uint64)" $ME $MH 0x$(printf '%064d' 0) 0 5000000 $((NOW-120)) $((NOW+604800)) --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 MID=$(( $(cast call $REG "nextId()(uint256)" --rpc-url $RPC | awk '{print $1}') - 1 ))
@@ -61,6 +47,29 @@ cast send $LOG "anchor(uint256,bytes32,uint64)" $MID $ROOT 2 --private-key $PRIV
 cast send $BOND "post(uint256)" $MID --value 1ether --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 echo "   mandateId=$MID leaf=$LH root=$ROOT bond=1 C2FLR"
 
+FEECFG=$(cast call $FLARE_REG "getContractAddressByName(string)(address)" FdcRequestFeeConfigurations --rpc-url $RPC)
+HUB=$(cast call $FLARE_REG "getContractAddressByName(string)(address)" FdcHub --rpc-url $RPC)
+FSM=$(cast call $FLARE_REG "getContractAddressByName(string)(address)" FlareSystemsManager --rpc-url $RPC)
+T0=$(cast call $FSM "firstVotingRoundStartTs()(uint64)" --rpc-url $RPC | awk '{print $1}'); DUR=$(cast call $FSM "votingEpochDurationSeconds()(uint64)" --rpc-url $RPC | awk '{print $1}')
+
+echo "== 3. commit the challenge over that leaf — nothing is public yet but a hash"
+delicti_commit $BOND 1 $MID "$LH"
+HONEST_SALT=$DELICTI_SALT
+delicti_wait_lead $BOND $T0 $DUR
+
+echo "== 4. FDC verifier: prepare nonexistence request, then FdcHub: pay fee, submit"
+BODY=$(printf '{"attestationType":"%s","sourceId":"%s","requestBody":{"minimalBlockNumber":"%s","deadlineBlockNumber":"%s","deadlineTimestamp":"%s","destinationAddressHash":"%s","amount":"%s","standardPaymentReference":"%s","checkSourceAddresses":false,"sourceAddressesRoot":"0x%064d"}}' \
+  "$ATYPE" "$SRC" "$MINB" "$DEADB" "$DEADT" "$DEST" "$AMT" "$REF" 0)
+PREP=$(curl -s -m 60 -X POST "$VERIFIER_URL/verifier/xrp/ReferencedPaymentNonexistence/prepareRequest" -H "X-API-KEY: $VERIFIER_API_KEY" -H "Content-Type: application/json" -d "$BODY")
+echo "   status: $(echo "$PREP" | python3 -c "import sys,json;print(json.load(sys.stdin)['status'])")"
+REQ=$(echo "$PREP" | python3 -c "import sys,json;print(json.load(sys.stdin)['abiEncodedRequest'])")
+FEE=$(cast call $FEECFG "getRequestFee(bytes)(uint256)" $REQ --rpc-url $RPC | awk '{print $1}')
+TX=$(cast send $HUB "requestAttestation(bytes)" $REQ --value $FEE --private-key $PRIVATE_KEY --rpc-url $RPC --json)
+BN=$(echo "$TX" | python3 -c "import sys,json;print(int(json.load(sys.stdin)['blockNumber'],16))")
+TS=$(cast block $BN --rpc-url $RPC --json | python3 -c "import sys,json;print(int(json.load(sys.stdin)['timestamp'],16))")
+ROUND=$(( (TS - T0) / DUR ))
+echo "   round=$ROUND (starts at $(cast call $BOND "roundStartTs(uint64)(uint64)" $ROUND --rpc-url $RPC | awk '{print $1}'), commit was at $DELICTI_COMMIT_TS) fee=$FEE wei"
+
 echo "== 5. DA layer: wait for proof (round finalizes in ~3-5 min)"
 for i in $(seq 1 20); do
   R=$(curl -s -m 30 -X POST "$DA_URL/api/v1/fdc/proof-by-request-round-raw" -H "X-API-KEY: $VERIFIER_API_KEY" -H "Content-Type: application/json" -d "{\"votingRoundId\":$ROUND,\"requestBytes\":\"$REQ\"}")
@@ -71,6 +80,6 @@ MP=$(echo "$R" | python3 -c "import sys,json;print('['+','.join(json.load(sys.st
 DATA=$(cast abi-decode "f()(bytes32,bytes32,uint64,uint64,(uint64,uint64,uint64,bytes32,uint256,bytes32,bool,bytes32),(uint64,uint64,uint64))" $RESP | sed -E 's/ \[[0-9.e]+\]//g' | python3 -c "import sys;l=[x.strip() for x in sys.stdin if x.strip()];print('('+','.join(l)+')')")
 
 echo "== 6. Bond.challengeFalsePayment — two witnesses disagree → slash"
-SIG="challengeFalsePayment(uint256,uint256,(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256),bytes32[],(bytes32[],(bytes32,bytes32,uint64,uint64,(uint64,uint64,uint64,bytes32,uint256,bytes32,bool,bytes32),(uint64,uint64,uint64))))"
-cast send $BOND "$SIG" $MID 0 "$LEAF" "[$SIB]" "($MP,$DATA)" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'])"
+SIG="challengeFalsePayment(uint256,uint256,(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256),bytes32[],(bytes32[],(bytes32,bytes32,uint64,uint64,(uint64,uint64,uint64,bytes32,uint256,bytes32,bool,bytes32),(uint64,uint64,uint64))),bytes32)"
+cast send $BOND "$SIG" $MID 0 "$LEAF" "[$SIB]" "($MP,$DATA)" "$HONEST_SALT" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'])"
 echo "   bondOf=$(cast call $BOND 'bondOf(uint256)(uint256)' $MID --rpc-url $RPC) slashed=$(cast call $BOND 'slashed(uint256)(bool)' $MID --rpc-url $RPC) mandateLive=$(cast call $REG 'isLive(uint256)(bool)' $MID --rpc-url $RPC)"

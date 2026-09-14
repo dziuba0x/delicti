@@ -1,4 +1,4 @@
-# DELICTI Specification — v0.4 (draft)
+# DELICTI Specification — v0.5 (draft)
 
 *Corpus delicti for autonomous agents: prove the deed happened before anyone is judged.*
 
@@ -130,6 +130,45 @@ N FDC `EVMTransaction` proofs of deeds by the mandate's agent, inside the mandat
 - **Class-B escalation.** Web2 effects via FDC `Web2Json` for allow-listed sources.
 - **Under-reporting.** A second witness over the *tally* rather than over a single deed: an effector anchoring its own count of deeds performed for a mandate, so a divergence from the agent's `receiptCount` is itself challengeable.
 
+### 6.7 Commit–reveal on every challenge (v0.8)
+
+Everything above describes how a challenge is *proved*. This describes who is allowed to be *paid* for it, and it applies to all five challenge entry points plus the accusation of §6.4.
+
+**The problem.** The challenger's 10 % goes to whoever lands the transaction, and the transaction is self-contained — the proofs are in public calldata and anyone can replay them. Worse, a challenge cannot be assembled in secret: `FdcHub.requestAttestation(requestBytes)` is an on-chain call carrying the deed's transaction hash or payment reference in the clear, and it precedes the reveal by the length of a voting round plus DA latency — minutes. A parasite that watches `FdcHub` therefore learns of every case minutes before it can be filed, and can copy the reveal out of the mempool and outbid the gas. The honest watcher pays for monitoring and analysis; the parasite pays for neither. The equilibrium number of real watchers is zero, and a consequence layer nobody watches is theatre.
+
+**The rule.** Every challenge must first be committed:
+
+```
+commitment = keccak256(abi.encode(challenger, mandateId, kind, deedsDigest, salt))
+deedsDigest = keccak256(abi.encode(deedIds))
+```
+
+`kind` is one of the five `Bond.KIND_*` constants. `deedIds` is the receipt leaf hash for `KIND_FALSE_PAYMENT`, the deed's transaction hash for `KIND_UNANCHORED_DEED`, and the deeds' transaction hashes in the exact ascending order the challenge supplies them for the three cumulative kinds. `commitChallenge(bytes32)` stores nothing but that hash and the timestamp, so the commitment leaks nothing at all.
+
+At reveal, with `R` the **lowest** `votingRound` among the supplied proofs and `roundStart(R)` read live off Flare's `ProtocolsV2` (`firstVotingRoundStartTs`, `votingEpochDurationSeconds` — never hardcoded):
+
+```
+committedAt + commitLead  <=  roundStart(R)  <=  committedAt + COMMIT_TTL
+roundStart(R)             <=  block.timestamp
+```
+
+and the commitment is deleted, single-use.
+
+**Why each clause is there.**
+
+- *Taking the lowest round, not the highest.* Otherwise one freshly requested proof would launder a commitment made after the rest of the case was already public.
+- *`commitLead` (10 min, immutable).* Requiring only `committedAt < roundStart(R)` — the obvious rule — does **not** close the hole, and it looks as though it does. A parasite that sees the victim's request land in round R can commit inside R, request its own attestation for the same deed in round R+1, and reveal against that: its commitment honestly predates `roundStart(R+1)`. It pays one more attestation fee and one more round of latency, and then it is a race it wins whenever the honest challenger's proof happens to be the slow one — and measured DA latency on Coston2 spans ~100 s to ~500 s for the same request type, so that race is real. A lead of L means the parasite's earliest usable round starts L after it learned of the case, so it loses unless the honest proof is more than L slower than its own. Ten minutes is wider than the measured spread, which makes the defence deterministic rather than a coin flip.
+- *`COMMIT_TTL` (1 h, constant).* `commitLead` alone leaves the other end open, and that end decides whether any of this means anything. Without an upper bound a commitment is a free, permanent option: the deed set is public on three of the five paths — one transaction hash, one published leaf, or the canonical "every deed so far, ascending" — so anyone can pre-commit to cases that have not been challenged yet, at one `SSTORE` each, and copy a reveal months later by changing the salt. The commitment would be old enough to satisfy any lead. The TTL turns that free option into rent: a squatter must re-commit every candidate, with a fresh salt, once per TTL, forever, for every mandate. An honest challenger pays once, for the case it actually found. It is a constant rather than a constructor argument because a deployer with discretion over it could set it just above `commitLead` and make honest challenges against its own agents nearly impossible to time.
+- *A round cannot have begun in the future.* `roundStart(R)` extrapolates: it multiplies a round number that may be years old by the epoch length Flare reports *now*. If Flare lengthens the voting epoch or redeploys with a rebased `firstVotingRoundStartTs`, that product lands in the future and every commitment — including one made in the same block — clears the lead test. The gate would stop existing, silently, with nothing reverting to say so. A finalised round has necessarily started, so this check holds on a healthy chain and fails closed on an unhealthy one. The mirror-image drift (a shortened epoch pushing the product into the past) only refuses challenges, which is the direction to fail in; see §10.
+
+**What the preimage binds, and what it deliberately does not.** `challenger` makes a commitment non-transferable; `mandateId` and `kind` stop a commitment for a cheap challenge type being spent on an expensive one; `deedsDigest` pins the exact ordered set, so a subset, a superset and a reordering are three different cases. The ERC-20 `asset` is **not** bound, because it is not a field a copier can vary to its advantage: naming the wrong asset sums the wrong `Transfer` events and the challenge fails on its own merits.
+
+**Replaying a commitment is a no-op.** Commitments travel in public calldata, so if a second submission could refresh the stored timestamp, a parasite unable to steal a challenge could still grief it past `commitLead` by replaying the victim's own commitment bytes. `commitChallenge` therefore keeps the earliest submission; replaying it early merely registers it on the victim's behalf, since the preimage names the only address that can spend it.
+
+**The accusation of §6.4 is gated, `resolveAccusation` is not.** The accusation is what publishes the case and its accuser is who earns the 10 %, so it carries the same salt and the same `kind = 4` gate. Resolution stays open to anyone, because the reward follows `a.challenger` rather than the caller.
+
+**Cost.** One extra transaction per challenge (~31k gas) and one round-timing read at reveal, plus the wait between committing and requesting. The wait is affordable because `COOLING_WINDOW` keeps the bond in place for 24 h.
+
 ## 7. The effector-side brake (optional, recommended)
 
 FDC finality is minutes; DELICTI is evidence after the fact. But the effector is the final common pathway and can read the chain in milliseconds. A DELICTI-aware effector therefore MAY, before producing the effect, check `MandateRegistry.isLive(mandateId)` and that the requesting agent *is* the mandated agent, and refuse otherwise. A deed with no mandate may be refused outright. flario implements this (`DELICTI_REGISTRY`, `DELICTI_REQUIRE_MANDATE`). The brake cannot see structuring — that remains the challenge's job — but it prevents the two cheapest failure modes: acting under a dead mandate and borrowing someone else's.
@@ -166,7 +205,9 @@ Nothing sensitive is on-chain: mandate envelopes and receipts live off-chain; th
 - It does not stop a deed in real time by itself. The brake in §7 does, for liveness and identity, and the meter in §7.1 does for the cumulative budget — but only where an effector chooses to keep the tally.
 - It does not see effects the FDC cannot index (class B). It says so, per deed.
 - It does not know that an envelope was *complete* — only that the deed exceeded the envelope that was committed.
-- It does not yet protect the challenger's 10 % from being front-run. Proofs travel in public calldata and the FDC request precedes the challenge by minutes, so a copier can win the reward without paying the monitoring cost. Commit–reveal — with the commitment made *before* the attestation request — is specified as the fix and is not implemented.
+- It protects the challenger's 10 % from a *reactive* copier (§6.7) but not from an unboundedly patient one. `COMMIT_TTL` prices pre-committing to cases nobody has found yet, it does not forbid it: a squatter willing to pay rent on every candidate deed set, forever, can still hold a live commitment when someone else's reveal appears. The defence is economic, not cryptographic, and it is the honest description.
+- It cannot make the agent later than its own watchers. The party with the earliest knowledge of a violation is the one committing it, so an agent (or a fresh address belonging to it) can hold a commitment over its own deeds and self-slash the moment a real watcher's reveal appears, turning a 10 % loss into no loss and taking the reward off the only party the mechanism was written for. `slashed[mandateId]` is winner-take-all, which is what makes that final. Splitting the reward across all valid commitments for the same case would address it; that is a design decision, not a patch, and it is open.
+- It assumes Flare's voting-round clock stays linear. `roundStart(R)` is extrapolated from the currently reported epoch length (§6.7); a lengthened epoch is caught and refused, but a *shortened* epoch, or a redeployed `FlareSystemsManager` with a rebased origin, pushes every computed round start into the past and refuses every challenge until the deployment is replaced. Bonds are not lost and nobody is wrongly slashed — the failure is liveness, chosen deliberately over a silent bypass.
 - It does not bind the ERC-20 `asset` or the `sourceId` to the mandate on-chain; both live in the off-chain envelope. Until they do, a bond posted by a party other than the principal should be read with that in mind.
 - The slash is all-or-nothing, which makes the penalty a step function and the deed's optimal size, conditional on breaching, the largest one available. Proportional slashing is a design decision, not an oversight, and is open.
 - Silence is challengeable only for mandates whose agent declared exclusivity (§6.4). An agent that never makes that promise is still judged on what it anchors — the promise is the price of being trusted, not a protocol guarantee.

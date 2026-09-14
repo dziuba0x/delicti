@@ -80,6 +80,15 @@ A receipt proves *registration*. "A false claim can be immutably registered." DE
 | `scripts/brake-test.sh` — the effector-side brake (SPEC §7) live: a live mandate pays; a missing, revoked or borrowed mandate is refused before any funds move | **done, executed on Coston2** |
 | `Bond.accuseUnanchoredDeed` / `answerAccusation` / `resolveAccusation` + `MandateRegistry.declareExclusive` — the deed nobody wrote down (SPEC §6.4) | **done, executed on Coston2** (both outcomes) |
 | `SpendMeter.sol` + `Bond.challengeUnderReportedSpend` — the running tally that refuses structuring in real time (SPEC §7.1), and convicts the effector whose tally lied (§6.5) | **done, executed on Coston2** |
+| `Bond.commitChallenge` — commit–reveal on all five challenges and on the accusation, so the 10 % belongs to whoever detected the violation rather than to whoever copied the calldata (SPEC §6.7) | tests pass (81); **not yet executed on Coston2** |
+
+### v0.8 — commit–reveal (2026-09-14): written and tested, not yet on-chain
+
+Every challenge must now be committed — a bare hash, leaking nothing — **before** the FDC voting round that produces its evidence begins, and the commitment expires an hour later. The reason is that a challenge cannot be assembled in secret: `FdcHub.requestAttestation` is an on-chain call carrying the deed's transaction hash in the clear, minutes before the reveal. Without this, a parasite watching `FdcHub` copies the finished calldata out of the mempool, outbids the gas, and collects the reward having paid for no monitoring at all — so the equilibrium number of real watchers is zero, and a consequence layer nobody watches is theatre. SPEC §6.7 has the rule and the reasoning for each of its clauses.
+
+What is **not** claimed: none of this has been executed on Coston2. The unit tests cover the mechanism in both directions — including the copied-calldata regression on the flagship structuring path, the later-round variant that the obvious rule misses, and the stale pre-committed squat — and the voting-round clock is verified against live Coston2 on a fork. But no commitment, no refusal and no reveal exists on-chain yet, and this section will say so until it does. `scripts/structuring.sh` with `SNIPE=1` is what will produce the evidence: it leaves the copier's refusal on-chain as a reverted transaction next to the honest reveal.
+
+Two things the audit turned up and this release does **not** fix, both now in SPEC §10 rather than glossed over: a squatter willing to pay rent on every candidate deed set forever can still hold a live commitment (the defence is economic, not cryptographic), and the agent — which has the earliest knowledge of its own violation by construction — can self-slash ahead of a real watcher.
 
 ### Live on Coston2 (2026-09-14) — v0.7, and the loop closed in both directions
 

@@ -9,6 +9,8 @@ import {SpendMeter} from "../src/SpendMeter.sol";
 import {Receipts} from "../src/Receipts.sol";
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
 import {IEVMTransaction} from "@flarenetwork/flare-periphery-contracts/coston2/IEVMTransaction.sol";
+import {ProtocolsV2Interface} from "@flarenetwork/flare-periphery-contracts/coston2/ProtocolsV2Interface.sol";
+import {MockProtocolsV2} from "./Rounds.sol";
 
 contract MockFdcEvm2 {
     bool public verdict = true;
@@ -30,6 +32,7 @@ contract UnanchoredTest is Test {
     Bond bond;
     SpendMeter meter;
     MockFdcEvm2 mock;
+    MockProtocolsV2 rounds;
 
     address principal = makeAddr("principal");
     address agent = makeAddr("agent");
@@ -39,6 +42,8 @@ contract UnanchoredTest is Test {
     bytes32 constant SRC = bytes32("testFLR");
     bytes32 constant TXH = keccak256("the transaction the agent never mentioned");
     uint64 constant RESPONSE = 24 hours;
+    uint64 constant COMMIT_LEAD = 10 minutes;
+    bytes32 constant SALT = keccak256("the watcher's salt");
 
     uint256 mandateId;
     uint64 deedTime;
@@ -52,7 +57,11 @@ contract UnanchoredTest is Test {
         anchorLog = new AnchorLog(reg);
         mock = new MockFdcEvm2();
         meter = new SpendMeter(reg);
-        bond = new Bond(reg, anchorLog, IFdcVerification(address(mock)), RESPONSE, 1 hours, meter);
+        rounds = new MockProtocolsV2();
+        bond = new Bond(
+            reg, anchorLog, IFdcVerification(address(mock)), RESPONSE, 1 hours, meter,
+            COMMIT_LEAD, ProtocolsV2Interface(address(rounds))
+        );
         reg.setBond(address(bond));
         vm.warp(1_800_000_000);
 
@@ -100,10 +109,23 @@ contract UnanchoredTest is Test {
         });
     }
 
+    /// @dev The accusation is a challenge too — it publishes the case and its accuser earns the
+    ///      10% at resolution — so it goes through the same commit gate.
+    function _arm(address who, uint256 mid, bytes32 txh) internal {
+        bytes32[] memory ids = new bytes32[](1);
+        ids[0] = txh;
+        uint64 t = uint64(block.timestamp);
+        vm.warp(t - bond.commitLead());
+        bond.commitChallenge(bond.commitmentFor(who, mid, bond.KIND_UNANCHORED_DEED(), bond.deedsDigest(ids), SALT));
+        vm.warp(t);
+        rounds.setRoundStart(_proof().data.votingRound, t);
+    }
+
     function _accuse() internal returns (uint256 id) {
         vm.warp(deedTime + GRACE + 1);
+        _arm(challenger, mandateId, TXH);
         vm.prank(challenger);
-        id = bond.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof());
+        id = bond.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
     }
 
     // --- the deed nobody wrote down ---
@@ -153,7 +175,7 @@ contract UnanchoredTest is Test {
         vm.warp(deedTime + 10 minutes);
         vm.prank(challenger);
         vm.expectRevert(Bond.DeedWithinGrace.selector);
-        bond.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof());
+        bond.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
     }
 
     /// An agent that never promised exclusivity cannot be asked to account for every deed:
@@ -168,14 +190,14 @@ contract UnanchoredTest is Test {
         vm.warp(deedTime + GRACE + 1);
         vm.prank(challenger);
         vm.expectRevert(Bond.NotExclusive.selector);
-        bond.accuseUnanchoredDeed{value: STAKE}(other, _proof());
+        bond.accuseUnanchoredDeed{value: STAKE}(other, _proof(), SALT);
     }
 
     function test_revert_secondAccusationOnSameDeed() public {
         _accuse();
         vm.prank(challenger);
         vm.expectRevert(Bond.AlreadyAccused.selector);
-        bond.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof());
+        bond.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
     }
 
     function test_revert_resolveBeforeWindowCloses() public {
@@ -189,7 +211,7 @@ contract UnanchoredTest is Test {
         vm.warp(deedTime + GRACE + 1);
         vm.prank(challenger);
         vm.expectRevert(Bond.BadStake.selector);
-        bond.accuseUnanchoredDeed{value: 1 wei}(mandateId, _proof());
+        bond.accuseUnanchoredDeed{value: 1 wei}(mandateId, _proof(), SALT);
     }
 
     function test_revert_deedOutsideMandateWindow() public {
@@ -198,7 +220,7 @@ contract UnanchoredTest is Test {
         vm.warp(block.timestamp + 2 hours);
         vm.prank(challenger);
         vm.expectRevert(Bond.ClaimOutsideProvenRange.selector);
-        bond.accuseUnanchoredDeed{value: STAKE}(mandateId, p);
+        bond.accuseUnanchoredDeed{value: STAKE}(mandateId, p, SALT);
     }
 
     function test_revert_deedByAnotherAddress() public {
@@ -207,7 +229,7 @@ contract UnanchoredTest is Test {
         vm.warp(deedTime + GRACE + 1);
         vm.prank(challenger);
         vm.expectRevert(Bond.NotAgentTx.selector);
-        bond.accuseUnanchoredDeed{value: STAKE}(mandateId, p);
+        bond.accuseUnanchoredDeed{value: STAKE}(mandateId, p, SALT);
     }
 
     /// Exclusivity is the agent's own promise. Nobody else can make it for them.
@@ -219,5 +241,45 @@ contract UnanchoredTest is Test {
         vm.prank(principal);
         vm.expectRevert(MandateRegistry.NotAgent.selector);
         reg.declareExclusive(other);
+    }
+
+    // --- commit–reveal (SPEC 6.7) on the accusation ---
+
+    /// The gate sits on the accusation, not on `resolveAccusation`: the accusation is what makes the
+    /// case public, and the reward follows `a.challenger`, so resolving stays open to anyone.
+    function test_revert_accusationWithoutCommitment() public {
+        vm.warp(deedTime + GRACE + 1);
+        rounds.setRoundStart(_proof().data.votingRound, uint64(block.timestamp));
+        vm.prank(challenger);
+        vm.expectRevert(Bond.NoCommitment.selector);
+        bond.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
+    }
+
+    /// A parasite watching FdcHub sees the deed's transaction hash in the attestation request and
+    /// can copy the accusation wholesale. Its commitment is necessarily younger than the round.
+    function test_revert_copiedAccusationWithALateCommitment() public {
+        address parasite = makeAddr("mempool parasite");
+        vm.deal(parasite, 10 ether);
+
+        vm.warp(deedTime + GRACE + 1);
+        _arm(challenger, mandateId, TXH); // the request has landed; the round began this second
+
+        bytes32[] memory ids = new bytes32[](1);
+        ids[0] = TXH;
+        bond.commitChallenge(
+            bond.commitmentFor(parasite, mandateId, bond.KIND_UNANCHORED_DEED(), bond.deedsDigest(ids), SALT)
+        );
+        vm.prank(parasite);
+        vm.expectRevert(Bond.CommittedTooLate.selector);
+        bond.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
+
+        // the watcher that found it accuses, and still owns the reward when a stranger resolves
+        vm.prank(challenger);
+        uint256 id = bond.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
+        vm.warp(block.timestamp + RESPONSE + 1);
+        vm.prank(parasite);
+        bond.resolveAccusation(id);
+        assertEq(bond.owed(challenger), STAKE + 1 ether);
+        assertEq(bond.owed(parasite), 0);
     }
 }

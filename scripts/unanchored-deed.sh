@@ -10,6 +10,9 @@
 #   MODE=answer:            agent acts and anchors in time → accuse → answer → dismissed,
 #                           and the accuser's stake goes to the principal.
 #
+# v0.8: the accusation is a challenge too — it publishes the case and its accuser earns the 10% —
+# so it is committed before the attestation is requested (SPEC §6.7). Budget commitLead for it.
+#
 # The wait is real: anchorGrace then responseWindow, both read off the contract. Deploy the
 # testnet Bond with short values (RESPONSE_WINDOW=600 ANCHOR_GRACE=300) or this takes 25 h.
 #
@@ -17,6 +20,7 @@
 # VERIFIER_API_KEY, DA_URL.
 set -euo pipefail
 cd "$(dirname "$0")/.."; set -a; . ./.env; set +a
+. scripts/lib/commit.sh
 RPC=$COSTON2_RPC
 REG=${REG:?set REG to the v0.6 MandateRegistry}
 LOG=${LOG:?set LOG to the v0.6 AnchorLog}
@@ -36,7 +40,8 @@ DUR=$(cast call $FSM "votingEpochDurationSeconds()(uint64)" --rpc-url $RPC | awk
 GRACE=$(cast call $BOND "anchorGrace()(uint64)" --rpc-url $RPC | awk '{print $1}')
 WINDOW=$(cast call $BOND "responseWindow()(uint64)" --rpc-url $RPC | awk '{print $1}')
 STAKE=$(cast call $BOND "ACCUSATION_STAKE()(uint256)" --rpc-url $RPC | awk '{print $1}')
-echo "mode=$MODE anchorGrace=${GRACE}s responseWindow=${WINDOW}s stake=$STAKE wei"
+LEAD=$(cast call $BOND "commitLead()(uint64)" --rpc-url $RPC | awk '{print $1}')
+echo "mode=$MODE anchorGrace=${GRACE}s responseWindow=${WINDOW}s commitLead=${LEAD}s stake=$STAKE wei"
 
 echo "== 1. mandate + exclusivity + bond"
 NOW=$(date +%s)
@@ -63,7 +68,10 @@ else
   echo "   NOT anchored — this is the silence"
 fi
 
-echo "== 3. FDC EVMTransaction proof of the deed"
+echo "== 3. commit the accusation, wait out commitLead, then prove the deed via FDC"
+delicti_commit $BOND 4 $MID "$TXH"
+HONEST_SALT=$DELICTI_SALT
+delicti_wait_lead $BOND $T0 $DUR
 BODY=$(printf '{"attestationType":"%s","sourceId":"%s","requestBody":{"transactionHash":"%s","requiredConfirmations":"1","provideInput":false,"listEvents":false,"logIndices":[]}}' "$ATYPE" "$SRC" "$TXH")
 REQ=$(curl -s -m 60 -X POST "$VERIFIER_URL/verifier/flr/EVMTransaction/prepareRequest" -H "X-API-KEY: $VERIFIER_API_KEY" -H "Content-Type: application/json" -d "$BODY" | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['status']=='VALID',d;print(d['abiEncodedRequest'])")
 FEE=$(cast call $FEECFG "getRequestFee(bytes)(uint256)" $REQ --rpc-url $RPC | awk '{print $1}')
@@ -97,7 +105,7 @@ echo "   proof ok (round $ROUND)"
 echo "== 4. wait out the anchor grace, then accuse"
 WAIT=$(( TS + GRACE + 5 - $(date +%s) )); [ $WAIT -gt 0 ] && { echo "   sleeping ${WAIT}s"; sleep $WAIT; }
 TI="${T:1:-1}"
-ACC=$(cast send $BOND "accuseUnanchoredDeed(uint256,(bytes32[],$TI))" $MID "($MP,$DATA)" --value $STAKE --private-key $PRIVATE_KEY --rpc-url $RPC --json)
+ACC=$(cast send $BOND "accuseUnanchoredDeed(uint256,(bytes32[],$TI),bytes32)" $MID "($MP,$DATA)" "$HONEST_SALT" --value $STAKE --private-key $PRIVATE_KEY --rpc-url $RPC --json)
 echo "$ACC" | python3 -c "import sys,json;d=json.load(sys.stdin);print('   accusation tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
 AID=$(( $(cast call $BOND "nextAccusationId()(uint256)" --rpc-url $RPC | awk '{print $1}') - 1 ))
 echo "   accusationId=$AID deadline=$(cast call $BOND 'accusations(uint256)(uint256,bytes32,uint64,uint64,address,bool)' $AID --rpc-url $RPC | sed -n '4p')"

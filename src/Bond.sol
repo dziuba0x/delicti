@@ -6,6 +6,7 @@ import {IReferencedPaymentNonexistence} from
     "@flarenetwork/flare-periphery-contracts/coston2/IReferencedPaymentNonexistence.sol";
 import {IEVMTransaction} from "@flarenetwork/flare-periphery-contracts/coston2/IEVMTransaction.sol";
 import {ContractRegistry} from "@flarenetwork/flare-periphery-contracts/coston2/ContractRegistry.sol";
+import {ProtocolsV2Interface} from "@flarenetwork/flare-periphery-contracts/coston2/ProtocolsV2Interface.sol";
 import {MandateRegistry} from "./MandateRegistry.sol";
 import {AnchorLog} from "./AnchorLog.sol";
 import {SpendMeter} from "./SpendMeter.sol";
@@ -30,6 +31,10 @@ contract Bond {
     ///         under-reporting challenge without affecting anything else.
     SpendMeter public immutable meter;
     IFdcVerification private immutable _fdcOverride; // 0 => resolve via ContractRegistry
+    /// @dev 0 => resolve via ContractRegistry. Only the voting-round clock
+    ///      (`firstVotingRoundStartTs`, `votingEpochDurationSeconds`); a unit test has no Flare
+    ///      contracts to read it from, same reason `_fdcOverride` exists.
+    ProtocolsV2Interface private immutable _protocolsOverride;
 
     uint256 public constant CHALLENGER_BPS = 1000; // 10% of slashed bond to the challenger
 
@@ -59,6 +64,92 @@ contract Bond {
     ///         about liveness, not proof latency. Production value is 24 h; it is a constructor
     ///         argument so a testnet deployment can demonstrate the full loop in one sitting.
     uint64 public immutable responseWindow;
+
+    // -----------------------------------------------------------------------------------
+    // Commit–reveal on the challenge (SPEC §6.7).
+    //
+    // The challenger's 10% is paid to whoever lands the `challenge*` call, and the call is
+    // self-contained: proofs in calldata, verifiable by anyone. Worse, the challenger has to
+    // announce the case on-chain minutes earlier — `FdcHub.requestAttestation(requestBytes)`
+    // carries the deed's transaction hash or payment reference in the clear. So a parasite that
+    // watches FdcHub, copies the reveal out of the mempool and outbids the gas collects the
+    // reward at zero monitoring cost, and the equilibrium number of real watchers is zero.
+    //
+    // Fix: the reward is earned by whoever DETECTED the violation first, not by whoever pressed
+    // the button first. A challenge must be committed — hash only, nothing leaked — before the
+    // voting round in which its evidence was requested from the FDC even began.
+    //
+    //   commitment = keccak256(abi.encode(challenger, mandateId, kind, deedsDigest, salt))
+    //
+    // Everything that could be varied to STEAL someone else's work sits inside the preimage:
+    // `challenger` (so a commitment cannot be revealed by anyone else), `mandateId` and `kind`
+    // (so a commitment for a cheap challenge type cannot be spent on an expensive one), and
+    // `deedsDigest` — the exact ordered set of deeds the challenge will present, so a blind
+    // commitment does not fit a case the committer had not actually found.
+    //
+    // `asset`, on the ERC-20 paths, deliberately does NOT: it is not a field a copier can vary to
+    // its advantage. Naming the wrong asset sums the wrong Transfer events and the challenge fails
+    // on its own merits, so binding it would buy no security — only two more places for a shell
+    // script's signature string to drift out of sync with the ABI.
+    // -----------------------------------------------------------------------------------
+
+    uint8 public constant KIND_FALSE_PAYMENT = 1;
+    uint8 public constant KIND_BUDGET_NATIVE = 2;
+    uint8 public constant KIND_BUDGET_ERC20 = 3;
+    uint8 public constant KIND_UNANCHORED_DEED = 4;
+    uint8 public constant KIND_UNDER_REPORTED = 5;
+
+    /// @notice How much older than its evidence round a commitment must be.
+    /// @dev    Requiring only `committedAt < roundStart(minVotingRound)` — the obvious rule — does
+    ///         NOT close the hole, and this is worth spelling out because it looks like it does.
+    ///         A parasite that sees the victim's request land in round R can commit inside R,
+    ///         then request its own attestation for the same deed in round R+1 and reveal against
+    ///         that: its commitment predates `roundStart(R+1)` honestly. It pays one more
+    ///         attestation fee and one more round of latency, and then it is a race — which it
+    ///         wins whenever the honest challenger's proof happens to be the slow one. Observed
+    ///         DA latency on Coston2 ranges from ~100 s to ~500 s for the same request type, so
+    ///         the race is real, not theoretical.
+    ///
+    ///         With a lead of L, the parasite's earliest usable round starts L after it learned of
+    ///         the case, so it loses unless the honest challenger's proof is more than L slower
+    ///         than its own. 10 minutes is ~1.5x the widest latency spread measured on Coston2 and
+    ///         ~4x the median round trip, which makes the defence deterministic rather than a
+    ///         coin flip. It costs the honest challenger a one-off wait between detecting and
+    ///         requesting — affordable, because `COOLING_WINDOW` keeps the bond in place for 24 h.
+    ///
+    ///         Immutable rather than constant for the same reason as `responseWindow` and
+    ///         `anchorGrace`: a testnet deployment has to demonstrate the loop in one sitting.
+    ///         A deployment that sets it near zero keeps the base rule (a commitment made after
+    ///         the request is still refused) and gives up only the later-round variant above.
+    uint64 public immutable commitLead;
+
+    /// @notice How stale a commitment may be when it is finally revealed.
+    /// @dev    `commitLead` alone leaves the gate open at the other end, and that end matters more
+    ///         than it looks. Without an upper bound a commitment is a free, permanent option:
+    ///         anyone can pre-commit to deeds that have not been challenged — for the single-deed
+    ///         paths the deed set is one public transaction hash or one published receipt leaf, and
+    ///         for the cumulative paths "every deed so far, ascending" is the canonical set every
+    ///         honest challenger will use — and then simply copy a reveal out of the mempool months
+    ///         later, changing one field, the salt. The commitment would be years old, so
+    ///         `commitLead` is satisfied by a mile. Detection would again be worth nothing.
+    ///
+    ///         An upper bound turns that free option into rent: a squatter must re-commit every
+    ///         candidate deed set, with a fresh salt (a replay keeps the earliest timestamp), once
+    ///         per TTL, forever, for every mandate it hopes someone else will one day challenge.
+    ///         An honest challenger pays for exactly one, once, for the case it actually found.
+    ///
+    ///         1 hour, against a `commitLead` of 10 minutes, leaves a 50-minute window between
+    ///         committing and requesting the attestations. The honest sequence — detect, commit,
+    ///         wait out the lead, request — takes minutes, so the slack is ~5x, and a challenger
+    ///         who misses the window has lost 31k gas and can simply commit again.
+    ///
+    ///         This is a constant, not a constructor argument, precisely because a deployer with
+    ///         discretion over it could set it just above `commitLead` and make honest challenges
+    ///         against its own agents nearly impossible to time.
+    uint64 public constant COMMIT_TTL = 1 hours;
+
+    /// @notice commitment => the timestamp it was first submitted (0 = never, or already spent).
+    mapping(bytes32 => uint64) public committedAt;
 
     // mandateId => posted bond (wei)
     mapping(uint256 => uint256) public bondOf;
@@ -96,6 +187,9 @@ contract Bond {
         uint256 indexed mandateId, uint256 proven, uint256 recorded, uint256 deeds, address indexed challenger, uint256 slashedAmount
     );
 
+    event ChallengeCommitted(bytes32 indexed commitment, address indexed by, uint64 at);
+    event CommitmentConsumed(bytes32 indexed commitment, uint256 indexed mandateId, uint8 kind, uint64 votingRound);
+
     event BudgetOverrunProven(
         uint256 indexed mandateId, uint256 spent, uint256 budget, uint256 deeds, address indexed challenger, uint256 slashedAmount
     );
@@ -131,6 +225,10 @@ contract Bond {
     error NoMeter();
     error NotMetered();
     error TallyAgrees();
+    error NoCommitment();
+    error CommittedTooLate();
+    error CommitmentStale();
+    error ClockDrift();
 
     constructor(
         MandateRegistry _registry,
@@ -138,7 +236,9 @@ contract Bond {
         IFdcVerification fdcOverride,
         uint64 responseWindow_,
         uint64 anchorGrace_,
-        SpendMeter meter_
+        SpendMeter meter_,
+        uint64 commitLead_,
+        ProtocolsV2Interface protocolsOverride
     ) {
         registry = _registry;
         log = _log;
@@ -146,6 +246,8 @@ contract Bond {
         responseWindow = responseWindow_;
         anchorGrace = anchorGrace_;
         meter = meter_;
+        commitLead = commitLead_;
+        _protocolsOverride = protocolsOverride;
     }
 
     /// @notice An open claim that a deed happened with no receipt behind it. Resolved either by
@@ -167,6 +269,106 @@ contract Bond {
     function fdc() public view returns (IFdcVerification) {
         if (address(_fdcOverride) != address(0)) return _fdcOverride;
         return ContractRegistry.getFdcVerification();
+    }
+
+    /// @notice The voting-round clock. `ProtocolsV2` and `FlareSystemsManager` resolve to the same
+    ///         address on Coston2, but `firstVotingRoundStartTs` / `votingEpochDurationSeconds` are
+    ///         declared on `ProtocolsV2Interface`, not on `IFlareSystemsManager` — so this is the
+    ///         handle that actually type-checks. Read live; never hardcoded.
+    function protocols() public view returns (ProtocolsV2Interface) {
+        if (address(_protocolsOverride) != address(0)) return _protocolsOverride;
+        return ContractRegistry.getProtocolsV2();
+    }
+
+    /// @notice When the given FDC voting round began, in seconds since the epoch.
+    function roundStartTs(uint64 round) public view returns (uint64) {
+        ProtocolsV2Interface p = protocols();
+        return p.firstVotingRoundStartTs() + round * p.votingEpochDurationSeconds();
+    }
+
+    // -----------------------------------------------------------------------------------
+    // Commit side.
+    // -----------------------------------------------------------------------------------
+
+    /// @notice Stake a claim on a challenge you have found but cannot prove yet. Costs one SSTORE
+    ///         and leaks nothing: the argument is a hash.
+    /// @dev    Idempotent, keeping the EARLIEST submission, and that is a security property rather
+    ///         than tidiness. Commitments are public calldata, so if a second call could refresh
+    ///         the stored timestamp, a parasite could simply replay the victim's own commitment
+    ///         bytes just before the reveal and push it past `commitLead` — griefing the challenge
+    ///         it could not steal. Replaying the commitment is instead a no-op; and replaying it
+    ///         *early* only registers it on the victim's behalf, because the preimage names the
+    ///         one address allowed to reveal it.
+    function commitChallenge(bytes32 commitment) external {
+        uint64 at = committedAt[commitment];
+        if (at == 0) {
+            at = uint64(block.timestamp);
+            committedAt[commitment] = at;
+        }
+        emit ChallengeCommitted(commitment, msg.sender, at);
+    }
+
+    /// @notice The commitment for a challenge. Pure helper so off-chain tooling never has to
+    ///         re-derive the encoding — the bug that encoding by hand invites is silent.
+    function commitmentFor(address challenger, uint256 mandateId, uint8 kind, bytes32 digest, bytes32 salt)
+        public
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encode(challenger, mandateId, kind, digest, salt));
+    }
+
+    /// @notice Digest over the exact ordered set of deeds a challenge will present.
+    /// @param deedIds  for `KIND_FALSE_PAYMENT` the single receipt leaf hash; for every other kind
+    ///                 the deeds' transaction hashes, in the same order the challenge supplies them
+    ///                 (which the multi-deed paths require to be strictly increasing).
+    function deedsDigest(bytes32[] calldata deedIds) public pure returns (bytes32) {
+        return keccak256(abi.encode(deedIds));
+    }
+
+    /// @dev Spend the caller's commitment for this case, or refuse the reveal.
+    /// @param minVotingRound the LOWEST voting round among the supplied proofs. Taking the lowest
+    ///        is what stops a challenger from padding a stale commitment with one fresh proof.
+    function _consumeCommitment(
+        uint8 kind,
+        uint256 mandateId,
+        bytes32 digest,
+        bytes32 salt,
+        uint64 minVotingRound
+    ) internal {
+        bytes32 c = commitmentFor(msg.sender, mandateId, kind, digest, salt);
+        uint64 at = committedAt[c];
+        if (at == 0) revert NoCommitment();
+
+        uint64 rs = roundStartTs(minVotingRound);
+        // `roundStartTs` extrapolates: it multiplies a round number that may be years old by the
+        // epoch length Flare reports RIGHT NOW. If Flare ever lengthens the voting epoch or
+        // redeploys with a rebased `firstVotingRoundStartTs`, that product lands in the future and
+        // every commitment — including one made in this very block — clears the test below. The
+        // gate would stop existing, silently, with nothing reverting to say so. A finalised round
+        // cannot have begun in the future, so this holds unconditionally on a healthy chain and
+        // fails closed on an unhealthy one. The mirror-image drift (a shortened epoch pushing the
+        // product into the past) only ever refuses challenges, which is the direction to fail in.
+        if (rs > block.timestamp) revert ClockDrift();
+
+        // The evidence round must not merely postdate the commitment — it must postdate it by
+        // `commitLead`, so that nobody who first heard of the case from the attestation request
+        // can ever assemble a commitment old enough. See the note on `commitLead`.
+        if (uint256(at) + commitLead > rs) revert CommittedTooLate();
+        // ...and it must not postdate it by more than COMMIT_TTL. See the note there: without an
+        // upper bound, a commitment is a free option held forever, and the whole gate reduces to
+        // "did you guess the deed set in advance".
+        if (uint256(at) + COMMIT_TTL < rs) revert CommitmentStale();
+
+        delete committedAt[c]; // single use
+        emit CommitmentConsumed(c, mandateId, kind, minVotingRound);
+    }
+
+    /// @dev `bytes32[]` of one element, for the single-deed challenge paths.
+    function _one(bytes32 id) internal pure returns (bytes32 digest) {
+        bytes32[] memory ids = new bytes32[](1);
+        ids[0] = id;
+        return keccak256(abi.encode(ids));
     }
 
     /// @notice Anyone may post bond under a mandate (agent, operator, or an insurer).
@@ -218,12 +420,15 @@ contract Bond {
     ///         mempool with that one field changed — the agent's own address — and the slash
     ///         returned 100% of the bond to the family that posted it. The harmed party is the
     ///         principal (SPEC 1), so that is who the remainder is credited to.
+    /// @param salt the secret from the commitment made before the attestation was requested
+    ///        (`commitmentFor(msg.sender, mandateId, KIND_FALSE_PAYMENT, deedsDigest([leafHash]), salt)`)
     function challengeFalsePayment(
         uint256 mandateId,
         uint256 episodeIndex,
         Receipts.Leaf calldata leaf,
         bytes32[] calldata merkleProof,
-        IReferencedPaymentNonexistence.Proof calldata fdcProof
+        IReferencedPaymentNonexistence.Proof calldata fdcProof,
+        bytes32 salt
     ) external {
         if (slashed[mandateId]) revert AlreadySlashed();
         uint256 amount = bondOf[mandateId];
@@ -241,6 +446,10 @@ contract Bond {
 
         // --- witness 2: the world says the payment does not exist ---
         if (!fdc().verifyReferencedPaymentNonexistence(fdcProof)) revert FdcProofInvalid();
+
+        // Only now is `votingRound` trustworthy — it is part of the response the FDC just
+        // verified against the Relay root, so it cannot be forged to buy a later deadline.
+        _consumeCommitment(KIND_FALSE_PAYMENT, mandateId, _one(leafHash), salt, fdcProof.data.votingRound);
 
         IReferencedPaymentNonexistence.RequestBody calldata rq = fdcProof.data.requestBody;
         IReferencedPaymentNonexistence.ResponseBody calldata rs = fdcProof.data.responseBody;
@@ -278,12 +487,15 @@ contract Bond {
     /// @dev    Deeds must be supplied in strictly increasing tx-hash order (dedup without storage).
     ///         Each deed needs BOTH witnesses: the anchored leaf (agent asserted it) and the FDC
     ///         proof (world confirms it). Evidence class A only.
+    /// @param salt the secret from the commitment made before the attestations were requested
+    ///        (`kind = KIND_BUDGET_NATIVE`, digest over the deeds' tx hashes in this same order)
     function challengeBudgetOverrun(
         uint256 mandateId,
         uint256[] calldata episodeIndices,
         Receipts.Leaf[] calldata leaves,
         bytes32[][] calldata merkleProofs,
-        IEVMTransaction.Proof[] calldata fdcProofs
+        IEVMTransaction.Proof[] calldata fdcProofs,
+        bytes32 salt
     ) external {
         if (slashed[mandateId]) revert AlreadySlashed();
         uint256 amount = bondOf[mandateId];
@@ -296,6 +508,8 @@ contract Bond {
 
         uint256 spent;
         bytes32 lastTx;
+        bytes32[] memory ids = new bytes32[](n);
+        uint64 minRound = type(uint64).max;
         for (uint256 i = 0; i < n; i++) {
             Receipts.Leaf calldata leaf = leaves[i];
             if (leaf.kind != Receipts.KIND_EVM_TX) revert WrongReceiptKind();
@@ -312,6 +526,8 @@ contract Bond {
             bytes32 txh = pr.data.requestBody.transactionHash;
             if (txh <= lastTx) revert UnorderedTxs();
             lastTx = txh;
+            ids[i] = txh;
+            if (pr.data.votingRound < minRound) minRound = pr.data.votingRound;
             if (txh != leaf.ref || pr.data.sourceId != leaf.sourceId) revert ProofDoesNotMatchClaim();
             IEVMTransaction.ResponseBody calldata rb = pr.data.responseBody;
             if (rb.sourceAddress != m.agent) revert NotAgentTx();
@@ -325,6 +541,9 @@ contract Bond {
             }
             spent += rb.value;
         }
+        // Authorisation before verdict: the set of deeds is only now known, and it is the set the
+        // commitment had to name.
+        _consumeCommitment(KIND_BUDGET_NATIVE, mandateId, keccak256(abi.encode(ids)), salt, minRound);
         if (spent <= m.budget) revert WithinBudget();
 
         emit BudgetOverrunProven(mandateId, spent, m.budget, n, msg.sender, amount);
@@ -336,13 +555,16 @@ contract Bond {
     ///         and the deed lives in the `Transfer(from,to,value)` event. The FDC EVMTransaction
     ///         proof must be requested with `listEvents = true` and the log index of that event.
     /// @param asset   the ERC-20 the mandate budget is denominated in (must be the event emitter)
+    /// @param salt    the secret from the commitment made before the attestations were requested
+    ///                (`kind = KIND_BUDGET_ERC20`, digest over the deeds' tx hashes in this order)
     function challengeBudgetOverrunERC20(
         uint256 mandateId,
         address asset,
         uint256[] calldata episodeIndices,
         Receipts.Leaf[] calldata leaves,
         bytes32[][] calldata merkleProofs,
-        IEVMTransaction.Proof[] calldata fdcProofs
+        IEVMTransaction.Proof[] calldata fdcProofs,
+        bytes32 salt
     ) external {
         if (slashed[mandateId]) revert AlreadySlashed();
         uint256 amount = bondOf[mandateId];
@@ -355,6 +577,8 @@ contract Bond {
 
         uint256 spent;
         bytes32 lastTx;
+        bytes32[] memory ids = new bytes32[](n);
+        uint64 minRound = type(uint64).max;
         for (uint256 i = 0; i < n; i++) {
             Receipts.Leaf calldata leaf = leaves[i];
             if (leaf.kind != Receipts.KIND_EVM_TX) revert WrongReceiptKind();
@@ -369,6 +593,8 @@ contract Bond {
             bytes32 txh = pr.data.requestBody.transactionHash;
             if (txh <= lastTx) revert UnorderedTxs();
             lastTx = txh;
+            ids[i] = txh;
+            if (pr.data.votingRound < minRound) minRound = pr.data.votingRound;
             if (txh != leaf.ref || pr.data.sourceId != leaf.sourceId) revert ProofDoesNotMatchClaim();
             IEVMTransaction.ResponseBody calldata rb = pr.data.responseBody;
             if (rb.status != 1) revert TxNotSuccessful();
@@ -379,6 +605,7 @@ contract Bond {
             if (v == 0 || v != leaf.amount) revert ProofDoesNotMatchClaim();
             spent += v;
         }
+        _consumeCommitment(KIND_BUDGET_ERC20, mandateId, keccak256(abi.encode(ids)), salt, minRound);
         if (spent <= m.budget) revert WithinBudget();
 
         emit BudgetOverrunProven(mandateId, spent, m.budget, n, msg.sender, amount);
@@ -402,7 +629,11 @@ contract Bond {
 
     /// @notice Accuse a bonded agent of a deed with no anchored receipt behind it.
     /// @param proof FDC EVMTransaction proof that the mandate's agent really made this transaction
-    function accuseUnanchoredDeed(uint256 mandateId, IEVMTransaction.Proof calldata proof)
+    /// @param salt  the secret from the commitment made before the attestation was requested
+    ///        (`kind = KIND_UNANCHORED_DEED`, digest over the single deed's tx hash). The accusation
+    ///        is gated, not `resolveAccusation`: the accusation is what publishes the case, and the
+    ///        reward follows `a.challenger` rather than whoever resolves it, so resolving stays open.
+    function accuseUnanchoredDeed(uint256 mandateId, IEVMTransaction.Proof calldata proof, bytes32 salt)
         external
         payable
         returns (uint256 id)
@@ -425,6 +656,7 @@ contract Bond {
         bytes32 txh = proof.data.requestBody.transactionHash;
         if (accused[mandateId][txh]) revert AlreadyAccused();
         accused[mandateId][txh] = true;
+        _consumeCommitment(KIND_UNANCHORED_DEED, mandateId, _one(txh), salt, proof.data.votingRound);
 
         id = nextAccusationId++;
         accusations[id] = Accusation({
@@ -449,6 +681,12 @@ contract Bond {
     ) external {
         Accusation storage a = accusations[accusationId];
         if (a.challenger == address(0) || a.closed) revert AccusationClosed();
+        // The accusation is about an EVM deed, so only an EVM-deed receipt answers it. Every other
+        // path that reads a leaf pins its kind; this one did not. No exploit follows from the gap
+        // — the agent controls its own leaves and a correct-kind one is no harder to anchor — but
+        // an invariant present in one path and absent in its twin is exactly how this repo has
+        // grown holes before, so the twin gets the check.
+        if (leaf.kind != Receipts.KIND_EVM_TX) revert WrongReceiptKind();
         if (leaf.mandateId != a.mandateId || leaf.ref != a.txHash) revert WrongDeed();
 
         AnchorLog.Episode memory ep = log.episode(a.mandateId, episodeIndex);
@@ -495,10 +733,13 @@ contract Bond {
 
     /// @param asset address(0) to sum native transaction value; otherwise the ERC-20 whose
     ///        `Transfer` events out of the agent are summed (the x402 case).
+    /// @param salt the secret from the commitment made before the attestations were requested
+    ///        (`kind = KIND_UNDER_REPORTED`, digest over the deeds' tx hashes in this same order)
     function challengeUnderReportedSpend(
         uint256 mandateId,
         address asset,
-        IEVMTransaction.Proof[] calldata fdcProofs
+        IEVMTransaction.Proof[] calldata fdcProofs,
+        bytes32 salt
     ) external {
         if (slashed[mandateId]) revert AlreadySlashed();
         uint256 amount = bondOf[mandateId];
@@ -513,12 +754,16 @@ contract Bond {
 
         uint256 proven;
         bytes32 lastTx;
+        bytes32[] memory ids = new bytes32[](n);
+        uint64 minRound = type(uint64).max;
         for (uint256 i = 0; i < n; i++) {
             IEVMTransaction.Proof calldata pr = fdcProofs[i];
             if (!fdc().verifyEVMTransaction(pr)) revert FdcProofInvalid();
             bytes32 txh = pr.data.requestBody.transactionHash;
             if (txh <= lastTx) revert UnorderedTxs();
             lastTx = txh;
+            ids[i] = txh;
+            if (pr.data.votingRound < minRound) minRound = pr.data.votingRound;
             IEVMTransaction.ResponseBody calldata rb = pr.data.responseBody;
             if (rb.status != 1) revert TxNotSuccessful();
             if (rb.timestamp < m.validFrom || rb.timestamp > m.validUntil) revert ClaimOutsideProvenRange();
@@ -529,6 +774,8 @@ contract Bond {
                 proven += _erc20OutflowFrom(rb.events, asset, m.agent);
             }
         }
+
+        _consumeCommitment(KIND_UNDER_REPORTED, mandateId, keccak256(abi.encode(ids)), salt, minRound);
 
         uint256 recorded = meter.spent(mandateId);
         if (proven <= recorded) revert TallyAgrees();

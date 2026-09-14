@@ -8,6 +8,8 @@ import {Bond} from "../src/Bond.sol";
 import {SpendMeter} from "../src/SpendMeter.sol";
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
 import {IEVMTransaction} from "@flarenetwork/flare-periphery-contracts/coston2/IEVMTransaction.sol";
+import {ProtocolsV2Interface} from "@flarenetwork/flare-periphery-contracts/coston2/ProtocolsV2Interface.sol";
+import {MockProtocolsV2} from "./Rounds.sol";
 
 contract MockFdcMeter {
     bool public verdict = true;
@@ -29,6 +31,7 @@ contract SpendMeterTest is Test {
     Bond bond;
     SpendMeter meter;
     MockFdcMeter mock;
+    MockProtocolsV2 rounds;
 
     address principal = makeAddr("principal");
     address agent = makeAddr("agent");
@@ -41,6 +44,9 @@ contract SpendMeterTest is Test {
     uint256 constant EACH = 1 ether;
     uint256 constant BUDGET = 4 ether;
 
+    uint64 constant COMMIT_LEAD = 10 minutes;
+    bytes32 constant SALT = keccak256("the watcher's salt");
+
     uint256 mandateId;
 
     function setUp() public {
@@ -48,7 +54,11 @@ contract SpendMeterTest is Test {
         anchorLog = new AnchorLog(reg);
         mock = new MockFdcMeter();
         meter = new SpendMeter(reg);
-        bond = new Bond(reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours, meter);
+        rounds = new MockProtocolsV2();
+        bond = new Bond(
+            reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours, meter,
+            COMMIT_LEAD, ProtocolsV2Interface(address(rounds))
+        );
         reg.setBond(address(bond));
         vm.warp(1_800_000_000);
 
@@ -95,6 +105,34 @@ contract SpendMeterTest is Test {
     function _bundle(uint256 k, bool erc20) internal view returns (IEVMTransaction.Proof[] memory ps) {
         ps = new IEVMTransaction.Proof[](k);
         for (uint256 i = 0; i < k; i++) ps[i] = _proof(i, EACH, erc20);
+    }
+
+    /// @dev The deed ids a commitment must name: the bundle's tx hashes, in the order supplied.
+    function _ids(IEVMTransaction.Proof[] memory ps) internal pure returns (bytes32[] memory ids) {
+        ids = new bytes32[](ps.length);
+        for (uint256 i = 0; i < ps.length; i++) ids[i] = ps[i].data.requestBody.transactionHash;
+    }
+
+    /// @dev Put `who`'s commitment `commitLead` in the past and start the bundle's lowest voting
+    ///      round NOW. A finalised round cannot begin in the future, so a harness that put the
+    ///      round start ahead of `block.timestamp` would sail past `ClockDrift`. Time ends where
+    ///      it started, so the proofs stay inside the mandate window.
+    function _armAged(address who, uint256 mid, IEVMTransaction.Proof[] memory ps, uint64 age) internal {
+        uint64 t = uint64(block.timestamp);
+        uint64 minRound = type(uint64).max;
+        for (uint256 i = 0; i < ps.length; i++) {
+            if (ps[i].data.votingRound < minRound) minRound = ps[i].data.votingRound;
+        }
+        vm.warp(t - age);
+        bond.commitChallenge(
+            bond.commitmentFor(who, mid, bond.KIND_UNDER_REPORTED(), bond.deedsDigest(_ids(ps)), SALT)
+        );
+        vm.warp(t);
+        rounds.setRoundStart(minRound, t);
+    }
+
+    function _arm(address who, uint256 mid, IEVMTransaction.Proof[] memory ps) internal {
+        _armAged(who, mid, ps, COMMIT_LEAD);
     }
 
     // --- the brake: structuring refused before it completes ---
@@ -154,8 +192,9 @@ contract SpendMeterTest is Test {
         meter.note(mandateId, EACH);
         vm.stopPrank();
 
+        _arm(challenger, mandateId, _bundle(5, true));
         vm.prank(challenger);
-        bond.challengeUnderReportedSpend(mandateId, token, _bundle(5, true));
+        bond.challengeUnderReportedSpend(mandateId, token, _bundle(5, true), SALT);
 
         assertTrue(bond.slashed(mandateId));
         assertFalse(reg.isLive(mandateId));
@@ -166,8 +205,9 @@ contract SpendMeterTest is Test {
     function test_underReportedSpend_slashes_native() public {
         vm.prank(effector);
         meter.note(mandateId, EACH);
+        _arm(challenger, mandateId, _bundle(3, false));
         vm.prank(challenger);
-        bond.challengeUnderReportedSpend(mandateId, address(0), _bundle(3, false));
+        bond.challengeUnderReportedSpend(mandateId, address(0), _bundle(3, false), SALT);
         assertTrue(bond.slashed(mandateId));
     }
 
@@ -176,9 +216,10 @@ contract SpendMeterTest is Test {
         vm.startPrank(effector);
         for (uint256 i = 0; i < 5; i++) meter.note(mandateId, EACH);
         vm.stopPrank();
+        _arm(challenger, mandateId, _bundle(5, true));
         vm.prank(challenger);
         vm.expectRevert(Bond.TallyAgrees.selector);
-        bond.challengeUnderReportedSpend(mandateId, token, _bundle(5, true));
+        bond.challengeUnderReportedSpend(mandateId, token, _bundle(5, true), SALT);
     }
 
     /// A mandate nobody meters never promised a tally, so it cannot have broken one.
@@ -193,7 +234,7 @@ contract SpendMeterTest is Test {
         bond.post{value: 1 ether}(other);
         vm.prank(challenger);
         vm.expectRevert(Bond.NotMetered.selector);
-        bond.challengeUnderReportedSpend(other, token, _bundle(5, true));
+        bond.challengeUnderReportedSpend(other, token, _bundle(5, true), SALT);
     }
 
     /// Without exclusivity an outflow from the agent may be none of this mandate's business.
@@ -210,7 +251,7 @@ contract SpendMeterTest is Test {
         bond.post{value: 1 ether}(other);
         vm.prank(challenger);
         vm.expectRevert(Bond.NotExclusive.selector);
-        bond.challengeUnderReportedSpend(other, token, _bundle(5, true));
+        bond.challengeUnderReportedSpend(other, token, _bundle(5, true), SALT);
     }
 
     function test_revert_duplicateDeedInBundle() public {
@@ -218,7 +259,7 @@ contract SpendMeterTest is Test {
         ps[2] = ps[1];
         vm.prank(challenger);
         vm.expectRevert(Bond.UnorderedTxs.selector);
-        bond.challengeUnderReportedSpend(mandateId, token, ps);
+        bond.challengeUnderReportedSpend(mandateId, token, ps, SALT);
     }
 
     function test_revert_deedOutsideMandateWindow() public {
@@ -226,7 +267,7 @@ contract SpendMeterTest is Test {
         ps[1].data.responseBody.timestamp = uint64(block.timestamp - 1);
         vm.prank(challenger);
         vm.expectRevert(Bond.ClaimOutsideProvenRange.selector);
-        bond.challengeUnderReportedSpend(mandateId, token, ps);
+        bond.challengeUnderReportedSpend(mandateId, token, ps, SALT);
     }
 
     function test_revert_nativeDeedByAnotherAddress() public {
@@ -234,13 +275,55 @@ contract SpendMeterTest is Test {
         ps[0].data.responseBody.sourceAddress = makeAddr("someone else");
         vm.prank(challenger);
         vm.expectRevert(Bond.NotAgentTx.selector);
-        bond.challengeUnderReportedSpend(mandateId, address(0), ps);
+        bond.challengeUnderReportedSpend(mandateId, address(0), ps, SALT);
     }
 
     function test_revert_whenFdcRejectsTheProof() public {
         mock.setVerdict(false);
         vm.prank(challenger);
         vm.expectRevert(Bond.FdcProofInvalid.selector);
-        bond.challengeUnderReportedSpend(mandateId, token, _bundle(3, true));
+        bond.challengeUnderReportedSpend(mandateId, token, _bundle(3, true), SALT);
+    }
+
+    // --- commit–reveal over a sequence (SPEC 6.7) ---
+
+    /// The digest names the exact ordered set of deeds. Committing to five and revealing three is
+    /// a different case, which is what makes blind pre-commitment useless on the multi-deed paths:
+    /// the committer has to have found the sequence first.
+    function test_revert_commitmentForADifferentSetOfDeeds() public {
+        vm.prank(effector);
+        meter.note(mandateId, EACH);
+        _arm(challenger, mandateId, _bundle(5, true)); // committed to five deeds
+        vm.prank(challenger);
+        vm.expectRevert(Bond.NoCommitment.selector);
+        bond.challengeUnderReportedSpend(mandateId, token, _bundle(3, true), SALT); // revealed three
+    }
+
+    /// The deadline is set by the LOWEST voting round in the bundle, not the highest. Otherwise one
+    /// freshly requested proof would launder a commitment made after the rest of the case was public.
+    function test_revert_oneFreshProofDoesNotLaunderALateCommitment() public {
+        vm.prank(effector);
+        meter.note(mandateId, EACH);
+        IEVMTransaction.Proof[] memory ps = _bundle(3, true);
+        ps[1].data.votingRound = 500; // one proof requested much later than the others
+
+        // round 0 — the lowest — began one second too late for this commitment; round 500 did not.
+        _armAged(challenger, mandateId, ps, COMMIT_LEAD - 1);
+        vm.prank(challenger);
+        vm.expectRevert(Bond.CommittedTooLate.selector);
+        bond.challengeUnderReportedSpend(mandateId, token, ps, SALT);
+    }
+
+    /// The counterpart: give the LOWEST round the full lead and the same bundle lands. Separate
+    /// test because re-arming inside one would be a no-op — `commitChallenge` keeps the earliest.
+    function test_oneFreshProofIsFineOnceTheLowestRoundHasTheLead() public {
+        vm.prank(effector);
+        meter.note(mandateId, EACH);
+        IEVMTransaction.Proof[] memory ps = _bundle(3, true);
+        ps[1].data.votingRound = 500;
+        _armAged(challenger, mandateId, ps, COMMIT_LEAD);
+        vm.prank(challenger);
+        bond.challengeUnderReportedSpend(mandateId, token, ps, SALT);
+        assertTrue(bond.slashed(mandateId));
     }
 }

@@ -7,6 +7,7 @@ import {AnchorLog} from "../src/AnchorLog.sol";
 import {Bond} from "../src/Bond.sol";
 import {SpendMeter} from "../src/SpendMeter.sol";
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
+import {ProtocolsV2Interface} from "@flarenetwork/flare-periphery-contracts/coston2/ProtocolsV2Interface.sol";
 
 /// Usage (Coston2):
 ///   forge script script/Deploy.s.sol --rpc-url coston2 --broadcast --private-key $PK
@@ -18,8 +19,21 @@ contract Deploy is Script {
         // 24 h in production; RESPONSE_WINDOW lets a testnet deployment show the full loop in one sitting.
         uint64 responseWindow = uint64(vm.envOr("RESPONSE_WINDOW", uint256(24 hours)));
         uint64 anchorGrace = uint64(vm.envOr("ANCHOR_GRACE", uint256(1 hours)));
+        // How much older than its evidence round a challenge commitment must be. 10 min in
+        // production (see Bond.commitLead); COMMIT_LEAD lets a demo run finish in one sitting.
+        uint64 commitLead = uint64(vm.envOr("COMMIT_LEAD", uint256(10 minutes)));
         SpendMeter meter = new SpendMeter(reg);
-        Bond bond = new Bond(reg, anchorLog, IFdcVerification(address(0)), responseWindow, anchorGrace, meter); // FDC via ContractRegistry
+        // FDC and the voting-round clock both resolved via ContractRegistry.
+        Bond bond = new Bond(
+            reg,
+            anchorLog,
+            IFdcVerification(address(0)),
+            responseWindow,
+            anchorGrace,
+            meter,
+            commitLead,
+            ProtocolsV2Interface(address(0))
+        );
         // Only this Bond may revoke on a proven violation. Set once, by the deployer.
         reg.setBond(address(bond));
         vm.stopBroadcast();
@@ -31,5 +45,7 @@ contract Deploy is Script {
         console.log("registry.bond:  ", reg.bond());
         console.log("responseWindow: ", bond.responseWindow());
         console.log("anchorGrace:    ", bond.anchorGrace());
+        console.log("commitLead:     ", bond.commitLead());
+        console.log("ProtocolsV2:    ", address(bond.protocols()));
     }
 }

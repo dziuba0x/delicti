@@ -13,11 +13,14 @@
 #            each corroborated by FDC EVMTransaction + Transfer event (witness 2).
 #   verdict: sum 5 > budget 4 → Bond.challengeBudgetOverrunERC20 → slash.
 #
+# v0.8: the challenge is committed before any attestation is requested (SPEC §6.7).
+#
 # Requires: cast, curl, python3, node; a flario checkout at FLARIO_DIR with
 # `npm run build` done and the mandate-gate commit applied; .env with
 # PRIVATE_KEY, COSTON2_RPC, VERIFIER_URL, VERIFIER_API_KEY, DA_URL.
 set -euo pipefail
 cd "$(dirname "$0")/.."; set -a; . ./.env; set +a
+. scripts/lib/commit.sh
 RPC=$COSTON2_RPC
 FLARIO_DIR=${FLARIO_DIR:-../flario}
 REG=${REG:-0x1e85be1CD6D499f5E8AE12C6Fa1336949188FbB7}
@@ -53,8 +56,8 @@ echo "== 2. $N paid MCP calls through flario (agent → server → settlement �
   DELICTI_REGISTRY=$REG DELICTI_REQUIRE_MANDATE=1 \
   MANDATE_ID=$MID N=$N OUT_DIR="$OUT/x402" npx tsx scripts/x402-agent.ts )
 
-echo "== 3. normalize → anchor → FDC request (Transfer event inside the proof)"
-declare -a TXS REQS ROUNDS
+echo "== 3. normalize → anchor"
+declare -a TXS REQS ROUNDS LOGIDXS
 for i in $(seq 0 $((N-1))); do
   R="$OUT/x402/receipt$i.json"
   [ -f "$R" ] || { echo "missing $R — the server refused or errored; abort"; exit 1; }
@@ -64,14 +67,29 @@ for i in $(seq 0 $((N-1))); do
   python3 tools/delicti.py normalize "$R" > $OUT/leaf$i.json
   LH=$(python3 -c "import json;print(json.load(open('$OUT/leaf$i.json'))['leafHash'])")
   cast send $LOG "anchor(uint256,bytes32,uint64)" $MID $LH 1 --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
+  TXS[$i]=$TXH; LOGIDXS[$i]=$LOGIDX
+  echo "   deed $i: settle=$TXH logIndex=$LOGIDX leaf=${LH:0:14}"
+done
+
+ORDER=$(python3 -c "import sys;t=sys.argv[1:];print(' '.join(str(i) for i in sorted(range(len(t)),key=lambda i:int(t[i],16))))" "${TXS[@]}")
+SORTED=""; for i in $ORDER; do SORTED+="${TXS[$i]} "; done
+
+echo "== 3b. commit the challenge (SPEC §6.7), then wait out commitLead"
+delicti_commit $BOND 3 $MID "$SORTED"
+HONEST_SALT=$DELICTI_SALT
+delicti_wait_lead $BOND $T0 $DUR
+
+echo "== 3c. FDC request per settlement (Transfer event inside the proof)"
+for i in $(seq 0 $((N-1))); do
+  TXH=${TXS[$i]}; LOGIDX=${LOGIDXS[$i]}
   BODY=$(printf '{"attestationType":"%s","sourceId":"%s","requestBody":{"transactionHash":"%s","requiredConfirmations":"1","provideInput":false,"listEvents":true,"logIndices":["%s"]}}' "$ATYPE" "$SRC" "$TXH" "$LOGIDX")
   REQ=$(curl -s -m 60 -X POST "$VERIFIER_URL/verifier/flr/EVMTransaction/prepareRequest" -H "X-API-KEY: $VERIFIER_API_KEY" -H "Content-Type: application/json" -d "$BODY" | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['status']=='VALID',d;print(d['abiEncodedRequest'])")
   FEE=$(cast call $FEECFG "getRequestFee(bytes)(uint256)" $REQ --rpc-url $RPC | awk '{print $1}')
   STX=$(cast send $HUB "requestAttestation(bytes)" $REQ --value $FEE --private-key $PRIVATE_KEY --rpc-url $RPC --json)
   SBN=$(echo "$STX" | python3 -c "import sys,json;print(int(json.load(sys.stdin)['blockNumber'],16))")
   STS=$(cast block $SBN --rpc-url $RPC --json | python3 -c "import sys,json;print(int(json.load(sys.stdin)['timestamp'],16))")
-  TXS[$i]=$TXH; REQS[$i]=$REQ; ROUNDS[$i]=$(( (STS - T0) / DUR ))
-  echo "   deed $i: settle=$TXH logIndex=$LOGIDX leaf=${LH:0:14} round=${ROUNDS[$i]}"
+  REQS[$i]=$REQ; ROUNDS[$i]=$(( (STS - T0) / DUR ))
+  echo "   deed $i: round=${ROUNDS[$i]}"
 done
 
 echo "== 4. DA layer: $N proofs with events"
@@ -89,11 +107,10 @@ for i in $(seq 0 $((N-1))); do
 done
 
 echo "== 5. challengeBudgetOverrunERC20 — $N × 1 mUSDT0 > 4 mUSDT0"
-ORDER=$(python3 -c "import sys;t=sys.argv[1:];print(' '.join(str(i) for i in sorted(range(len(t)),key=lambda i:int(t[i],16))))" "${TXS[@]}")
 IDX="["; LS="["; PS="["; PRS="["
 for i in $ORDER; do IDX+="$i,"; LS+="$(python3 -c "import json;print(json.load(open('$OUT/leaf$i.json'))['_tuple'])"),"; PS+="[],"; PRS+="(${MPS[$i]},${DATAS[$i]}),"; done
 IDX="${IDX%,}]"; LS="${LS%,}]"; PS="${PS%,}]"; PRS="${PRS%,}]"
-TI="${T:1:-1}"; SIG="challengeBudgetOverrunERC20(uint256,address,uint256[],(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256)[],bytes32[][],(bytes32[],$TI)[])"
-cast send $BOND "$SIG" $MID $TOKEN "$IDX" "$LS" "$PS" "$PRS" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
+TI="${T:1:-1}"; SIG="challengeBudgetOverrunERC20(uint256,address,uint256[],(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256)[],bytes32[][],(bytes32[],$TI)[],bytes32)"
+cast send $BOND "$SIG" $MID $TOKEN "$IDX" "$LS" "$PS" "$PRS" "$HONEST_SALT" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
 echo "   bondOf=$(cast call $BOND 'bondOf(uint256)(uint256)' $MID --rpc-url $RPC) slashed=$(cast call $BOND 'slashed(uint256)(bool)' $MID --rpc-url $RPC) mandateLive=$(cast call $REG 'isLive(uint256)(bool)' $MID --rpc-url $RPC)"
 echo "receipts (from the flario server) + leaves kept in $OUT"

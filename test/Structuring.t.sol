@@ -9,6 +9,8 @@ import {SpendMeter} from "../src/SpendMeter.sol";
 import {Receipts} from "../src/Receipts.sol";
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
 import {IEVMTransaction} from "@flarenetwork/flare-periphery-contracts/coston2/IEVMTransaction.sol";
+import {ProtocolsV2Interface} from "@flarenetwork/flare-periphery-contracts/coston2/ProtocolsV2Interface.sol";
+import {MockProtocolsV2} from "./Rounds.sol";
 
 contract MockFdcEvm {
     bool public verdict = true;
@@ -29,6 +31,7 @@ contract StructuringTest is Test {
     Bond bond;
     SpendMeter meter;
     MockFdcEvm mock;
+    MockProtocolsV2 rounds;
 
     address principal = makeAddr("principal");
     address agent = makeAddr("agent");
@@ -41,6 +44,9 @@ contract StructuringTest is Test {
     uint256 constant EACH = 1 ether;
     uint256 constant BUDGET = 4 ether;
 
+    uint64 constant COMMIT_LEAD = 10 minutes;
+    bytes32 constant SALT = keccak256("the watcher's salt");
+
     uint256 mandateId;
     Receipts.Leaf[] leaves;
     bytes32[] hashes;
@@ -50,7 +56,11 @@ contract StructuringTest is Test {
         anchorLog = new AnchorLog(reg);
         mock = new MockFdcEvm();
         meter = new SpendMeter(reg);
-        bond = new Bond(reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours, meter);
+        rounds = new MockProtocolsV2();
+        bond = new Bond(
+            reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours, meter,
+            COMMIT_LEAD, ProtocolsV2Interface(address(rounds))
+        );
         reg.setBond(address(bond));
         vm.warp(1_800_000_000);
 
@@ -120,11 +130,30 @@ contract StructuringTest is Test {
         }
     }
 
+    /// @dev Put `who`'s commitment over this exact bundle `commitLead` in the past and start its
+    ///      lowest voting round NOW — the tightest arrangement the reveal accepts. A finalised
+    ///      round cannot begin in the future (`ClockDrift`), and time ends where it started, so
+    ///      the deeds stay inside the mandate window.
+    function _arm(uint8 kind, address who, IEVMTransaction.Proof[] memory pr) internal {
+        bytes32[] memory ids = new bytes32[](pr.length);
+        uint64 minRound = type(uint64).max;
+        for (uint256 i = 0; i < pr.length; i++) {
+            ids[i] = pr[i].data.requestBody.transactionHash;
+            if (pr[i].data.votingRound < minRound) minRound = pr[i].data.votingRound;
+        }
+        uint64 t = uint64(block.timestamp);
+        vm.warp(t - bond.commitLead());
+        bond.commitChallenge(bond.commitmentFor(who, mandateId, kind, bond.deedsDigest(ids), SALT));
+        vm.warp(t);
+        rounds.setRoundStart(minRound, t);
+    }
+
     function test_salami_fiveSmallDeedsExceedBudget_slash() public {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) =
             _bundle(5);
+        _arm(bond.KIND_BUDGET_NATIVE(), challenger, pr);
         vm.prank(challenger);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
         assertTrue(bond.slashed(mandateId));
         assertEq(bond.owed(principal), 9 ether);
         assertEq(bond.owed(challenger), 1 ether);
@@ -134,9 +163,10 @@ contract StructuringTest is Test {
     function test_fourDeeds_withinBudget_revert() public {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) =
             _bundle(4);
+        _arm(bond.KIND_BUDGET_NATIVE(), challenger, pr);
         vm.prank(challenger);
         vm.expectRevert(Bond.WithinBudget.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     function test_revert_duplicateDeedSmuggledIn() public {
@@ -148,7 +178,7 @@ contract StructuringTest is Test {
         pr[4] = _evmProof(3);
         vm.prank(challenger);
         vm.expectRevert(Bond.UnorderedTxs.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     function test_revert_txNotByAgent() public {
@@ -157,7 +187,7 @@ contract StructuringTest is Test {
         pr[2].data.responseBody.sourceAddress = makeAddr("someone-else");
         vm.prank(challenger);
         vm.expectRevert(Bond.NotAgentTx.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     function test_revert_worldDisagreesWithReceipt() public {
@@ -166,7 +196,7 @@ contract StructuringTest is Test {
         pr[1].data.responseBody.value = EACH / 2; // chain says half of what the receipt claims
         vm.prank(challenger);
         vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     /// A cumulative budget covers the mandate's life. Deeds from before it must not count,
@@ -177,7 +207,46 @@ contract StructuringTest is Test {
         pr[2].data.responseBody.timestamp = uint64(block.timestamp - 1);
         vm.prank(challenger);
         vm.expectRevert(Bond.ClaimOutsideProvenRange.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+    }
+
+    // --- commit–reveal (SPEC 6.7) on the flagship path: the salami challenge ---
+
+    /// The structuring challenge is the one whose calldata is worth copying: five proofs, a proven
+    /// overrun, and a 10% reward for whoever lands it. A parasite that lifts it out of the mempool
+    /// and commits only once the case is public gets nothing.
+    function test_revert_copiedSalamiCalldataWithALateCommitment() public {
+        address parasite = makeAddr("mempool parasite");
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) =
+            _bundle(5);
+        _arm(bond.KIND_BUDGET_NATIVE(), challenger, pr);
+
+        bytes32[] memory ids = new bytes32[](5);
+        for (uint256 i = 0; i < 5; i++) ids[i] = pr[i].data.requestBody.transactionHash;
+        // the attestation requests have landed, so the case is public: the best a copier can do is
+        // commit now, and now is the moment the evidence round began
+        bond.commitChallenge(
+            bond.commitmentFor(parasite, mandateId, bond.KIND_BUDGET_NATIVE(), bond.deedsDigest(ids), SALT)
+        );
+
+        vm.prank(parasite);
+        vm.expectRevert(Bond.CommittedTooLate.selector);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+
+        vm.prank(challenger);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        assertEq(bond.owed(challenger), 1 ether);
+        assertEq(bond.owed(parasite), 0);
+    }
+
+    /// A native-path commitment is not an ERC-20-path commitment, even over the same deeds.
+    function test_revert_commitmentFromTheOtherBudgetPath() public {
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) =
+            _bundle(5);
+        _arm(bond.KIND_BUDGET_ERC20(), challenger, pr); // committed to the wrong kind
+        vm.prank(challenger);
+        vm.expectRevert(Bond.NoCommitment.selector);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
 }
@@ -212,8 +281,9 @@ contract StructuringERC20Test is StructuringTest {
 
     function test_erc20_salami_slash() public {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
+        _arm(bond.KIND_BUDGET_ERC20(), challenger, pr);
         vm.prank(challenger);
-        bond.challengeBudgetOverrunERC20(mandateId, token, idx, ls, paths, pr);
+        bond.challengeBudgetOverrunERC20(mandateId, token, idx, ls, paths, pr, SALT);
         assertTrue(bond.slashed(mandateId));
     }
 
@@ -222,14 +292,14 @@ contract StructuringERC20Test is StructuringTest {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
         vm.prank(challenger);
         vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     function test_erc20_revert_wrongTokenEmitter() public {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
         vm.prank(challenger);
         vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrunERC20(mandateId, makeAddr("other-token"), idx, ls, paths, pr);
+        bond.challengeBudgetOverrunERC20(mandateId, makeAddr("other-token"), idx, ls, paths, pr, SALT);
     }
 
     function test_erc20_revert_transferFromSomeoneElse() public {
@@ -237,6 +307,6 @@ contract StructuringERC20Test is StructuringTest {
         pr[2].data.responseBody.events[0].topics[1] = bytes32(uint256(uint160(makeAddr("stranger"))));
         vm.prank(challenger);
         vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrunERC20(mandateId, token, idx, ls, paths, pr);
+        bond.challengeBudgetOverrunERC20(mandateId, token, idx, ls, paths, pr, SALT);
     }
 }

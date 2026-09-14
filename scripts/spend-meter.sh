@@ -4,13 +4,16 @@
 #
 #   MODE=brake       (default, ~1 min, no FDC): four slices fit, the fifth is refused by an
 #                    eth_call against the meter — not slashed four minutes later.
-#   MODE=underreport (~5-15 min): the effector records two of five settlements and stays quiet
-#                    about the rest; FDC proves five; challengeUnderReportedSpend → slash.
+#   MODE=underreport (~5-15 min + commitLead): the effector records two of five settlements and
+#                    stays quiet about the rest; FDC proves five; challengeUnderReportedSpend →
+#                    slash. v0.8: committed before the attestations are requested (SPEC §6.7), so
+#                    the run waits out Bond.commitLead() between the deeds and the FDC requests.
 #
 # Requires: cast, curl, python3; .env with PRIVATE_KEY, COSTON2_RPC, VERIFIER_URL,
 # VERIFIER_API_KEY, DA_URL; REG / LOG / BOND / METER pointing at a v0.7 deployment.
 set -euo pipefail
 cd "$(dirname "$0")/.."; set -a; . ./.env; set +a
+. scripts/lib/commit.sh
 RPC=$COSTON2_RPC
 REG=${REG:?set REG to the v0.7 MandateRegistry}
 BOND=${BOND:?set BOND to the v0.7 Bond}
@@ -71,6 +74,20 @@ for i in 0 1 2 3 4; do
   else
     echo "   deed $i: $TXH  → NOT recorded (this is the lie)"
   fi
+done
+echo "   meter says spent=$(cast call $METER 'spent(uint256)(uint256)' $MID --rpc-url $RPC | awk '{print $1}'), the world will say $((5*EACH))"
+
+ORDER=$(python3 -c "import sys;t=sys.argv[1:];print(' '.join(str(i) for i in sorted(range(len(t)),key=lambda i:int(t[i],16))))" "${TXS[@]}")
+SORTED=""; for i in $ORDER; do SORTED+="${TXS[$i]} "; done
+
+echo "== 2b. commit the challenge against the tally (SPEC §6.7), then wait out commitLead"
+delicti_commit $BOND 5 $MID "$SORTED"
+HONEST_SALT=$DELICTI_SALT
+delicti_wait_lead $BOND $T0 $DUR
+
+echo "== 2c. FDC EVMTransaction requested for all five deeds"
+for i in 0 1 2 3 4; do
+  TXH=${TXS[$i]}
   BODY=$(printf '{"attestationType":"%s","sourceId":"%s","requestBody":{"transactionHash":"%s","requiredConfirmations":"1","provideInput":false,"listEvents":false,"logIndices":[]}}' "$ATYPE" "$SRC" "$TXH")
   REQ=$(curl -s -m 60 -X POST "$VERIFIER_URL/verifier/flr/EVMTransaction/prepareRequest" -H "X-API-KEY: $VERIFIER_API_KEY" -H "Content-Type: application/json" -d "$BODY" | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['status']=='VALID',d;print(d['abiEncodedRequest'])")
   FEE=$(cast call $FEECFG "getRequestFee(bytes)(uint256)" $REQ --rpc-url $RPC | awk '{print $1}')
@@ -78,8 +95,8 @@ for i in 0 1 2 3 4; do
   SBN=$(echo "$STX" | python3 -c "import sys,json;print(int(json.load(sys.stdin)['blockNumber'],16))")
   STS=$(cast block $SBN --rpc-url $RPC --json | python3 -c "import sys,json;print(int(json.load(sys.stdin)['timestamp'],16))")
   REQS[$i]=$REQ; ROUNDS[$i]=$(( (STS - T0) / DUR ))
+  echo "   deed $i: round=${ROUNDS[$i]}"
 done
-echo "   meter says spent=$(cast call $METER 'spent(uint256)(uint256)' $MID --rpc-url $RPC | awk '{print $1}'), the world will say $((5*EACH))"
 
 echo "== 3. DA layer: five proofs"
 T="((bytes32,bytes32,uint64,uint64,(bytes32,uint16,bool,bool,uint32[]),(uint64,uint64,address,bool,address,uint256,bytes,uint8,(uint32,address,bytes32[],bytes,bool)[])))"
@@ -100,8 +117,7 @@ for i in 0 1 2 3 4; do
 done
 
 echo "== 4. challengeUnderReportedSpend — the world shows more than the tally admits"
-ORDER=$(python3 -c "import sys;t=sys.argv[1:];print(' '.join(str(i) for i in sorted(range(len(t)),key=lambda i:int(t[i],16))))" "${TXS[@]}")
 PRS="["; for i in $ORDER; do PRS+="(${MPS[$i]},${DATAS[$i]}),"; done; PRS="${PRS%,}]"
 TI="${T:1:-1}"
-cast send $BOND "challengeUnderReportedSpend(uint256,address,(bytes32[],$TI)[])" $MID 0x0000000000000000000000000000000000000000 "$PRS" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
+cast send $BOND "challengeUnderReportedSpend(uint256,address,(bytes32[],$TI)[],bytes32)" $MID 0x0000000000000000000000000000000000000000 "$PRS" "$HONEST_SALT" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
 echo "   bondOf=$(cast call $BOND 'bondOf(uint256)(uint256)' $MID --rpc-url $RPC) slashed=$(cast call $BOND 'slashed(uint256)(bool)' $MID --rpc-url $RPC) mandateLive=$(cast call $REG 'isLive(uint256)(bool)' $MID --rpc-url $RPC)"

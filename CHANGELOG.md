@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (v0.7.0-dev) — the fast half
+## v0.7.0 — 2026-09-14 — the fast half
 
 Everything in DELICTI so far was evidence after the fact. An FDC attestation takes ~90 s per voting round and minutes end to end, so a structuring attack **succeeded** and was only punished later; the §7 brake could not see it, because it judges one call at a time and every slice is inside its own limit. The gap was never patience — it was arithmetic. Only a cumulative total can refuse the next slice.
 
@@ -9,6 +9,12 @@ Everything in DELICTI so far was evidence after the fact. An FDC attestation tak
 - `scripts/spend-meter.sh` — `MODE=brake` (four slices fit, the fifth is refused by one `eth_call`, no FDC involved) and `MODE=underreport` (two of five settlements recorded, FDC proves five, slash).
 - SPEC v0.4: §7.1 (the meter), §6.5 (under-reported spend), and §10 updated to say plainly that real-time prevention now exists but only where an effector keeps the tally.
 - 56 tests (was 42). Slither at medium+: three findings, all false positives.
+
+**Live on Coston2 (2026-09-14).** Deployment: `MandateRegistry` `0x3b53a646E5450F4b525e30F2aA59be95AF77657b`, `AnchorLog` `0xd5EECFAFE96fE9eec7E126F4B318DB139c9396bf`, `SpendMeter` `0xD64465B95A1E83DC292AcB1e5b66dD416ADeA55C`, `Bond` `0x3557Ae63bC3868165E605685b45506116E2CE1e6`.
+
+- Structuring refused in real time (mandate #1): four slices fit, the fifth rejected by `wouldExceed` — no FDC round, no transaction, bond untouched.
+- `challengeUnderReportedSpend` (mandate #2): tally said 0.02, the FDC proved 0.05 → slash `0x53664b9f186353821ae8be87e75279d0de6619fd3326f3751974a616fb0b20ff` (280,836 gas).
+- The §6.4 accusation loop, finally demonstrated in both directions on the same deployment: silence → slash `0x432ca347481f7a279e377b648c5ad2b776f871b38ed0068b515383d63e72490b` (118,872 gas, mandate #5); answered in time → dismissed, accuser's stake forfeited, `0x1bbcaf3f0a371facd17b8922d522e59917120f0055a2cca6954c3d38ba6ae48b` (76,075 gas, mandate #4).
 
 ## Unreleased (v0.6.0-dev) — the deed nobody wrote down
 

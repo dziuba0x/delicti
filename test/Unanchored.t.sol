@@ -163,6 +163,60 @@ contract UnanchoredTest is Test {
         bond.resolveAccusation(id);
     }
 
+    // --- v0.9: two holes the invariant campaign found, both about an accusation left open ---
+
+    function _accuseTx(address who, bytes32 txh) internal returns (uint256 id) {
+        IEVMTransaction.Proof memory p = _proof();
+        p.data.requestBody.transactionHash = txh;
+        _arm(who, mandateId, txh);
+        vm.deal(who, 1 ether);
+        vm.prank(who);
+        id = bond.accuseUnanchoredDeed{value: STAKE}(mandateId, p, SALT);
+    }
+
+    /// Two silent deeds, two accusers. The first resolution takes the bond; the second used to
+    /// revert `AlreadySlashed` for ever, and since answering needs a leaf that by hypothesis does
+    /// not exist, the second accuser's stake could never leave the contract.
+    function test_secondAccusersStakeIsNotStrandedByTheFirstSlash() public {
+        vm.warp(deedTime + GRACE + 1);
+        address second = makeAddr("second watcher");
+        uint256 a1 = _accuseTx(challenger, TXH);
+        uint256 a2 = _accuseTx(second, keccak256("another silent deed"));
+        vm.warp(block.timestamp + RESPONSE + 1);
+
+        bond.resolveAccusation(a1);
+        assertTrue(bond.slashed(mandateId));
+        bond.resolveAccusation(a2); // must close, not revert
+        assertEq(bond.owed(second), STAKE, "the second accuser gets its stake back, and no reward");
+        assertEq(bond.openAccusations(mandateId), 0);
+
+        uint256 before = second.balance;
+        vm.prank(second);
+        bond.claim();
+        assertEq(second.balance - before, STAKE);
+    }
+
+    /// The response window is as long as the cooling window, so an accusation filed late in the
+    /// cooling window used to outlive the collateral: the principal withdrew, the resolution
+    /// reverted `NothingToSlash`, the agent walked and the stake was stranded on top.
+    function test_revert_withdrawWhileAnAccusationIsOpen() public {
+        MandateRegistry.Mandate memory m = reg.get(mandateId);
+        vm.warp(uint256(m.validUntil) + 23 hours); // dead, one hour of cooling window left
+        _arm(challenger, mandateId, TXH);
+        vm.prank(challenger);
+        uint256 id = bond.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
+
+        vm.warp(block.timestamp + 2 hours); // cooling window over, response window wide open
+        vm.prank(principal);
+        vm.expectRevert(Bond.AccusationOpen.selector);
+        bond.withdraw(mandateId, payable(principal));
+
+        vm.warp(block.timestamp + RESPONSE);
+        bond.resolveAccusation(id);
+        assertTrue(bond.slashed(mandateId));
+        assertEq(bond.owed(challenger), STAKE + 1 ether);
+    }
+
     /// Anchoring after the accusation is a cover story, not a receipt.
     function test_revert_retroactiveAnchorIsNoDefence() public {
         uint256 id = _accuse();

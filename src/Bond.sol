@@ -233,6 +233,7 @@ contract Bond {
     error WrongAsset();
     error NotThisBond();
     error NotAcknowledged();
+    error AccusationOpen();
 
     constructor(
         MandateRegistry _registry,
@@ -269,6 +270,11 @@ contract Bond {
     mapping(uint256 => Accusation) public accusations;
     // mandateId => tx hash => already accused (one open question per deed)
     mapping(uint256 => mapping(bytes32 => bool)) public accused;
+    /// @notice Accusations against a mandate that are neither answered nor resolved yet. While this
+    ///         is non-zero the bond cannot be withdrawn: the response window (24 h) is as long as
+    ///         the cooling window, so an accusation filed late in the cooling window would otherwise
+    ///         outlive the collateral it was filed against.
+    mapping(uint256 => uint256) public openAccusations;
 
     function fdc() public view returns (IFdcVerification) {
         if (address(_fdcOverride) != address(0)) return _fdcOverride;
@@ -402,6 +408,7 @@ contract Bond {
         if (registry.isLive(mandateId)) revert MandateStillLive();
         uint64 death = registry.deathTime(mandateId);
         if (death == type(uint64).max || block.timestamp < uint256(death) + COOLING_WINDOW) revert CoolingWindow();
+        if (openAccusations[mandateId] != 0) revert AccusationOpen();
         uint256 amt = bondOf[mandateId];
         bondOf[mandateId] = 0;
         emit BondWithdrawn(mandateId, to, amt);
@@ -679,6 +686,7 @@ contract Bond {
         _consumeCommitment(KIND_UNANCHORED_DEED, mandateId, _one(txh), salt, proof.data.votingRound);
 
         id = nextAccusationId++;
+        openAccusations[mandateId]++;
         accusations[id] = Accusation({
             mandateId: mandateId,
             txHash: txh,
@@ -716,6 +724,7 @@ contract Bond {
         if (!Merkle.verify(merkleProof, ep.root, leafHash)) revert LeafNotAnchored();
 
         a.closed = true;
+        openAccusations[a.mandateId]--;
         owed[registry.get(a.mandateId).principal] += ACCUSATION_STAKE;
         emit AccusationAnswered(accusationId, a.mandateId, leafHash, episodeIndex);
     }
@@ -725,14 +734,19 @@ contract Bond {
         Accusation storage a = accusations[accusationId];
         if (a.challenger == address(0) || a.closed) revert AccusationClosed();
         if (block.timestamp <= a.deadline) revert ResponseWindowOpen();
-        if (slashed[a.mandateId]) revert AlreadySlashed();
-        uint256 amount = bondOf[a.mandateId];
-        if (amount == 0) revert NothingToSlash();
 
+        // The accusation stood: nobody produced the receipt. That is settled whatever has happened
+        // to the bond in the meantime, so closing it and returning the stake must never revert.
+        // Until v0.9 this path reverted `AlreadySlashed` when the mandate had been slashed by
+        // another challenge while the window was open — and `answerAccusation` needs a leaf that by
+        // hypothesis does not exist, so the accuser's stake stayed in this contract for ever.
+        // Found by the invariant campaign (`invariant_everyExpiredAccusationCanBeClosed`).
         a.closed = true;
+        openAccusations[a.mandateId]--;
         owed[a.challenger] += ACCUSATION_STAKE; // stake back
+        uint256 amount = slashed[a.mandateId] ? 0 : bondOf[a.mandateId];
         emit UnanchoredDeedProven(accusationId, a.mandateId, a.txHash, a.challenger, amount);
-        _slashTo(a.mandateId, amount, a.challenger);
+        if (amount != 0) _slashTo(a.mandateId, amount, a.challenger);
     }
 
     // -----------------------------------------------------------------------------------

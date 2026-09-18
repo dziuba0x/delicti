@@ -21,7 +21,24 @@ Not on the list for this release, and the reason pinning the asset was not enoug
 
 Also not on the list, and the precondition for "no redeploy of the core". Until v0.8 the registry had one set-once `bond`, chosen by whoever deployed it. Every new challenge type therefore needed a new Bond, a new Bond needed a new registry, and a new registry orphaned every mandate ever committed — this release would have been the sixth time. Each mandate now names its own consequence contract. That contract can revoke that mandate and nothing else, which is a power its principal already holds, so nothing is delegated that was not already there. `setBond`, the global `bond` and the deployer are gone: the registry has no privileged key at all. `Bond.post` refuses a mandate that names a different Bond (`NotThisBond`), because collateral there could never be slashed — `revokeByBond` would revert every time — and would only *look* like a bond to a counterparty reading the chain.
 
-96 tests (was 82).
+### Invariants and fuzzing — and what they found
+
+The repo had 82 unit tests and no property-based ones. A unit test says "this attack, which we thought of, fails"; every hole this project has had was an *ordering* nobody had thought of. `test/invariant/` drives the four contracts through a handler that can do everything a participant can — commit, delegate (deliberately unclamped, so most attempts to widen must be refused), acknowledge, post, act, anchor or stay silent, commit to a challenge, replay someone else's commitment bytes, reveal early, reveal on time, accuse, answer, resolve, revoke, withdraw, claim, wait — against an FDC that verifies everything, because the handler only builds proofs of deeds it really simulated. After every call:
+
+- the Bond's balance equals bonds + credits + open accusation stakes, to the wei, and nothing ever leaves that did not come in;
+- `claim()` pays exactly `owed`, zeroes it, and cannot be repeated on the same balance;
+- a live commitment keeps the timestamp of its first submission whoever replays it, and a spent one is gone;
+- a mandate is never slashed for more than the bond it was slashed from; a slashed mandate is dead; a mandate dead for good never comes back and never anchors;
+- a live child has a live parent all the way up, dies no later than its parent, and is never wider in budget, window or unit;
+- every accusation whose window has closed can be closed by someone; an open accusation always has collateral behind it.
+
+`test_handlerReachesEveryDeepState` exists because a handler is code and can be wrong in the boring direction — every call refused, every invariant vacuously true. The first version of this one was: a getter in an argument list ate the `vm.prank` and no accusation ever landed (the same pitfall `claude/22` lists). `test/Fuzz.t.sol` adds two stateless if-and-only-if properties: a child mandate is accepted iff it only narrows, and the commit gate opens iff `at + lead <= roundStart <= at + TTL` and `roundStart <= now`. Default campaign 256 × 80 (~25 s, runs in CI); 1500 × 200 = 300,000 calls run clean before this commit.
+
+**Found by the campaign: an accuser's stake could be stranded for ever.** `resolveAccusation` reverted `AlreadySlashed` when the mandate had been slashed by another path while the response window was open — two watchers accusing two silent deeds is enough. `answerAccusation` needs a leaf that by hypothesis does not exist, so nothing could ever close the second accusation and its 0.1 FLR stayed in the contract. Shrunk by the fuzzer to: accuse, under-reported-spend slash, wait, resolve → `0x37233762`. Resolution now always closes, always returns the stake, and slashes only if there is still something to slash. Regression: `test_secondAccusersStakeIsNotStrandedByTheFirstSlash`.
+
+**Found while fixing it, not by the fuzzer: collateral could walk out from under an open accusation.** The response window (24 h) is as long as the cooling window (24 h). An accusation filed in the last hour of the cooling window was still open when `withdraw` became legal; the principal withdrew, resolution reverted `NothingToSlash`, the agent walked, and the stake was stranded on top. `withdraw` now refuses while `openAccusations[mandateId] != 0`. The random campaign did not reach this ordering on its own, which is worth saying: the handler was taught it (`lateAccusationThenWithdraw`), and with the fix removed the invariant now fails within one default run. Regression: `test_revert_withdrawWhileAnAccusationIsOpen`. What this costs is stated in SPEC §10: an accuser can hold a bond for one response window per real, unanchored deed, at 0.1 FLR and one attestation each.
+
+112 tests, 11 of them invariants.
 
 ## v0.8.0 — 2026-09-14 — the reward belongs to whoever looked
 

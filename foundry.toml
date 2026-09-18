@@ -16,3 +16,11 @@ remappings = [
 [rpc_endpoints]
 coston2 = "https://coston2-api.flare.network/ext/C/rpc"
 flare = "https://flare-api.flare.network/ext/C/rpc"
+
+[invariant]
+runs = 256
+depth = 80
+fail_on_revert = false
+
+[fuzz]
+runs = 512

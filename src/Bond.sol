@@ -1027,10 +1027,10 @@ contract Bond {
         bytes32 sourceId,
         bool strict
     ) internal returns (uint256 taken) {
-        if (!slashed[mandateId]) {
+        bool first = !slashed[mandateId];
+        if (first) {
             slashed[mandateId] = true;
             slashBase[mandateId] = bondOf[mandateId];
-            registry.revokeByBond(mandateId); // the first proven breach ends the mandate
         }
         uint256 target = _penalty(slashBase[mandateId], budget, _accumulate(kind, mandateId, severity));
         uint256 done = slashedAmount[mandateId];
@@ -1038,6 +1038,7 @@ contract Bond {
         if (taken > bondOf[mandateId]) taken = bondOf[mandateId];
         if (taken == 0) {
             if (strict) revert NothingNew();
+            if (first) registry.revokeByBond(mandateId);
             return 0;
         }
         slashedAmount[mandateId] = done + taken;
@@ -1054,6 +1055,9 @@ contract Bond {
         owed[m.principal] += taken - reward;
         verdictsAgainst[m.agent]++;
         takenFrom[m.agent] += taken;
+        // The first proven breach ends the mandate. Last, after every write: the registry is this
+        // project's own code and calls nothing back, but effects-before-interactions costs nothing.
+        if (first) registry.revokeByBond(mandateId);
         emit Verdict(mandateId, beneficiary, kind, severity, severityOf[mandateId], budget, taken, reward, slashedAmount[mandateId]);
     }
 }

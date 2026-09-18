@@ -169,6 +169,41 @@ and the commitment is deleted, single-use.
 
 **Cost.** One extra transaction per challenge (~31k gas) and one round-timing read at reveal, plus the wait between committing and requesting. The wait is affordable because `COOLING_WINDOW` keeps the bond in place for 24 h.
 
+### 6.8 Deeds on XRPL (`proveAgentRef`, `challengeBudgetOverrunPayment`) (v0.9)
+
+Until v0.9 every cumulative challenge required `EVMTransaction` proofs and compared `sourceAddress` with `m.agent`, an EVM address. The only XRPL challenge was the negative one (§6.1): a payment that did *not* happen. A deed actually done on XRPL could not be summed against a budget at all.
+
+**Who the agent is on XRPL.** A mandate on a non-EVM source carries `agentRef`: the FDC *standard address hash* of the agent's account — for XRPL, `keccak256` of the r-address string. Like `agent`, it is written by the principal, and `acknowledge` (§3) is the EVM key speaking; it shows nothing about who holds the XRPL key. `proveAgentRef(mandateId, proof)` closes that: an FDC `Payment` attestation of a successful payment *from* that account whose standard payment reference (one memo, 32 bytes) equals
+
+```
+agentRefChallenge(mandateId) = keccak256(abi.encode("DELICTI/agentRef", chainid, registry, mandateId))
+```
+
+Any amount, any destination; permissionless, because the proof speaks and not the caller. The reference binds chain, registry and mandate, so a confirmation cannot be replayed for another mandate or another deployment. **`post` refuses collateral for a mandate with an `agentRef` until this has been done** — otherwise a principal with a sock-puppet `agent` names a stranger's busy account, anchors leaves mirroring its ordinary payments, and is paid out of a third party's bond.
+
+**The challenge.** N kind-3 leaves, each in an anchored root, each with a *positive* `Payment` proof: `sourceId` equals the mandate's and the leaf's; `sourceAddressHash == agentRef`; `status == 0`; `oneToOne`; `blockTimestamp` inside the mandate's window; `receivingAddressHash`, `receivedAmount` and `standardPaymentReference` equal the leaf's destination, amount and `ref`. Transaction ids strictly increasing. `Σ receivedAmount > budget`. Commitment kind `6`, deed ids = the transaction ids in that order.
+
+Three choices that are not obvious:
+
+- **`receivedAmount` is summed, not `spentAmount`.** On XRPL `spentAmount` is `Amount + Fee`. The EVM paths sum `value` and ignore gas; a budget an agent can overrun by twelve drops of fee while delivering exactly what it was allowed to is a trap, not a limit. Fees are therefore *not* counted, and §10 says so.
+- **Leaves must be pairwise distinct.** On the EVM paths the leaf's `ref` *is* the transaction hash, so strictly increasing hashes imply distinct leaves. Here `ref` is the payment reference, so two different transactions can match one receipt. One receipt accounts for one payment: the agent's claim is what it wrote down, and no more.
+- **`oneToOne` is required.** Always true on XRPL. On the UTXO sources the same attestation type serves, a transaction can have several funders and "the source" is whichever input the requester pointed at; this path refuses those rather than reason about them. It is designed for, and tested against, XRPL semantics only.
+
+**What this does not see, stated exactly.** The `Payment` attestation type covers XRPL transactions of type `Payment` and nothing else (FDC specification: *"The payment summary on XRPL is applicable only for transactions of type `Payment`"*). `OfferCreate`, `EscrowCreate`, `AMMDeposit`, `CheckCash`, and every issued-currency (IOU) movement — RLUSD included — are invisible to this challenge. An agent whose XRPL deeds are payments in XRP is covered; an agent that trades is not. See §6.9.
+
+### 6.9 Roadmap: XRPL deeds that are not payments — and the condition it waits on
+
+`BalanceDecreasingTransaction` is the FDC type that could cover the rest: for XRPL it attests that a given account's XRP balance fell in a given transaction, *or* that the account is among its signers, and reports the signed balance difference. What is established and what is not, as of 2026-09-19:
+
+- *Established from the published interface* (`IBalanceDecreasingTransaction`, `@flarenetwork/flare-periphery-contracts` 0.1.52): XRPL is supported; the request names the account by standard address hash; `spentAmount` is the balance difference **including the fee** and may be negative; nothing in the interface restricts the transaction type.
+- *Established from the FDC documentation*: `standardPaymentReference` is *"the standard payment reference for `Payment` transactions, otherwise zero"* — wording that only makes sense if other types are attested.
+- *Read in the reference client, not verified against a live verifier*: `balanceDecreasingSummary` in Flare's multi-chain client computes the summary from the transaction's `AffectedNodes` with no check on `TransactionType`, unlike `paymentSummary`, which has one.
+- ***Not established*:** that the verifiers attestation providers actually run answer `VALID` for an `OfferCreate` or an `EscrowCreate` on XRPL; and, under XLS-75 delegation, **which account counts as the signer** — `Account` or `Delegate`. No live attestation of either has been made by this project.
+
+**The condition.** A `challengeBudgetOverrunBalance` is specified the day a `BalanceDecreasingTransaction` proof for a non-`Payment` XRPL transaction has been obtained on Coston2 and verified by `FdcVerification` — and not before. Two design consequences are already known: the sum would be over *balance decrease including fees* (a different quantity from §6.8, so a mandate must say which it promises), and the blind spot no attestation type closes remains: when the agent's resting offer is taken by someone else, the agent's balance changes inside **another party's transaction**, which no request keyed to the agent's own transactions will ever return.
+
+Also roadmap, for the same path: the newer `XRPPayment` attestation type (id `0x08`) carries a `proofOwner` and the destination tag. It answers on Coston2's `FdcVerification` today and has a mainnet fee configured; it is not used here because nothing in this project has yet exercised it end to end.
+
 ## 7. The effector-side brake (optional, recommended)
 
 FDC finality is minutes; DELICTI is evidence after the fact. But the effector is the final common pathway and can read the chain in milliseconds. A DELICTI-aware effector therefore MAY, before producing the effect, check `MandateRegistry.isLive(mandateId)` and that the requesting agent *is* the mandated agent, and refuse otherwise. A deed with no mandate may be refused outright. flario implements this (`DELICTI_REGISTRY`, `DELICTI_REQUIRE_MANDATE`). The brake cannot see structuring — that remains the challenge's job — but it prevents the two cheapest failure modes: acting under a dead mandate and borrowing someone else's.

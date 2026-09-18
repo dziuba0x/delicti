@@ -7,6 +7,7 @@ import {AnchorLog} from "../../src/AnchorLog.sol";
 import {Bond} from "../../src/Bond.sol";
 import {SpendMeter} from "../../src/SpendMeter.sol";
 import {Receipts} from "../../src/Receipts.sol";
+import {IPayment} from "@flarenetwork/flare-periphery-contracts/coston2/IPayment.sol";
 import {IEVMTransaction} from "@flarenetwork/flare-periphery-contracts/coston2/IEVMTransaction.sol";
 import {IReferencedPaymentNonexistence} from
     "@flarenetwork/flare-periphery-contracts/coston2/IReferencedPaymentNonexistence.sol";
@@ -17,6 +18,10 @@ import {MockProtocolsV2} from "../Rounds.sol";
 ///      is the ORDER of calls, which is where every hole this repo has had so far was found.
 contract CredulousFdc {
     function verifyEVMTransaction(IEVMTransaction.Proof calldata) external pure returns (bool) {
+        return true;
+    }
+
+    function verifyPayment(IPayment.Proof calldata) external pure returns (bool) {
         return true;
     }
 

@@ -40,6 +40,19 @@ The repo had 82 unit tests and no property-based ones. A unit test says "this at
 
 112 tests, 11 of them invariants.
 
+### Deeds on XRPL can be summed (`challengeBudgetOverrunPayment`, `proveAgentRef`)
+
+Every cumulative challenge needed `EVMTransaction` proofs and compared `sourceAddress` with an EVM address. The only XRPL challenge was the negative one — a payment that did not happen. A deed actually done on XRPL could not be counted against a budget at all, which disqualified DELICTI as infrastructure for the ledger it is supposed to serve.
+
+- **`challengeBudgetOverrunPayment`** — positive FDC `Payment` attestations against kind-3 leaves: the payment exists, succeeded, came from the account the mandate names (`agentRef`, standard address hash), inside the window, to the destination, for the amount and with the reference the receipt claims; the sum convicts. Commitment kind 6.
+- **`receivedAmount` is summed, not `spentAmount`.** On XRPL the latter includes the fee. Counting it would let an agent be convicted by twelve drops while delivering exactly its budget; the EVM paths ignore gas for the same reason.
+- **Leaves must be pairwise distinct**, a check the EVM paths do not need: there the leaf's `ref` is the transaction hash, here it is the payment reference, so two transactions can match one receipt.
+- **`proveAgentRef`** — `agentRef` is written by the principal, and `acknowledge` is the EVM key speaking. The XRPL account confirms a mandate by making any payment whose memo is `agentRefChallenge(mandateId)`; `post` refuses collateral until it has. Without it, naming a stranger's busy XRPL account was the same attack as naming a stranger's EVM address.
+- **Checked before designing, as asked.** `Payment` covers XRPL transactions of type `Payment` only — confirmed in the FDC specification. For `BalanceDecreasingTransaction` the interface does not restrict the type, the documentation's wording implies other types are attested, and the reference client's `balanceDecreasingSummary` has no type check where `paymentSummary` has one. That is three indications and zero live attestations, so nothing is built on it: SPEC §6.9 is a roadmap entry whose condition is named — a verified `BalanceDecreasingTransaction` proof for a non-`Payment` XRPL transaction on Coston2 — together with the blind spot no attestation type closes (a resting offer taken inside someone else's transaction).
+- Live checks made while designing: `verifyPayment` and the newer `verifyXRPPayment` both answer on Coston2's `FdcVerification`; mainnet `FdcRequestFeeConfigurations` returns **20 FLR per request** for `Payment`, `BalanceDecreasingTransaction`, `XRPPayment` and `EVMTransaction` alike. A five-deed challenge therefore costs its challenger 100 FLR in attestations before gas — the number the next section is sized against.
+
+129 tests.
+
 ## v0.8.0 — 2026-09-14 — the reward belongs to whoever looked
 
 Every challenge so far paid its 10 % to whoever landed the transaction. That is not the same as paying whoever found the violation, and the difference is not academic: a challenge cannot be assembled in secret, because `FdcHub.requestAttestation` is an on-chain call carrying the deed's transaction hash or payment reference in the clear, minutes ahead of the reveal. A parasite watching `FdcHub` therefore learns of every case before it can be filed, copies the finished calldata out of the mempool and outbids the gas — paying for no monitoring and no analysis. The honest watcher pays for both. The equilibrium number of real watchers is zero, and a consequence layer nobody watches is theatre.

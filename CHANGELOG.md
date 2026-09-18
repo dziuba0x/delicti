@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.9.0 — unreleased — what the budget is made of, and who agreed to it
+## v0.9.0 — 2026-09-19 — what the budget is made of, and who agreed to it
 
 Written for the three floors that are meant to stand on this one — a public score, a risk market, credentials issued on XRPL — and for the rule that none of them may require redeploying the core.
 
@@ -98,6 +98,10 @@ Test count, honestly: v0.8's "81" counted eight tests twice, because `Structurin
 ### Slither (0.11.6, medium and above, `src/` only)
 
 One real finding, fixed: `reentrancy-no-eth` in `_verdict` — `registry.revokeByBond` was called before `bondOf`, `slashedAmount` and `owed` were written. The registry is this project's own code and calls nothing back, so nothing was exploitable; but the mandate now names its consequence contract, which makes "the registry is trusted" an assumption about a pairing rather than about a deployment, and effects-before-interactions costs nothing. The call moved to the end. Remaining, all false positives: `incorrect-equality` on `revokedAt[id] == 0` (a deliberate never-revoked sentinel); `uninitialized-local` ×5 (`spent`, `proven`, `lastTx` — Solidity zero-initialises locals, and zero is the intended start); `unused-return` on `Deeds.requireAnchored` in the EVM overrun loop (it returns the leaf hash for `CorroborationLog`; the Bond's loop needs only the revert).
+
+### Executed on Coston2 (2026-09-19)
+
+Deployed (addresses in the README; no `setBond` step exists any more). `scripts/structuring.sh` against it: the v0.8 salami, reveal `0x7c4c3094585a4a1b5f473415d5cc39146a1b38def01b03030f65e3af5d8d8123` (531,447 gas) → `bondOf` 1 → **0.75**: a 25 % overrun, a 25 % penalty. Copier `0xe736229aac815212cee41b17df61af6d3bf812aba05ffaaaeec8c62728e2ef27` reverted `CommittedTooLate`. **Not executed live:** the XRPL `Payment` challenge, `AgentRefs.prove`, `CorroborationLog`, incremental verdicts, pro-rata withdrawal, and every other script against this deployment. The README says so in the same words.
 
 ## v0.8.0 — 2026-09-14 — the reward belongs to whoever looked
 

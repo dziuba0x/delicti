@@ -178,8 +178,11 @@ contract StructuringTest is Test {
         vm.prank(challenger);
         bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
         assertTrue(bond.slashed(mandateId));
-        assertEq(bond.owed(principal), 9 ether);
-        assertEq(bond.owed(challenger), 1 ether);
+        // v0.9: 5 spent under a budget of 4 is a 25% overrun: a quarter of the 10-ether bond
+        assertEq(bond.slashedAmount(mandateId), 2.5 ether);
+        assertEq(bond.bondOf(mandateId), 7.5 ether);
+        assertEq(bond.owed(principal), 2.25 ether);
+        assertEq(bond.owed(challenger), 0.25 ether);
         assertFalse(reg.isLive(mandateId));
     }
 
@@ -258,7 +261,7 @@ contract StructuringTest is Test {
 
         vm.prank(challenger);
         bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
-        assertEq(bond.owed(challenger), 1 ether);
+        assertEq(bond.owed(challenger), 0.25 ether);
         assertEq(bond.owed(parasite), 0);
     }
 
@@ -307,7 +310,7 @@ contract StructuringERC20Test is StructuringTest {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
         _arm(bond.KIND_BUDGET_ERC20(), challenger, pr);
         vm.prank(challenger);
-        bond.challengeBudgetOverrunERC20(mandateId, idx, ls, paths, pr, SALT);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
         assertTrue(bond.slashed(mandateId));
     }
 
@@ -328,21 +331,24 @@ contract StructuringERC20Test is StructuringTest {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
         vm.prank(challenger);
         vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrunERC20(mandateId, idx, ls, paths, pr, SALT);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
-    /// v0.9 — each path refuses a mandate denominated in the other kind of asset, before any proof.
-    function test_revert_pathDoesNotMatchMandateAsset() public {
-        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
-        vm.prank(challenger);
-        vm.expectRevert(Bond.WrongAsset.selector);
-        bond.challengeBudgetOverrunERC20(mandateId, idx, ls, paths, pr, SALT); // native mandate
-
+    /// v0.9 — there is one entry point, and what counts as a deed's value follows the mandate.
+    /// Native transfers presented against a token mandate carry no `Transfer` event of that token,
+    /// so they match no receipt; a garbage `assetKey` is refused outright.
+    function test_revert_deedsInTheWrongAssetForTheMandate() public {
         _setUpMandate(bytes32(uint256(uint160(token))));
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundle(5);
+        vm.prank(challenger);
+        vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT); // native proofs, token mandate
+
+        _setUpMandate(keccak256("not an address: some other source's asset id"));
         (idx, ls, paths, pr) = _bundle(5);
         vm.prank(challenger);
         vm.expectRevert(Bond.WrongAsset.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT); // ERC-20 mandate
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     /// v0.9 — a deed on another chain is not a deed under this mandate, whatever the leaf says.
@@ -363,6 +369,6 @@ contract StructuringERC20Test is StructuringTest {
         pr[2].data.responseBody.events[0].topics[1] = bytes32(uint256(uint160(makeAddr("stranger"))));
         vm.prank(challenger);
         vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrunERC20(mandateId, idx, ls, paths, pr, SALT);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 }

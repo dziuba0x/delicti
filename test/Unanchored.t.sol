@@ -140,8 +140,8 @@ contract UnanchoredTest is Test {
         assertTrue(bond.slashed(mandateId));
         assertFalse(reg.isLive(mandateId));
         // stake back + 10% of the bond, even though a stranger pressed the button
-        assertEq(bond.owed(challenger), STAKE + 1 ether);
-        assertEq(bond.owed(principal), 9 ether);
+        assertEq(bond.owed(challenger), STAKE + 0.25 ether); // 1 of a budget of 4: a quarter of the bond, 10% of that
+        assertEq(bond.owed(principal), 2.25 ether);
     }
 
     function test_answeringWithTheReceiptClosesIt() public {
@@ -187,13 +187,17 @@ contract UnanchoredTest is Test {
         bond.resolveAccusation(a1);
         assertTrue(bond.slashed(mandateId));
         bond.resolveAccusation(a2); // must close, not revert
-        assertEq(bond.owed(second), STAKE, "the second accuser gets its stake back, and no reward");
+        // v0.9: and it is paid, because a second silent deed is a second lie — additive severity.
+        // Each deed moved 1 under a budget of 4: the first verdict took 25% of the bond, the
+        // second raised the total to 50%, and each accuser earns 10% of what its own verdict took.
+        assertEq(bond.owed(second), STAKE + 0.25 ether, "stake back, plus 10% of the increment it proved");
+        assertEq(bond.slashedAmount(mandateId), 5 ether);
         assertEq(bond.openAccusations(mandateId), 0);
 
         uint256 before = second.balance;
         vm.prank(second);
         bond.claim();
-        assertEq(second.balance - before, STAKE);
+        assertEq(second.balance - before, STAKE + 0.25 ether);
     }
 
     /// The response window is as long as the cooling window, so an accusation filed late in the
@@ -214,7 +218,7 @@ contract UnanchoredTest is Test {
         vm.warp(block.timestamp + RESPONSE);
         bond.resolveAccusation(id);
         assertTrue(bond.slashed(mandateId));
-        assertEq(bond.owed(challenger), STAKE + 1 ether);
+        assertEq(bond.owed(challenger), STAKE + 0.25 ether); // 1 of a budget of 4: a quarter of the bond, 10% of that
     }
 
     /// Anchoring after the accusation is a cover story, not a receipt.
@@ -338,7 +342,7 @@ contract UnanchoredTest is Test {
         vm.warp(block.timestamp + RESPONSE + 1);
         vm.prank(parasite);
         bond.resolveAccusation(id);
-        assertEq(bond.owed(challenger), STAKE + 1 ether);
+        assertEq(bond.owed(challenger), STAKE + 0.25 ether); // 1 of a budget of 4: a quarter of the bond, 10% of that
         assertEq(bond.owed(parasite), 0);
     }
 }

@@ -104,7 +104,7 @@ echo "== 4. challengeBudgetOverrunERC20 — 5 × 1 mUSDT0 > 4 mUSDT0"
 IDX="["; LS="["; PS="["; PRS="["
 for i in $ORDER; do IDX+="$i,"; LS+="$(python3 -c "import json;print(json.load(open('$OUT/leaf$i.json'))['_tuple'])"),"; PS+="[],"; PRS+="(${MPS[$i]},${DATAS[$i]}),"; done
 IDX="${IDX%,}]"; LS="${LS%,}]"; PS="${PS%,}]"; PRS="${PRS%,}]"
-TI="${T:1:-1}"; SIG="challengeBudgetOverrunERC20(uint256,uint256[],(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256)[],bytes32[][],(bytes32[],$TI)[],bytes32)"
+TI="${T:1:-1}"; SIG="challengeBudgetOverrun(uint256,uint256[],(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256)[],bytes32[][],(bytes32[],$TI)[],bytes32)"
 cast send $BOND "$SIG" $MID "$IDX" "$LS" "$PS" "$PRS" "$HONEST_SALT" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
 echo "   bondOf=$(cast call $BOND 'bondOf(uint256)(uint256)' $MID --rpc-url $RPC) slashed=$(cast call $BOND 'slashed(uint256)(bool)' $MID --rpc-url $RPC) mandateLive=$(cast call $REG 'isLive(uint256)(bool)' $MID --rpc-url $RPC)"
 echo "receipts + leaves kept in $OUT"

@@ -169,17 +169,19 @@ contract BondTest is Test {
         vm.prank(challenger);
         bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
 
-        assertEq(bond.bondOf(mandateId), 0);
+        // v0.9: proportional. The lie was about 1 XRP under a 5-XRP budget: 20% of the 10-ether bond.
+        assertEq(bond.bondOf(mandateId), 8 ether);
+        assertEq(bond.slashedAmount(mandateId), 2 ether);
         assertTrue(bond.slashed(mandateId));
         // credited, not pushed: both sides pull
-        assertEq(bond.owed(challenger), 1 ether); // 10%
-        assertEq(bond.owed(principal), 9 ether);  // the harmed party, not a calldata address
+        assertEq(bond.owed(challenger), 0.2 ether); // 10% of what the verdict took
+        assertEq(bond.owed(principal), 1.8 ether); // the harmed party, not a calldata address
         vm.prank(challenger);
         bond.claim();
         vm.prank(principal);
         bond.claim();
-        assertEq(challenger.balance - cBefore, 1 ether);
-        assertEq(principal.balance - pBefore, 9 ether);
+        assertEq(challenger.balance - cBefore, 0.2 ether);
+        assertEq(principal.balance - pBefore, 1.8 ether);
         assertFalse(reg.isLive(mandateId), "mandate revoked by bond");
         // anchoring under a revoked mandate is now refused
         vm.prank(agent);
@@ -227,7 +229,7 @@ contract BondTest is Test {
         vm.prank(challenger);
         bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
         vm.prank(challenger);
-        vm.expectRevert(Bond.AlreadySlashed.selector);
+        vm.expectRevert(Bond.LeafConsumed.selector); // the same lie does not pay twice
         bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
     }
 
@@ -611,7 +613,7 @@ contract BondTest is Test {
         // and the watcher who actually did the work still gets paid
         vm.prank(challenger);
         bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
-        assertEq(bond.owed(challenger), 1 ether);
+        assertEq(bond.owed(challenger), 0.2 ether);
         assertEq(bond.owed(parasite), 0);
     }
 
@@ -643,7 +645,7 @@ contract BondTest is Test {
         vm.warp(block.timestamp + uint256(rounds_) * dur);
         vm.prank(parasite);
         bond.challengeFalsePayment(mandateId, 0, leaf, _path(), later, SALT);
-        assertEq(bond.owed(parasite), 1 ether);
+        assertEq(bond.owed(parasite), 0.2 ether);
     }
 
     /// A voting round cannot have begun in the future. If Flare ever lengthens the voting epoch,

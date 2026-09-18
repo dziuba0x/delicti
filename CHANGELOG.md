@@ -53,6 +53,27 @@ Every cumulative challenge needed `EVMTransaction` proofs and compared `sourceAd
 
 129 tests.
 
+### Proportional slashing — and why "slashed at most once" had to go with it
+
+SPEC §10 admitted the slash was a step function: conditional on breaching at all, the optimal breach was the largest one available, and loss-given-default was 100 %, which no insurer will write. **The parameters first, as asked, and then what the list got wrong.**
+
+```
+P(S) = clamp( base × S / budget ,  base × 10 % ,  base )      taken = P(S_after) − already taken
+```
+
+- **Slope `base / budget`: no new constant.** It is the collateralisation ratio `k` the market already chooses (§8). Each unit of overrun costs `k` units of bond; with `k ≥ 1`, which §8 already tells a counterparty to demand, no overrun up to 100 % of the budget pays for itself. Any protocol-chosen slope would either be redundant with `k` or fight it.
+- **Ceiling = the bond**, reached at `overrun = budget`. Past that every further unit is free again — the step function is gone from the bottom of the curve and still there at the top, and only a larger bond moves it. SPEC §10 says so.
+- **Floor = 10 % of the bond.** Three of five verdicts are about a lie, and a lie about a small amount is not a small lie. 10 % because it is what the challenger's *entire* reward used to be: the smallest verdict still moves as much value as the smallest reward did.
+- **Challenger: attestation cost first, then 10 % of the rest.** "Make sure the reward still covers FDC and gas" cannot be met by a percentage alone once penalties shrink: read live from mainnet `FdcRequestFeeConfigurations` on 2026-09-19, **every attestation type this protocol uses costs 20 FLR per request**, so a five-deed salami costs its challenger 100 FLR before gas. The Bond reads that fee on-chain (`fdcCost`) — never hardcoded, same reasoning as the voting-round clock — and credits `n × fee`, capped at what the verdict took. The honest limit: the reward covers the cost *iff the verdict does*, i.e. iff `10 % × bond ≥ n × fee`. A 100-FLR bond is not worth watching, and now the chain says so in advance.
+
+**Where the list was wrong: proportional + "slashed at most once" is worse than the step function it replaces.** The agent convicts itself of the smallest case it can assemble, pays the floor, and the rest of the bond is shielded from the real case for ever. So severity *accumulates* and each verdict takes the difference. Nested kinds (overrun, under-reported) keep a high-water mark — the same five deeds plus a sixth is one overrun, not two; additive kinds (false payment, unanchored deed) sum, because `consumedLeaf` and `accused` already guarantee each is about a different receipt or transaction. The first verdict still revokes the mandate. A direct challenge that would take nothing reverts `NothingNew`. This also softens one of the two open limits of §6.7: a self-slash no longer takes the whole reward off the real watcher, only the floor's share of it (`test_selfSlashDoesNotShieldTheBond`).
+
+**Also not on the list, and forced by it: `depositOf`, pro-rata withdrawal.** A partial slash leaves a remainder. `post` did not record who paid and `withdraw` paid the principal, so a bond posted by an insurer was a free option for the agent's own side — `claude/22` had this as the precondition for the insurer story, and proportional slashing turns it from a corner case into the normal case. Each depositor now bears the same fraction of every verdict and takes back its own remainder after the cooling window; rounding favours the contract, and the last one out gets exactly the rest.
+
+**One loop where there were two.** `challengeBudgetOverrunERC20` is gone: once the asset is the mandate's there is nothing left for the caller to choose, so `challengeBudgetOverrun` reads what a deed's value *is* from the mandate (native `value`, or the token's `Transfer(agent → payee)`). Two copies of a loop is how `answerAccusation` came to miss a check its twin had — and the Bond was 78 bytes over EIP-170 with both. The commitment `kind` still distinguishes the two (2 native, 3 ERC-20).
+
+New: `BondLens` (stateless; `penaltyFor` — what a case would take, before paying for a single attestation), event `Verdict` on every verdict of every kind. Invariants updated: per mandate `posted = bonded + taken + withdrawn`; verdicts never exceed the bond they were measured on; a depositor never withdraws more than it posted, and exactly that if no verdict touched the mandate.
+
 ## v0.8.0 — 2026-09-14 — the reward belongs to whoever looked
 
 Every challenge so far paid its 10 % to whoever landed the transaction. That is not the same as paying whoever found the violation, and the difference is not academic: a challenge cannot be assembled in secret, because `FdcHub.requestAttestation` is an on-chain call carrying the deed's transaction hash or payment reference in the clear, minutes ahead of the reveal. A parasite watching `FdcHub` therefore learns of every case before it can be filed, copies the finished calldata out of the mempool and outbids the gas — paying for no monitoring and no analysis. The honest watcher pays for both. The equilibrium number of real watchers is zero, and a consequence layer nobody watches is theatre.

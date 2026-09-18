@@ -92,7 +92,7 @@ contract Invariants is Test {
         for (uint256 i = 0; i < h.mandateCount(); i++) books += bond.bondOf(h.mandates(i));
         for (uint256 i = 0; i < h.actorCount(); i++) books += bond.owed(h.actors(i));
         for (uint256 i = 0; i < h.accusationCount(); i++) {
-            (,,,,, bool closed) = bond.accusations(h.accusationIds(i));
+            (,,,,, bool closed,) = bond.accusations(h.accusationIds(i));
             if (!closed) books += bond.ACCUSATION_STAKE();
         }
         assertEq(address(bond).balance, books, "balance != bonds + credits + open stakes");
@@ -127,19 +127,29 @@ contract Invariants is Test {
 
     // ---------------------------------------------------------------- consequence
 
-    /// v0.8 semantics: a mandate is slashed at most once. (v0.9 [4] replaces this with a bound on
-    /// the total; see `invariant_slashNeverExceedsTheBondItWasTakenFrom`.)
-    function invariant_mandateSlashedAtMostOnce() public view {
+    /// v0.9 replaced "a mandate is slashed at most once" — which, combined with a proportional
+    /// penalty, would have let a trivial self-inflicted verdict shield the rest of the bond — with a
+    /// bound on the total: verdicts never take more than the bond as it stood at the first one, and
+    /// per mandate every wei is in exactly one place: still bonded, taken by verdicts, or withdrawn.
+    function invariant_verdictsNeverTakeMoreThanTheBondTheyWereMeasuredOn() public view {
         for (uint256 i = 0; i < h.mandateCount(); i++) {
-            assertLe(h.ghostSlashCount(h.mandates(i)), 1, "a mandate was slashed twice");
+            uint256 id = h.mandates(i);
+            assertLe(bond.slashedAmount(id), bond.slashBase(id), "verdicts took more than the base");
+            assertEq(h.ghostSlashedTotal(id), bond.slashedAmount(id), "the Bond's own tally of verdicts is wrong");
+            assertEq(
+                h.ghostPostedTo(id),
+                bond.bondOf(id) + bond.slashedAmount(id) + h.ghostWithdrawnFrom(id),
+                "per mandate: posted != bonded + taken + withdrawn"
+            );
+            if (!bond.slashed(id)) assertEq(bond.bondOf(id), bond.totalDeposits(id), "an unslashed bond is not 1:1 with its deposits");
         }
     }
 
-    function invariant_slashNeverExceedsTheBondItWasTakenFrom() public view {
-        for (uint256 i = 0; i < h.mandateCount(); i++) {
-            uint256 id = h.mandates(i);
-            assertLe(h.ghostSlashedTotal(id), h.ghostBondAtFirstSlash(id));
-        }
+    /// A depositor never takes out more than it put in, and takes out exactly that if no verdict
+    /// ever touched the mandate — whoever else posted, withdrew, or was slashed elsewhere.
+    function invariant_depositorsGetTheirOwnMoneyBackAndNoMore() public view {
+        assertFalse(h.withdrewMoreThanDeposited(), "a depositor withdrew more than it posted");
+        assertFalse(h.unslashedDepositorShortChanged(), "a depositor under an unslashed mandate did not get its deposit back");
     }
 
     /// A slashed mandate is dead, and a dead mandate never anchored anything.
@@ -191,7 +201,7 @@ contract Invariants is Test {
     /// mandate was slashed by another path. It can never have been quietly withdrawn from under it.
     function invariant_openAccusationIsNeverLeftWithoutCollateral() public view {
         for (uint256 i = 0; i < h.accusationCount(); i++) {
-            (uint256 mid,,,,, bool closed) = bond.accusations(h.accusationIds(i));
+            (uint256 mid,,,,, bool closed,) = bond.accusations(h.accusationIds(i));
             if (closed) continue;
             assertTrue(bond.bondOf(mid) > 0 || bond.slashed(mid), "bond withdrawn from under an open accusation");
         }
@@ -202,7 +212,7 @@ contract Invariants is Test {
     function invariant_everyExpiredAccusationCanBeClosed() public {
         for (uint256 i = 0; i < h.accusationCount(); i++) {
             uint256 aid = h.accusationIds(i);
-            (,,, uint64 deadline,, bool closed) = bond.accusations(aid);
+            (,,, uint64 deadline,, bool closed,) = bond.accusations(aid);
             if (closed || block.timestamp <= deadline) continue;
             uint256 snap = vm.snapshotState();
             try bond.resolveAccusation(aid) {}

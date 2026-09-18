@@ -73,6 +73,10 @@ contract Handler is Test {
     mapping(uint256 => uint256) public ghostBondAtFirstSlash;
     mapping(uint256 => uint256) public ghostSlashedTotal; // wei credited out of a mandate's bond
     mapping(uint256 => bool) public ghostEverDead; // a mandate that was seen dead
+    mapping(uint256 => uint256) public ghostPostedTo; // per mandate: in
+    mapping(uint256 => uint256) public ghostWithdrawnFrom; // per mandate: out through withdraw()
+    bool public withdrewMoreThanDeposited;
+    bool public unslashedDepositorShortChanged;
     bool public anchoredUnderDeadMandate;
     bool public deadMandateCameBack;
     bool public claimTwiceSucceeded;
@@ -237,6 +241,7 @@ contract Handler is Test {
         vm.prank(pr);
         bond.post{value: amount}(id);
         ghostPosted += amount;
+        ghostPostedTo[id] += amount;
     }
 
     // ------------------------------------------------------------------ bond in, bond out
@@ -248,18 +253,28 @@ contract Handler is Test {
         vm.prank(_actor(whoSeed));
         try bond.post{value: amount}(id) {
             ghostPosted += amount;
+            ghostPostedTo[id] += amount;
         } catch {}
     }
 
     function withdraw(uint256 seed, uint256 whoSeed) external {
         if (mandates.length == 0) return;
         uint256 id = _mandate(seed);
-        address who = _actor(whoSeed);
+        _withdraw(id, _actor(whoSeed));
+    }
+
+    function _withdraw(uint256 id, address who) internal {
+        uint256 dep = bond.depositOf(id, who);
+        bool wasSlashed = bond.slashed(id);
         uint256 before = who.balance;
         vm.prank(who);
         try bond.withdraw(id, payable(who)) {
-            ghostWithdrawn += who.balance - before;
+            uint256 got = who.balance - before;
+            ghostWithdrawn += got;
+            ghostWithdrawnFrom[id] += got;
             nWithdrawals++;
+            if (got > dep) withdrewMoreThanDeposited = true;
+            if (!wasSlashed && got != dep) unslashedDepositorShortChanged = true;
         } catch {}
     }
 
@@ -415,13 +430,7 @@ contract Handler is Test {
         _sweepLiveness();
         this.honestAccusation(deedSeed, whoSeed, salt);
         vm.warp(block.timestamp + 2 hours);
-        address pr = reg.get(id).principal;
-        uint256 before = pr.balance;
-        vm.prank(pr);
-        try bond.withdraw(id, payable(pr)) {
-            ghostWithdrawn += pr.balance - before;
-            nWithdrawals++;
-        } catch {}
+        _withdraw(id, reg.get(id).principal);
     }
 
     /// @notice Anyone replays someone else's commitment bytes: must change nothing.
@@ -525,7 +534,7 @@ contract Handler is Test {
     function answer(uint256 aSeed, uint256 whoSeed) external {
         if (accusationIds.length == 0) return;
         uint256 aid = accusationIds[aSeed % accusationIds.length];
-        (uint256 mid, bytes32 txh,,,,) = bond.accusations(aid);
+        (uint256 mid, bytes32 txh,,,,,) = bond.accusations(aid);
         for (uint256 i = 0; i < deeds.length; i++) {
             if (deeds[i].mandateId == mid && deeds[i].txh == txh && deeds[i].anchored) {
                 vm.prank(_actor(whoSeed));
@@ -540,7 +549,7 @@ contract Handler is Test {
     function resolve(uint256 aSeed, uint256 whoSeed) external {
         if (accusationIds.length == 0) return;
         uint256 aid = accusationIds[aSeed % accusationIds.length];
-        (uint256 mid,,,,,) = bond.accusations(aid);
+        (uint256 mid,,,,,,) = bond.accusations(aid);
         uint256 bondBefore = bond.bondOf(mid);
         vm.prank(_actor(whoSeed));
         try bond.resolveAccusation(aid) {

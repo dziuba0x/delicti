@@ -81,7 +81,7 @@ A **contradicted deed** is a class-A *negative*: the receipt is anchored and the
 
 ## 6. Challenges (v0.1)
 
-All challenges are permissionless, require both witnesses, and pay 10 % of the slashed bond to the challenger and the remainder **to the mandate's principal** — the harmed party of §1. Neither is pushed: both are credited and pulled with `claim()`, so a recipient that reverts on receive cannot make a mandate unslashable. A mandate is slashed at most once; a leaf is consumed at most once **per mandate**.
+All challenges are permissionless and require both witnesses. What a verdict takes is proportional to the size of the breach (§8.1); of that, the challenger is first made whole for its attestations and then earns 10 % of the rest, and the remainder goes **to the mandate's principal** — the harmed party of §1. Neither is pushed: both are credited and pulled with `claim()`, so a recipient that reverts on receive cannot make a mandate unslashable. The first verdict revokes the mandate; later verdicts can still take more, up to the bond as it stood at the first (§8.1). A leaf is consumed at most once **per mandate**.
 
 Three invariants exist because their absence was exploitable, and each has a regression test:
 
@@ -224,10 +224,28 @@ The read is free and instant; the write is one `SSTORE`. Against an FDC round of
 
 ## 8. Bond economics (v0.1, deliberately simple)
 
-- Anyone may post bond under a mandate: the agent, the operator, an insurer. Bond is in the chain's native asset in v0.1.
+- Anyone may post bond under a mandate: the agent, the operator, an insurer — provided the agent has acknowledged the mandate (§3), its `agentRef`, if any, has been proven (§6.8), and the mandate names this Bond. Bond is in the chain's native asset. **Deposits are recorded per depositor** and come back to whoever posted them, pro rata to what the verdicts left (§8.1).
 - Sizing is a market question, not a protocol constant. A rational counterparty should require `bond ≥ budget × k` for some `k ≥ 1`; the protocol does not enforce it and exposes the ratio for anyone to read.
-- Withdrawal only after the mandate is dead, nothing was slashed, and a **cooling window of 24 h** measured from `deathTime()` — the earliest death in the mandate's ancestry — has elapsed. The window is not decoration: a challenge is not instant (an on-chain FDC request, a voting round, a DA fetch, then the challenge), the principal is an authority in `revoke()`, and the FDC request itself announces the coming challenge minutes ahead. Without the window `revoke(); withdraw();` in one transaction emptied the bond, and measuring from the moment of death rather than from the withdrawal attempt is what stops an early revocation from shortening the runway.
-- Challenger reward is 10 %. It must be large enough to pay for FDC fees and gas (trivial on Flare) and small enough that the victim is made mostly whole.
+- Withdrawal only after the mandate is dead, no accusation against it is open, and a **cooling window of 24 h** measured from `deathTime()` — the earliest death in the mandate's ancestry — has elapsed. The window is not decoration: a challenge is not instant (an on-chain FDC request, a voting round, a DA fetch, then the challenge), the principal is an authority in `revoke()`, and the FDC request itself announces the coming challenge minutes ahead. Without the window `revoke(); withdraw();` in one transaction emptied the bond, and measuring from the moment of death rather than from the withdrawal attempt is what stops an early revocation from shortening the runway.
+- Challenger reward: the cost of its attestations, then 10 % of the rest of what the verdict took (§8.1).
+
+### 8.1 Proportional slashing (v0.9)
+
+Until v0.9 any proven breach took the whole bond. A step function makes the deed's optimal size, conditional on breaching at all, the largest one available, and makes loss-given-default 100 %, which nobody will insure.
+
+```
+P(S) = clamp( base × S / budget ,  base × 10 % ,  base )
+taken by a verdict = P(S_after) − (already taken)
+```
+
+`base` is the bond as it stood at the mandate's **first** verdict; `S` is the mandate's total proven severity, in the mandate's own unit (§3 pins it). Severity per verdict: the overrun (`spent − budget`); what the tally hid (`proven − recorded`); the amount of the payment that never existed; the value the unanchored deed moved.
+
+- **The slope is not a protocol constant.** It is `bond / budget` — the collateralisation ratio `k` the market already chose. Each unit of overrun costs `k` units of bond, so with `k ≥ 1`, which is what §8 tells a counterparty to require, no overrun up to 100 % of the budget pays for itself. At `S ≥ budget` the penalty is the whole bond: you cannot lose more than what is there, and beyond that point the step function is back (§10).
+- **The floor is 10 % of `base`.** Three of the five verdicts are about a *lie* — a payment that never existed, a deed nobody wrote down, a tally that under-reported — and a lie about a small amount is not a small lie. The floor is what that costs. It equals the challenger's whole reward under v0.8.
+- **Severity accumulates; a verdict is not a shield.** "Slashed at most once" plus a proportional penalty would have been worse than what it replaced: an agent could convict itself of the smallest case it could assemble, pay the floor, and thereby protect the rest of the bond from the real case. Instead every verdict takes the *difference* between the penalty for the new total and what was already taken. How severities combine depends on whether two verdicts can be about the same thing: **nested** kinds (overrun, under-reported spend) keep a high-water mark — five deeds and then the same five plus a sixth is one overrun, not two; **additive** kinds (false payment, unanchored deed) sum, because `consumedLeaf` and `accused` guarantee each verdict is about a different receipt or transaction. A direct challenge that would take nothing reverts `NothingNew`; resolving an accusation never reverts.
+- **The challenger is reimbursed for its attestations first.** Since FIP.16 an FDC request costs **20 FLR on mainnet** for every type this protocol uses (read from `FdcRequestFeeConfigurations` on 2026-09-19), so a five-deed case costs its challenger 100 FLR before gas. The Bond reads the current fee for the case's attestation type and source from Flare's own fee contract — the same way it reads the voting-round clock, and for the same reason: a constant would be wrong after the next governance vote — multiplies by the number of proofs supplied, and credits that (capped at what the verdict took) before the 10 %. Where the fee cannot be read the cost is zero and nothing reverts.
+- **What that does and does not guarantee.** The reward covers the cost of proving a case *iff the verdict does*: `min-slash = 10 % × bond ≥ n × fee`. A 1,000-FLR bond is worth watching for a five-deed salami; a 100-FLR bond is not, and the chain says so before anyone spends a wei (`BondLens.penaltyFor`, `Bond.fdcCost`). The protocol cannot pay out more than a verdict takes, so it does not pretend to.
+- **The remainder goes back to whoever posted it**, each depositor bearing the same fraction of every verdict (`deposit × bondOf / totalDeposits`, rounded down; the last one out gets exactly the rest). Until v0.9 `post` did not record the depositor and `withdraw` paid the principal, so a bond posted by an insurer was a free option for the agent's own side.
 
 ## 9. Privacy
 
@@ -244,7 +262,11 @@ Nothing sensitive is on-chain: mandate envelopes and receipts live off-chain; th
 - It cannot make the agent later than its own watchers. The party with the earliest knowledge of a violation is the one committing it, so an agent (or a fresh address belonging to it) can hold a commitment over its own deeds and self-slash the moment a real watcher's reveal appears, turning a 10 % loss into no loss and taking the reward off the only party the mechanism was written for. `slashed[mandateId]` is winner-take-all, which is what makes that final. Splitting the reward across all valid commitments for the same case would address it; that is a design decision, not a patch, and it is open.
 - It assumes Flare's voting-round clock stays linear. `roundStart(R)` is extrapolated from the currently reported epoch length (§6.7); a lengthened epoch is caught and refused, but a *shortened* epoch, or a redeployed `FlareSystemsManager` with a rebased origin, pushes every computed round start into the past and refuses every challenge until the deployment is replaced. Bonds are not lost and nobody is wrongly slashed — the failure is liveness, chosen deliberately over a silent bypass.
 - It does not bind the ERC-20 `asset` or the `sourceId` to the mandate on-chain; both live in the off-chain envelope. Until they do, a bond posted by a party other than the principal should be read with that in mind.
-- The slash is all-or-nothing, which makes the penalty a step function and the deed's optimal size, conditional on breaching, the largest one available. Proportional slashing is a design decision, not an oversight, and is open.
+- The penalty is proportional only up to the bond (§8.1). Past `overrun ≥ budget` every further unit is free, so the step function v0.9 removed at the bottom is still there at the top; the only thing that moves it is a larger bond. And the penalty's unit is the chain's native asset while the breach's unit is the mandate's: `bond / budget` is a ratio of two different things, and what it is worth is a market question the protocol does not answer.
+- The challenger's reward covers the cost of proving a case only where the verdict does (§8.1). Small bonds are not watched, and nothing here makes them so.
+- Reimbursement is `n × current fee`, not what the challenger paid: a fee change between request and verdict, or proofs bought at a testnet's price, make the two differ. Supplying superfluous proofs moves value from the principal's share to the challenger's only by what those proofs cost to obtain.
+- An accusation freezes withdrawal of a dead mandate's bond for one response window (§6.4). Each costs its accuser a stake, an attestation, and a real unanchored deed to point at, and an answered one forfeits the stake — but for that window the depositors wait.
+- XRPL budgets count what was *delivered*; transaction fees are not summed (§6.8). An agent can burn fees without limit under any budget.
 - Silence is challengeable only for mandates whose agent declared exclusivity (§6.4). An agent that never makes that promise is still judged on what it anchors — the promise is the price of being trusted, not a protocol guarantee.
 
 ## 11. Metrics this makes possible

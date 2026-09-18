@@ -216,8 +216,9 @@ contract SpendMeterTest is Test {
 
         assertTrue(bond.slashed(mandateId));
         assertFalse(reg.isLive(mandateId));
-        assertEq(bond.owed(challenger), 1 ether);
-        assertEq(bond.owed(principal), 9 ether);
+        // v0.9: the tally hid 3 of a budget of 4 — 75% of the 10-ether bond
+        assertEq(bond.owed(challenger), 0.75 ether);
+        assertEq(bond.owed(principal), 6.75 ether);
     }
 
     function test_underReportedSpend_slashes_native() public {

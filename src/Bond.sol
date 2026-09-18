@@ -16,6 +16,8 @@ import {AnchorLog} from "./AnchorLog.sol";
 import {SpendMeter} from "./SpendMeter.sol";
 import {Receipts} from "./Receipts.sol";
 import {Merkle} from "./Merkle.sol";
+import {Deeds} from "./Deeds.sol";
+import {AgentRefs} from "./AgentRefs.sol";
 
 /// @title Bond — programmable consequence for a proven false deed
 /// @notice DELICTI, layer 4. Pattern lifted from FAssets' challenger role
@@ -34,6 +36,11 @@ contract Bond {
     /// @notice The tally the effectors keep (SpendMeter). Optional: address(0) disables the
     ///         under-reporting challenge without affecting anything else.
     SpendMeter public immutable meter;
+    /// @notice Where XRPL accounts confirm the mandates that name them (SPEC §6.8). A separate
+    ///         contract, because the confirmation is a fact about the mandate, not about this Bond:
+    ///         a later consequence contract over the same registry should not make agents prove
+    ///         control of their accounts all over again.
+    AgentRefs public immutable agentRefs;
     IFdcVerification private immutable _fdcOverride; // 0 => resolve via ContractRegistry
     /// @dev 0 => resolve via ContractRegistry. Only the voting-round clock
     ///      (`firstVotingRoundStartTs`, `votingEpochDurationSeconds`); a unit test has no Flare
@@ -91,6 +98,12 @@ contract Bond {
     mapping(uint256 => uint256) public severityOf;
     /// @dev mandateId => bucket => severity proven in it. Buckets: see `_bucket`.
     mapping(uint256 => mapping(uint8 => uint256)) public severityIn;
+
+    /// @notice agent => verdicts against mandates it had acknowledged, and what they took. A contract
+    ///         cannot read events, and a record that only an indexer can see is a record a risk
+    ///         market has to take on trust. Keyed by the EVM `agent`; this Bond's history only.
+    mapping(address => uint256) public verdictsAgainst;
+    mapping(address => uint256) public takenFrom;
 
     // Who posted what. Until v0.9 `post` did not record the depositor and `withdraw` paid the
     // principal — so a bond posted by an insurer was a free option for the agent's own side. With
@@ -227,7 +240,7 @@ contract Bond {
     mapping(address => uint256) public owed;
 
     event BondPosted(uint256 indexed mandateId, address indexed by, uint256 amount, uint256 total);
-    event BondWithdrawn(uint256 indexed mandateId, address indexed to, uint256 amount);
+    event BondWithdrawn(uint256 indexed mandateId, address indexed by, address to, uint256 amount);
     event Claimed(address indexed who, uint256 amount);
     event FalsePaymentProven(
         uint256 indexed mandateId,
@@ -252,8 +265,6 @@ contract Bond {
     event ChallengeCommitted(bytes32 indexed commitment, address indexed by, uint64 at);
     event CommitmentConsumed(bytes32 indexed commitment, uint256 indexed mandateId, uint8 kind, uint64 votingRound);
 
-    event AgentRefProven(uint256 indexed mandateId, bytes32 indexed agentRef, bytes32 transactionId, address indexed by);
-
     /// @notice Every verdict, whatever its kind, in one shape: how big the breach was, on what scale,
     ///         what it took, who was paid what, and the mandate's running total.
     event Verdict(
@@ -267,6 +278,11 @@ contract Bond {
         uint256 reward,
         uint256 slashedTotal
     );
+
+    /// @notice One per deed summed in a cumulative verdict. The verdict events carry totals; without
+    ///         this, which deeds they were is only in the transaction's calldata, and a log-driven
+    ///         indexer would have to re-decode every challenge to weigh a contradiction by value.
+    event DeedJudged(uint256 indexed mandateId, uint8 indexed kind, bytes32 indexed deedId, uint256 value);
 
     event BudgetOverrunProven(
         uint256 indexed mandateId, uint256 spent, uint256 budget, uint256 deeds, address indexed challenger, uint256 slashedAmount
@@ -324,8 +340,10 @@ contract Bond {
         uint64 anchorGrace_,
         SpendMeter meter_,
         uint64 commitLead_,
-        ProtocolsV2Interface protocolsOverride
+        ProtocolsV2Interface protocolsOverride,
+        AgentRefs agentRefs_
     ) {
+        agentRefs = agentRefs_;
         registry = _registry;
         log = _log;
         _fdcOverride = fdcOverride;
@@ -478,7 +496,7 @@ contract Bond {
         // ...and, where the agent's identity is an address on another chain, only once that address
         // has itself said so (`proveAgentRef`). `acknowledge` is signed by the EVM key; nothing in it
         // shows that the same party controls the XRPL account the mandate names.
-        if (registry.get(mandateId).agentRef != bytes32(0) && !agentRefProven[mandateId]) revert AgentRefNotProven();
+        if (registry.get(mandateId).agentRef != bytes32(0) && !agentRefs.proven(mandateId)) revert AgentRefNotProven();
         bondOf[mandateId] += msg.value;
         depositOf[mandateId][msg.sender] += msg.value;
         totalDeposits[mandateId] += msg.value;
@@ -504,7 +522,7 @@ contract Bond {
         depositOf[mandateId][msg.sender] = 0;
         totalDeposits[mandateId] -= dep;
         bondOf[mandateId] -= amt;
-        emit BondWithdrawn(mandateId, to, amt);
+        emit BondWithdrawn(mandateId, msg.sender, to, amt);
         (bool ok,) = to.call{value: amt}("");
         if (!ok) revert TransferFailed();
     }
@@ -624,19 +642,21 @@ contract Bond {
             revert LengthMismatch();
         }
         MandateRegistry.Mandate memory m = registry.get(mandateId);
-        address asset = m.assetKey == bytes32(0) ? address(0) : _erc20Of(m);
+        address asset = m.assetKey == bytes32(0) ? address(0) : Deeds.erc20Of(m);
         uint8 kind = asset == address(0) ? KIND_BUDGET_NATIVE : KIND_BUDGET_ERC20;
 
         uint256 spent;
         bytes32[] memory ids = new bytes32[](n);
         uint64 minRound = type(uint64).max;
         for (uint256 i = 0; i < n; i++) {
-            _requireAnchored(mandateId, episodeIndices[i], leaves[i], merkleProofs[i]); // witness 1
+            Deeds.requireAnchored(log, mandateId, episodeIndices[i], leaves[i], merkleProofs[i], Receipts.KIND_EVM_TX); // witness 1
             IEVMTransaction.Proof calldata pr = fdcProofs[i]; // witness 2
             ids[i] = pr.data.requestBody.transactionHash;
             if (i != 0 && ids[i] <= ids[i - 1]) revert UnorderedTxs();
             if (pr.data.votingRound < minRound) minRound = pr.data.votingRound;
-            spent += _evmDeed(pr, leaves[i], m, asset);
+            uint256 v = Deeds.evm(fdc(), pr, leaves[i], m, asset);
+            spent += v;
+            emit DeedJudged(mandateId, kind, ids[i], v);
         }
         // Authorisation before verdict: the set of deeds is only now known, and it is the set the
         // commitment had to name.
@@ -652,41 +672,9 @@ contract Bond {
     //
     // Every cumulative challenge above needs an `EVMTransaction` proof and compares its
     // `sourceAddress` with `m.agent`. A deed done on XRPL therefore could not be summed at all:
-    // the only XRPL challenge was the negative one (§6.1, a payment that did NOT happen). These two
-    // functions are the positive half — who the agent is on XRPL, and how much it really paid.
+    // the only XRPL challenge was the negative one (§6.1, a payment that did NOT happen). This is
+    // the positive half — how much the agent really paid. Who the agent IS on XRPL: `AgentRefs`.
     // -----------------------------------------------------------------------------------
-
-    /// @notice mandateId => the account named by `agentRef` has itself confirmed the mandate.
-    mapping(uint256 => bool) public agentRefProven;
-
-    /// @notice The reference an XRPL account must put in a payment's memo to confirm a mandate.
-    /// @dev    Binds chain, registry and mandate, so a confirmation cannot be replayed for another
-    ///         mandate, another deployment, or the same deployment on another network.
-    function agentRefChallenge(uint256 mandateId) public view returns (bytes32) {
-        return keccak256(abi.encode("DELICTI/agentRef", block.chainid, address(registry), mandateId));
-    }
-
-    /// @notice Proof of control over `agentRef`: an FDC `Payment` attestation of a successful payment
-    ///         FROM that account whose standard payment reference is `agentRefChallenge(mandateId)`.
-    ///         Any amount, any destination — the reference is the statement, the payment is the pen.
-    ///         Permissionless: the proof speaks, not the caller.
-    /// @dev    Why it exists. `agentRef` is written by the principal, like `agent`. `acknowledge` is the
-    ///         EVM key saying yes; it says nothing about who holds the XRPL key. Without this a
-    ///         principal (with a sock-puppet `agent` to acknowledge) names a stranger's busy account,
-    ///         anchors leaves mirroring that stranger's ordinary payments, and is paid out of a third
-    ///         party's bond. `post` refuses collateral until this has been done.
-    function proveAgentRef(uint256 mandateId, IPayment.Proof calldata proof) external {
-        MandateRegistry.Mandate memory m = registry.get(mandateId);
-        if (m.agentRef == bytes32(0)) revert NoAgentRef();
-        if (!fdc().verifyPayment(proof)) revert FdcProofInvalid();
-        IPayment.ResponseBody calldata rb = proof.data.responseBody;
-        if (proof.data.sourceId != m.sourceId) revert WrongSource();
-        if (rb.sourceAddressHash != m.agentRef) revert NotAgentTx();
-        if (rb.status != 0) revert TxNotSuccessful();
-        if (rb.standardPaymentReference != agentRefChallenge(mandateId)) revert ProofDoesNotMatchClaim();
-        agentRefProven[mandateId] = true;
-        emit AgentRefProven(mandateId, m.agentRef, proof.data.requestBody.transactionId, msg.sender);
-    }
 
     /// @notice STRUCTURING on XRPL. N anchored kind-3 leaves, each with a POSITIVE FDC `Payment`
     ///         attestation: the payment exists, it succeeded, it came from the account the mandate
@@ -746,81 +734,20 @@ contract Bond {
 
             // witness 2
             IPayment.Proof calldata pr = fdcProofs[i];
-            if (!fdc().verifyPayment(pr)) revert FdcProofInvalid();
             bytes32 txid = pr.data.requestBody.transactionId;
             if (txid <= lastTx) revert UnorderedTxs();
             lastTx = txid;
             ids[i] = txid;
             if (pr.data.votingRound < minRound) minRound = pr.data.votingRound;
-            if (pr.data.sourceId != leaf.sourceId) revert ProofDoesNotMatchClaim();
-            if (pr.data.sourceId != m.sourceId) revert WrongSource();
-            spent += _paymentDeed(pr.data.responseBody, leaf, m);
+            uint256 v = Deeds.payment(fdc(), pr, leaf, m);
+            spent += v;
+            emit DeedJudged(mandateId, KIND_BUDGET_PAYMENT, txid, v);
         }
         _consumeCommitment(KIND_BUDGET_PAYMENT, mandateId, keccak256(abi.encode(ids)), salt, minRound);
         if (spent <= m.budget) revert WithinBudget();
 
         uint256 taken = _verdict(KIND_BUDGET_PAYMENT, mandateId, m.budget, spent - m.budget, msg.sender, n, fdcProofs[0].data.attestationType, m.sourceId, true);
         emit BudgetOverrunProven(mandateId, spent, m.budget, n, msg.sender, taken);
-    }
-
-    /// @dev Witness 1 for the EVM overrun paths: an EVM-deed leaf, naming this mandate, in an
-    ///      anchored root of this mandate.
-    function _requireAnchored(uint256 mandateId, uint256 episodeIndex, Receipts.Leaf calldata leaf, bytes32[] calldata path)
-        internal
-        view
-    {
-        if (leaf.kind != Receipts.KIND_EVM_TX) revert WrongReceiptKind();
-        if (leaf.mandateId != mandateId) revert ProofDoesNotMatchClaim();
-        if (!Merkle.verify(path, log.episode(mandateId, episodeIndex).root, Receipts.hash(leaf))) revert LeafNotAnchored();
-    }
-
-    /// @dev One attested EVM transaction against one receipt. Returns the value it moved.
-    function _evmDeed(
-        IEVMTransaction.Proof calldata pr,
-        Receipts.Leaf calldata leaf,
-        MandateRegistry.Mandate memory m,
-        address asset
-    ) internal view returns (uint256 v) {
-        if (!fdc().verifyEVMTransaction(pr)) revert FdcProofInvalid();
-        if (pr.data.requestBody.transactionHash != leaf.ref || pr.data.sourceId != leaf.sourceId) {
-            revert ProofDoesNotMatchClaim();
-        }
-        if (pr.data.sourceId != m.sourceId) revert WrongSource();
-        IEVMTransaction.ResponseBody calldata rb = pr.data.responseBody;
-        if (rb.status != 1) revert TxNotSuccessful();
-        // A budget is cumulative over the mandate's life, so only deeds inside its window
-        // may be summed against it — otherwise older activity convicts a fresh mandate.
-        if (rb.timestamp < m.validFrom || rb.timestamp > m.validUntil) revert ClaimOutsideProvenRange();
-
-        if (asset == address(0)) {
-            if (rb.sourceAddress != m.agent) revert NotAgentTx();
-            if (bytes32(uint256(uint160(rb.receivingAddress))) != leaf.destinationAddressHash) {
-                revert ProofDoesNotMatchClaim();
-            }
-            v = rb.value;
-        } else {
-            // the Transfer(agent → payee) emitted by the mandate's asset. The transaction's own
-            // sender is the facilitator, not the agent, so `sourceAddress` is not compared.
-            v = _erc20TransferValue(rb.events, asset, m.agent, address(uint160(uint256(leaf.destinationAddressHash))));
-            if (v == 0) revert ProofDoesNotMatchClaim();
-        }
-        if (v != leaf.amount) revert ProofDoesNotMatchClaim();
-    }
-
-    /// @dev One attested payment against one receipt. Returns what it delivered.
-    function _paymentDeed(IPayment.ResponseBody calldata rb, Receipts.Leaf calldata leaf, MandateRegistry.Mandate memory m)
-        internal
-        pure
-        returns (uint256)
-    {
-        if (rb.sourceAddressHash != m.agentRef) revert NotAgentTx();
-        if (rb.status != 0 || !rb.oneToOne) revert TxNotSuccessful();
-        if (rb.blockTimestamp < m.validFrom || rb.blockTimestamp > m.validUntil) revert ClaimOutsideProvenRange();
-        if (
-            rb.receivedAmount <= 0 || uint256(rb.receivedAmount) != leaf.amount
-                || rb.receivingAddressHash != leaf.destinationAddressHash || rb.standardPaymentReference != leaf.ref
-        ) revert ProofDoesNotMatchClaim();
-        return uint256(rb.receivedAmount);
     }
 
     // -----------------------------------------------------------------------------------
@@ -880,7 +807,7 @@ contract Bond {
             deadline: uint64(block.timestamp) + responseWindow,
             challenger: msg.sender,
             closed: false,
-            value: m.assetKey == bytes32(0) ? rb.value : _erc20OutflowFrom(rb.events, _erc20Of(m), m.agent)
+            value: m.assetKey == bytes32(0) ? rb.value : Deeds.erc20OutflowFrom(rb.events, Deeds.erc20Of(m), m.agent)
         });
         emit DeedAccused(id, mandateId, txh, rb.timestamp, msg.sender);
     }
@@ -969,7 +896,7 @@ contract Bond {
         uint256 n = fdcProofs.length;
         if (n == 0) revert LengthMismatch();
         MandateRegistry.Mandate memory m = registry.get(mandateId);
-        address asset = m.assetKey == bytes32(0) ? address(0) : _erc20Of(m);
+        address asset = m.assetKey == bytes32(0) ? address(0) : Deeds.erc20Of(m);
 
         uint256 proven;
         bytes32 lastTx;
@@ -990,12 +917,15 @@ contract Bond {
             IEVMTransaction.ResponseBody calldata rb = pr.data.responseBody;
             if (rb.status != 1) revert TxNotSuccessful();
             if (rb.timestamp < m.validFrom || rb.timestamp > m.validUntil) revert ClaimOutsideProvenRange();
+            uint256 v;
             if (asset == address(0)) {
                 if (rb.sourceAddress != m.agent) revert NotAgentTx();
-                proven += rb.value;
+                v = rb.value;
             } else {
-                proven += _erc20OutflowFrom(rb.events, asset, m.agent);
+                v = Deeds.erc20OutflowFrom(rb.events, asset, m.agent);
             }
+            proven += v;
+            emit DeedJudged(mandateId, KIND_UNDER_REPORTED, txh, v);
         }
 
         _consumeCommitment(KIND_UNDER_REPORTED, mandateId, keccak256(abi.encode(ids)), salt, minRound);
@@ -1008,51 +938,11 @@ contract Bond {
         emit UnderReportedSpendProven(mandateId, proven, recorded, n, msg.sender, taken);
     }
 
-    /// @dev Every `Transfer` out of `from` emitted by `asset`, whoever the counterparty is.
-    ///      Sound only under an exclusivity declaration — see the note above.
-    function _erc20OutflowFrom(IEVMTransaction.Event[] calldata events, address asset, address from)
-        internal
-        pure
-        returns (uint256 total)
-    {
-        for (uint256 i = 0; i < events.length; i++) {
-            IEVMTransaction.Event calldata e = events[i];
-            if (e.removed || e.emitterAddress != asset || e.topics.length != 3) continue;
-            if (e.topics[0] != TRANSFER_SIG) continue;
-            if (address(uint160(uint256(e.topics[1]))) != from) continue;
-            total += abi.decode(e.data, (uint256));
-        }
-    }
-
-    /// @dev The mandate's ERC-20, or a refusal. `assetKey` is a left-padded address on an EVM source;
-    ///      anything with high bits set is some other source's asset identifier and not ours to guess.
-    function _erc20Of(MandateRegistry.Mandate memory m) internal pure returns (address) {
-        if (m.assetKey == bytes32(0) || uint256(m.assetKey) >> 160 != 0) revert WrongAsset();
-        return address(uint160(uint256(m.assetKey)));
-    }
-
     /// @dev For the external-payment paths: the deed's source must be the mandate's, and the budget
     ///      must be in that source's native asset — the only thing `Payment`-family attestations count.
     function _requireNativeOn(MandateRegistry.Mandate memory m, bytes32 sourceId) internal pure {
         if (sourceId != m.sourceId) revert WrongSource();
         if (m.assetKey != bytes32(0)) revert WrongAsset();
-    }
-
-    bytes32 private constant TRANSFER_SIG = keccak256("Transfer(address,address,uint256)");
-
-    function _erc20TransferValue(IEVMTransaction.Event[] calldata events, address asset, address from, address to)
-        internal
-        pure
-        returns (uint256 total)
-    {
-        for (uint256 i = 0; i < events.length; i++) {
-            IEVMTransaction.Event calldata e = events[i];
-            if (e.removed || e.emitterAddress != asset || e.topics.length != 3) continue;
-            if (e.topics[0] != TRANSFER_SIG) continue;
-            if (address(uint160(uint256(e.topics[1]))) != from) continue;
-            if (address(uint160(uint256(e.topics[2]))) != to) continue;
-            total += abi.decode(e.data, (uint256));
-        }
     }
 
     function _penalty(uint256 base, uint256 budget, uint256 severity) internal pure returns (uint256 p) {
@@ -1072,18 +962,21 @@ contract Bond {
     ///         governance vote; the fee is on-chain, so it is read, the same way the voting-round
     ///         clock is. The first 64 bytes of a request are all the fee lookup reads.
     function fdcCost(bytes32 attestationType, bytes32 sourceId, uint256 n) public view returns (uint256) {
+        // Low-level on purpose: a high-level call to an address without code reverts BEFORE the call,
+        // where no try/catch can see it, and this function sits on the path of `resolveAccusation`,
+        // which must never revert. A staticcall to nothing succeeds with empty return data.
         address flareRegistry = 0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019; // ContractRegistry's constant
-        if (flareRegistry.code.length == 0) return 0; // unit tests, or a chain that is not Flare
-        try IFlareContractRegistry(flareRegistry).getContractAddressByName("FdcRequestFeeConfigurations") returns (address cfg) {
-            if (cfg.code.length == 0) return 0;
-            try IFdcRequestFeeConfigurations(cfg).getRequestFee(abi.encode(attestationType, sourceId, bytes32(0))) returns (uint256 fee) {
-                return fee * n;
-            } catch {
-                return 0;
-            }
-        } catch {
-            return 0;
-        }
+        (bool ok, bytes memory r) = flareRegistry.staticcall(
+            abi.encodeCall(IFlareContractRegistry.getContractAddressByName, ("FdcRequestFeeConfigurations"))
+        );
+        if (!ok || r.length != 32) return 0;
+        // decoded as a word and truncated: `abi.decode(r, (address))` reverts on dirty high bits
+        (ok, r) = address(uint160(uint256(bytes32(r)))).staticcall(
+            abi.encodeCall(IFdcRequestFeeConfigurations.getRequestFee, (abi.encode(attestationType, sourceId, bytes32(0))))
+        );
+        if (!ok || r.length != 32) return 0;
+        uint256 fee = abi.decode(r, (uint256));
+        return fee > type(uint128).max ? type(uint256).max : fee * n; // n is bounded by calldata size
     }
 
     /// @dev Nested kinds keep a high-water mark, additive kinds a running sum. Saturating, because
@@ -1157,7 +1050,10 @@ contract Bond {
         // Credit, never push: a recipient that reverts on receive would otherwise be able to
         // make a mandate unslashable. Both parties pull with claim().
         owed[beneficiary] += reward;
-        owed[registry.get(mandateId).principal] += taken - reward;
+        MandateRegistry.Mandate memory m = registry.get(mandateId);
+        owed[m.principal] += taken - reward;
+        verdictsAgainst[m.agent]++;
+        takenFrom[m.agent] += taken;
         emit Verdict(mandateId, beneficiary, kind, severity, severityOf[mandateId], budget, taken, reward, slashedAmount[mandateId]);
     }
 }

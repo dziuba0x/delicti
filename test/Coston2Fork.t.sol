@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {MandateRegistry} from "../src/MandateRegistry.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
 import {Bond} from "../src/Bond.sol";
+import {AgentRefs} from "../src/AgentRefs.sol";
 import {SpendMeter} from "../src/SpendMeter.sol";
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
 import {ProtocolsV2Interface} from "@flarenetwork/flare-periphery-contracts/coston2/ProtocolsV2Interface.sol";
@@ -20,8 +21,7 @@ contract Coston2ForkTest is Test {
         AnchorLog anchorLog = new AnchorLog(reg);
         Bond bond = new Bond(
             reg, anchorLog, IFdcVerification(address(0)), 24 hours, 1 hours, new SpendMeter(reg),
-            10 minutes, ProtocolsV2Interface(address(0))
-        );
+            10 minutes, ProtocolsV2Interface(address(0)), new AgentRefs(reg, IFdcVerification(address(0))));
         IFdcVerification fdc = bond.fdc();
         assertTrue(address(fdc) != address(0), "FdcVerification resolved");
         assertTrue(address(fdc).code.length > 0, "has code");

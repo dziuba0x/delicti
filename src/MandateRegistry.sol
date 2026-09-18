@@ -65,6 +65,14 @@ contract MandateRegistry {
     ///         The Bond refuses collateral for an unacknowledged mandate. Sticky.
     mapping(uint256 => bool) public acknowledged;
 
+    /// @notice agent => the mandates it has acknowledged, in order. Indexed at acknowledgement, not at
+    ///         commit, because anyone can commit a mandate naming any address and a list an outsider
+    ///         can append to is a list an outsider can bury things in. What it is for: a contract —
+    ///         a score, a risk market — cannot read events, and an agent asked for its record will
+    ///         show the mandates that went well. With this list the record is complete or provably
+    ///         not: `mandateCountOf(agent)` says how many there are.
+    mapping(address => uint256[]) private _mandatesOf;
+
     // There is deliberately no deployer, no owner and no global Bond. Until v0.8 the registry had a
     // set-once `bond` chosen by whoever deployed it, which meant every new challenge type needed a
     // new Bond, a new Bond needed a new registry, and a new registry orphaned every mandate ever
@@ -169,6 +177,7 @@ contract MandateRegistry {
     function _acknowledge(uint256 id) internal {
         if (acknowledged[id]) return;
         acknowledged[id] = true;
+        _mandatesOf[msg.sender].push(id);
         emit MandateAcknowledged(id, msg.sender);
     }
 
@@ -205,6 +214,14 @@ contract MandateRegistry {
         _mandates[id].revoked = true;
         if (revokedAt[id] == 0) revokedAt[id] = uint64(block.timestamp);
         emit MandateRevoked(id, msg.sender);
+    }
+
+    function mandateCountOf(address agent) external view returns (uint256) {
+        return _mandatesOf[agent].length;
+    }
+
+    function mandateOf(address agent, uint256 index) external view returns (uint256) {
+        return _mandatesOf[agent][index];
     }
 
     function get(uint256 id) external view returns (Mandate memory) {

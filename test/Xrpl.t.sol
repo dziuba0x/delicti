@@ -5,7 +5,9 @@ import {Test} from "forge-std/Test.sol";
 import {MandateRegistry} from "../src/MandateRegistry.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
 import {Bond} from "../src/Bond.sol";
+import {AgentRefs} from "../src/AgentRefs.sol";
 import {SpendMeter} from "../src/SpendMeter.sol";
+import {CorroborationLog} from "../src/CorroborationLog.sol";
 import {Receipts} from "../src/Receipts.sol";
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
 import {IPayment} from "@flarenetwork/flare-periphery-contracts/coston2/IPayment.sol";
@@ -30,6 +32,7 @@ contract XrplTest is Test {
     AnchorLog anchorLog;
     Bond bond;
     MockFdcPayment mock;
+    AgentRefs agentRefs;
     MockProtocolsV2 rounds;
 
     address principal = makeAddr("principal");
@@ -57,15 +60,14 @@ contract XrplTest is Test {
         rounds = new MockProtocolsV2();
         bond = new Bond(
             reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours, new SpendMeter(reg),
-            COMMIT_LEAD, ProtocolsV2Interface(address(rounds))
-        );
+            COMMIT_LEAD, ProtocolsV2Interface(address(rounds)), agentRefs = new AgentRefs(reg, IFdcVerification(address(mock))));
         vm.warp(1_800_000_000);
         vm.deal(principal, 100 ether);
 
         mandateId = _mandate(AGENT_XRPL);
         vm.prank(agent);
         reg.acknowledge(mandateId);
-        bond.proveAgentRef(mandateId, _controlProof(mandateId));
+        agentRefs.prove(mandateId, _controlProof(mandateId));
         vm.prank(principal);
         bond.post{value: 10 ether}(mandateId);
 
@@ -118,7 +120,7 @@ contract XrplTest is Test {
     }
 
     function _controlProof(uint256 id) internal view returns (IPayment.Proof memory) {
-        return _payment(keccak256("control tx"), AGENT_XRPL, keccak256("rAnyone"), 1, bond.agentRefChallenge(id), uint64(block.timestamp));
+        return _payment(keccak256("control tx"), AGENT_XRPL, keccak256("rAnyone"), 1, agentRefs.challengeFor(id), uint64(block.timestamp));
     }
 
     function _proofFor(uint256 i) internal view returns (IPayment.Proof memory) {
@@ -292,6 +294,17 @@ contract XrplTest is Test {
         bond.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
     }
 
+    /// The good case leaves a trace too: a payment that happened exactly as the receipt says.
+    function test_xrplPaymentCorroborated() public {
+        CorroborationLog corr = new CorroborationLog(reg, anchorLog, IFdcVerification(address(mock)));
+        IPayment.Proof memory p = _proofFor(1);
+        corr.corroboratePayment(mandateId, 1, leaves[1], new bytes32[](0), p);
+        assertEq(corr.valueOf(mandateId), EACH);
+        // one effect, one corroboration — even through a second receipt describing the same payment
+        vm.expectRevert(CorroborationLog.AlreadyCorroborated.selector);
+        corr.corroboratePayment(mandateId, 1, leaves[1], new bytes32[](0), p);
+    }
+
     // ------------------------------------------------------------------ whose account is it
 
     /// The principal writes `agentRef`. Until the XRPL account itself has said yes, collateral under
@@ -308,8 +321,8 @@ contract XrplTest is Test {
     function test_revert_controlProofFromAnotherAccount() public {
         uint256 id = _mandate(keccak256("rSomeExchangeHotWallet"));
         IPayment.Proof memory p = _controlProof(id); // built first: a getter in the argument list eats expectRevert
-        vm.expectRevert(Bond.NotAgentTx.selector);
-        bond.proveAgentRef(id, p); // paid by AGENT_XRPL, not by the account named
+        vm.expectRevert(AgentRefs.NotAgentTx.selector);
+        agentRefs.prove(id, p); // paid by AGENT_XRPL, not by the account named
     }
 
     /// The reference binds chain, registry and mandate: a confirmation given for one mandate is not
@@ -318,8 +331,8 @@ contract XrplTest is Test {
         uint256 id = _mandate(AGENT_XRPL);
         IPayment.Proof memory p = _controlProof(mandateId);
         vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.proveAgentRef(id, p);
-        assertFalse(bond.agentRefProven(id));
+        agentRefs.prove(id, p);
+        assertFalse(agentRefs.proven(id));
     }
 
     function test_revert_controlProofTheFdcRejects() public {
@@ -327,6 +340,6 @@ contract XrplTest is Test {
         mock.setVerdict(false);
         IPayment.Proof memory p = _controlProof(id);
         vm.expectRevert(Bond.FdcProofInvalid.selector);
-        bond.proveAgentRef(id, p);
+        agentRefs.prove(id, p);
     }
 }

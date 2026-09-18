@@ -5,6 +5,7 @@ import {Test, console} from "forge-std/Test.sol";
 import {MandateRegistry} from "../../src/MandateRegistry.sol";
 import {AnchorLog} from "../../src/AnchorLog.sol";
 import {Bond} from "../../src/Bond.sol";
+import {AgentRefs} from "../../src/AgentRefs.sol";
 import {SpendMeter} from "../../src/SpendMeter.sol";
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
 import {ProtocolsV2Interface} from "@flarenetwork/flare-periphery-contracts/coston2/ProtocolsV2Interface.sol";
@@ -38,8 +39,7 @@ contract Invariants is Test {
             1 hours,
             meter,
             10 minutes,
-            ProtocolsV2Interface(address(rounds))
-        );
+            ProtocolsV2Interface(address(rounds)), new AgentRefs(reg, IFdcVerification(address(0))));
         h = new Handler(reg, anchorLog, bond, meter, rounds);
         targetContract(address(h));
     }

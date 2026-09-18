@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {MandateRegistry} from "../src/MandateRegistry.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
 import {Bond} from "../src/Bond.sol";
+import {AgentRefs} from "../src/AgentRefs.sol";
 import {SpendMeter} from "../src/SpendMeter.sol";
 import {Receipts} from "../src/Receipts.sol";
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
@@ -34,8 +35,7 @@ contract FuzzTest is Test {
         rounds = new MockProtocolsV2();
         bond = new Bond(
             reg, anchorLog, IFdcVerification(address(new CredulousFdc())), 24 hours, 1 hours,
-            new SpendMeter(reg), LEAD, ProtocolsV2Interface(address(rounds))
-        );
+            new SpendMeter(reg), LEAD, ProtocolsV2Interface(address(rounds)), new AgentRefs(reg, IFdcVerification(address(0))));
     }
 
     function _terms(bytes32 src, bytes32 asset) internal view returns (MandateRegistry.Terms memory) {

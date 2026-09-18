@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {StructuringTest} from "./Structuring.t.sol";
+import {StructuringFixture} from "./Structuring.t.sol";
 import {Bond} from "../src/Bond.sol";
 import {BondLens} from "../src/BondLens.sol";
 import {Receipts} from "../src/Receipts.sol";
@@ -35,7 +35,7 @@ contract MockFlareRegistry {
 
 /// @title v0.9 — the penalty follows the size of the breach (SPEC §8.1)
 /// @notice Inherits the salami fixture: five anchored 1-ether deeds, budget 4, bond 10 ether.
-contract ProportionalTest is StructuringTest {
+contract ProportionalTest is StructuringFixture {
     address constant FLARE_REGISTRY = 0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019;
     address insurer = makeAddr("insurer");
     BondLens lens = new BondLens();

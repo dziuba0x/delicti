@@ -261,23 +261,46 @@ Nothing sensitive is on-chain: mandate envelopes and receipts live off-chain; th
 - It protects the challenger's 10 % from a *reactive* copier (§6.7) but not from an unboundedly patient one. `COMMIT_TTL` prices pre-committing to cases nobody has found yet, it does not forbid it: a squatter willing to pay rent on every candidate deed set, forever, can still hold a live commitment when someone else's reveal appears. The defence is economic, not cryptographic, and it is the honest description.
 - It cannot make the agent later than its own watchers. The party with the earliest knowledge of a violation is the one committing it, so an agent (or a fresh address belonging to it) can hold a commitment over its own deeds and self-slash the moment a real watcher's reveal appears, turning a 10 % loss into no loss and taking the reward off the only party the mechanism was written for. `slashed[mandateId]` is winner-take-all, which is what makes that final. Splitting the reward across all valid commitments for the same case would address it; that is a design decision, not a patch, and it is open.
 - It assumes Flare's voting-round clock stays linear. `roundStart(R)` is extrapolated from the currently reported epoch length (§6.7); a lengthened epoch is caught and refused, but a *shortened* epoch, or a redeployed `FlareSystemsManager` with a rebased origin, pushes every computed round start into the past and refuses every challenge until the deployment is replaced. Bonds are not lost and nobody is wrongly slashed — the failure is liveness, chosen deliberately over a silent bypass.
-- It does not bind the ERC-20 `asset` or the `sourceId` to the mandate on-chain; both live in the off-chain envelope. Until they do, a bond posted by a party other than the principal should be read with that in mind.
+- A child's budget is bounded by its parent's, but the children of one parent are **not summed**: an agent with a budget of 10 can delegate ten children of 10 each. Each child answers for its own budget under its own bond; nothing on-chain makes the parent answer for the total.
 - The penalty is proportional only up to the bond (§8.1). Past `overrun ≥ budget` every further unit is free, so the step function v0.9 removed at the bottom is still there at the top; the only thing that moves it is a larger bond. And the penalty's unit is the chain's native asset while the breach's unit is the mandate's: `bond / budget` is a ratio of two different things, and what it is worth is a market question the protocol does not answer.
 - The challenger's reward covers the cost of proving a case only where the verdict does (§8.1). Small bonds are not watched, and nothing here makes them so.
 - Reimbursement is `n × current fee`, not what the challenger paid: a fee change between request and verdict, or proofs bought at a testnet's price, make the two differ. Supplying superfluous proofs moves value from the principal's share to the challenger's only by what those proofs cost to obtain.
 - An accusation freezes withdrawal of a dead mandate's bond for one response window (§6.4). Each costs its accuser a stake, an attestation, and a real unanchored deed to point at, and an answered one forfeits the stake — but for that window the depositors wait.
 - XRPL budgets count what was *delivered*; transaction fees are not summed (§6.8). An agent can burn fees without limit under any budget.
+- `CorroborationLog` counts what somebody chose to prove. It is a floor on corroboration, never the rate: an agent pays for the attestations it wants on its record and not for the others, and nothing obliges anyone to corroborate anything. It also cannot tell a deed from a wash: an agent can pay dust to itself and corroborate it all day, which is why §11 says to weigh by value — and a score should weigh by counterparty as well.
+- `acknowledge` shows that the EVM key accepted the mandate, and `AgentRefs.prove` that an XRPL account made one payment with one memo. Neither shows that the two are the same party, that either is the model that will act, or that the account was not lent for the occasion.
+- The Bond compiles to 24,371 bytes, 205 under the EIP-170 limit. Nothing of substance can still be added to it; the next challenge type is a new consequence contract over the same registry (§3, `Mandate.bond`), which is what that field is for.
+- `leavesURI` is not verified, pinned or guaranteed to resolve. The root is the commitment; the URI is a courtesy.
+- Each mandate names its own consequence contract, and the registry does not vet it. A Bond that is not this code can behave in any way at all; `Mandate.bond` tells a counterparty *which* code to read, not that it is sound.
 - Silence is challengeable only for mandates whose agent declared exclusivity (§6.4). An agent that never makes that promise is still judged on what it anchors — the promise is the price of being trusted, not a protocol guarantee.
 
 ## 11. Metrics this makes possible
 
-Because every judged deed has a class, an agent, a mandate, and a verdict, two new safety-relevant quantities become measurable across operators without trusting any of them:
+Because every judged deed has a class, an agent, a mandate, and a verdict, three safety-relevant quantities become measurable across operators without trusting any of them:
 
 - **coverage rate** — share of an agent's FDC-observable deeds that were anchored at all. Under an exclusivity declaration (§6.4) the denominator is public and outside the agent's control: every transaction from that address inside the window. This is the metric that matters first, because the two below are conditional on it;
 - **corroboration rate** — share of an agent's claimed deeds that reach class A;
 - **contradiction rate** — share of anchored receipts proven false or overrun. Weigh it by value, not by count: leaves are cheap, and an agent with one contradiction can otherwise dilute it with ten thousand dust deeds.
 
 These are properties of *deeds*, not of models, and they can be computed by anyone from public data. That is the point.
+
+### 11.1 What an indexer reads, and from where (v0.9)
+
+The score is the next floor, and it must be computable from **logs and current state alone** — no archive node, no re-decoding of challenge calldata, no change to the core. v0.9 went through the three metrics asking what was missing, and added it while adding was free.
+
+| Needed for | Source | Note |
+|---|---|---|
+| which mandates count at all | `MandateAcknowledged`, `MandateCommitted`, `MandateTerms` | **Ignore unacknowledged mandates.** Anyone can commit a mandate naming any address and anchor under it as principal; only acknowledgement makes the record the agent's. |
+| an agent's *complete* record, on-chain | `MandateRegistry.mandateCountOf / mandateOf` | appended at acknowledgement by the agent, so an outsider cannot bury it and the agent cannot omit from it. A contract cannot read events; this is what lets a risk market check completeness. |
+| coverage — numerator | `Anchored(…, receiptCount, by, anchoredAt, leavesURI)`, `AnchorLog.receiptCountOf` | the chain holds roots; counting leaves against deeds needs the leaves. `leavesURI` says where they are. **Leaves nobody can fetch count for nothing** — they can still convict. `by` distinguishes what the agent wrote down from what its principal did. |
+| coverage — denominator | the source chain itself, plus `ExclusiveDeclared` | outside DELICTI by construction |
+| corroboration | `DeedCorroborated` from `CorroborationLog`; `countOf`, `valueOf`, `countOfAgent` | the good case used to leave no trace on-chain at all — this metric had a definition and no data. Same definition of agreement as the Bond's (`Deeds`). |
+| contradiction, by value | `Verdict(mandateId, challenger, kind, severity, severityTotal, budget, taken, reward, slashedTotal)`; `DeedJudged(mandateId, kind, deedId, value)` per deed summed; `FalsePaymentProven`, `UnanchoredDeedProven`, `UnderReportedSpendProven`, `BudgetOverrunProven` | one shape for every verdict; per-deed events so that "which deeds" is not only in calldata |
+| contradiction, on-chain | `Bond.verdictsAgainst(agent)`, `Bond.takenFrom(agent)`, `severityOf`, `slashedAmount` | this Bond's history only |
+| accusations, both outcomes | `DeedAccused`, `AccusationAnswered`, `UnanchoredDeedProven`; `openAccusations` | an answered accusation is evidence *for* the agent |
+| who is exposed | `BondPosted(by)`, `BondWithdrawn(by)`, `depositOf` | |
+
+`CorroborationLog`, `AgentRefs` and `BondLens` hold no funds and have no privileges. They are listed here as part of the surface, but they are *outside* the core on purpose: each could have been deployed a year after it, and a better one still can be.
 
 ## 12. Compatibility
 

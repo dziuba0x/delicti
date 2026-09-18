@@ -74,6 +74,19 @@ P(S) = clamp( base × S / budget ,  base × 10 % ,  base )      taken = P(S_afte
 
 New: `BondLens` (stateless; `penaltyFor` — what a case would take, before paying for a single attestation), event `Verdict` on every verdict of every kind. Invariants updated: per mandate `posted = bonded + taken + withdrawn`; verdicts never exceed the bond they were measured on; a depositor never withdraws more than it posted, and exactly that if no verdict touched the mandate.
 
+### What a score can count — added now, because later it is a redeploy
+
+The next floor is a public score: coverage, corroboration, contradiction (SPEC §11). The test applied to every event and view: *can an indexer compute the three from logs and current state alone — no archive node, no re-decoding of challenge calldata — and can a contract, which cannot read events at all, check the parts a risk market needs?*
+
+- **Corroboration had a definition and no data.** A deed whose two witnesses agreed left no trace on-chain; only convictions did. `CorroborationLog` records agreement — permissionless, one receipt and one source transaction at most once, acknowledged mandates only. It holds no funds and no privileges, so it is deliberately *not* part of the core: it could have been added a year later without touching anything, and a better one still can be. What made it safe to write now is `Deeds`: the checks that define evidence class A moved out of the Bond's loops into one internal library that both use, so "agree" cannot come to mean two things.
+- **Contradiction by value needed the deeds, not just the total.** `Verdict` — one shape for every verdict of every kind — and `DeedJudged` per deed summed. Before, which deeds a verdict was about lived only in calldata.
+- **Coverage needs leaves, and the chain holds roots.** `AnchorLog.anchor(…, leavesURI)` publishes where an episode's leaves are; `Anchored` now carries `anchoredAt` and indexes `by`; `receiptCountOf` is readable by contracts. Leaves nobody can fetch count for nothing and can still convict — the right asymmetry.
+- **A record that is complete or provably not.** `MandateRegistry.mandateCountOf / mandateOf(agent, i)`, appended at *acknowledgement* (by the agent) rather than at commit (by anyone): an outsider cannot bury an agent's record under spam and the agent cannot leave the bad mandates out. `Bond.verdictsAgainst(agent)` and `takenFrom(agent)` for the same reason — a record only an indexer can see is one a risk market takes on trust.
+- `AgentRefs` — proof of control over `agentRef` moved out of the Bond into its own contract. The confirmation is a fact about the mandate, not about one consequence contract, so a future Bond over the same registry does not make agents prove their accounts again. (It also bought back the bytes: the Bond sits 205 bytes under EIP-170, which SPEC §10 now treats as a constraint on what can still be added to it.)
+- `BondWithdrawn` names the depositor.
+
+Test count, honestly: v0.8's "81" counted eight tests twice, because `StructuringERC20Test` inherited `StructuringTest` and re-ran it. The fixture is now abstract. **140 distinct tests** (comparable v0.8 figure: 74), 12 of them invariants.
+
 ## v0.8.0 — 2026-09-14 — the reward belongs to whoever looked
 
 Every challenge so far paid its 10 % to whoever landed the transaction. That is not the same as paying whoever found the violation, and the difference is not academic: a challenge cannot be assembled in secret, because `FdcHub.requestAttestation` is an on-chain call carrying the deed's transaction hash or payment reference in the clear, minutes ahead of the reveal. A parasite watching `FdcHub` therefore learns of every case before it can be filed, copies the finished calldata out of the mempool and outbids the gas — paying for no monitoring and no analysis. The honest watcher pays for both. The equilibrium number of real watchers is zero, and a consequence layer nobody watches is theatre.

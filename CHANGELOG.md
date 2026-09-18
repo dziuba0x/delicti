@@ -87,6 +87,14 @@ The next floor is a public score: coverage, corroboration, contradiction (SPEC �
 
 Test count, honestly: v0.8's "81" counted eight tests twice, because `StructuringERC20Test` inherited `StructuringTest` and re-ran it. The fixture is now abstract. **140 distinct tests** (comparable v0.8 figure: 74), 12 of them invariants.
 
+### Documents
+
+- README said "adds the four things" above a list of five — the fifth, the meter, arrived in v0.7 and the sentence was never recounted.
+- README's threat model still said DELICTI "is evidence after the fact, not a real-time brake". That stopped being true twice: v0.5 (the effector refuses dead and borrowed mandates before funds move) and v0.7 (`SpendMeter` refuses the slice that breaks the budget). Rewritten to say what is now true — consequence is after the fact, prevention is not, and both hold only where an effector chooses to check. Three limits added that a reader deciding whether to rely on this should meet on the front page, not in §10: XRPL means XRP `Payment`s only; small bonds are not watched; verdicts need someone to bring them.
+- README pointed at "SPEC.md (v0.1 draft)"; the SPEC was at v0.5 and is now v0.6.
+- SPEC §3 rewritten around the new mandate fields, acknowledgement and per-mandate consequence contracts; §6.3 folded into §6.2's entry point; §6.8–6.9, §8.1, §11.1 new; §10 gained an entry for every mechanism above that leaves something open, and lost the two it closed.
+- **SPEC §13 (roadmap, no code): DELICTI verdicts as native XRPL credentials** — XLS-70 Credentials issued and, more to the point, *deleted* by a Protocol Managed Wallet under Flare Confidential Compute, from an eligibility function over public state. Written with its trust assumptions (FCC is a new and larger one than §2's, and the section says so), what the credential does not prove (not identity, not KYC, not that anyone was watching, nothing about non-`Payment` deeds), and the condition for leaving the roadmap: one credential issued and deleted end to end on testnet from a Flare-side verdict.
+
 ## v0.8.0 — 2026-09-14 — the reward belongs to whoever looked
 
 Every challenge so far paid its 10 % to whoever landed the transaction. That is not the same as paying whoever found the violation, and the difference is not academic: a challenge cannot be assembled in secret, because `FdcHub.requestAttestation` is an on-chain call carrying the deed's transaction hash or payment reference in the clear, minutes ahead of the reveal. A parasite watching `FdcHub` therefore learns of every case before it can be filed, copies the finished calldata out of the mempool and outbids the gas — paying for no monitoring and no analysis. The honest watcher pays for both. The equilibrium number of real watchers is zero, and a consequence layer nobody watches is theatre.

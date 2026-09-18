@@ -6,13 +6,13 @@
 
 **Corpus delicti for AI agents.** Before anyone is judged, prove the deed happened.
 
-DELICTI is a corroboration-and-consequence layer for the actions of autonomous AI agents, anchored on [Flare](https://flare.network). It does not define yet another receipt format. It takes the signed receipts that effectors already produce (KYA-OS / Checkpoint `_meta` proofs, ACTA / ASQAV receipts, flario `x402_receipt`s) and adds the four things none of them have:
+DELICTI is a corroboration-and-consequence layer for the actions of autonomous AI agents, anchored on [Flare](https://flare.network). It does not define yet another receipt format. It takes the signed receipts that effectors already produce (KYA-OS / Checkpoint `_meta` proofs, ACTA / ASQAV receipts, flario `x402_receipt`s) and adds the five things none of them have:
 
 1. **Mandate before act** — a principal commits, on-chain, what the agent may do (budget, window, delegation chain) *before* the episode. Children can only narrow parents.
 2. **Two witnesses to the same overt act** — the effector's receipt is witness one; Flare's Data Connector (FDC) attesting the effect in the world is witness two. Agreement is evidence. Disagreement is a *contradicted deed*.
 3. **Delta over the sequence** — violations are computed against the cumulative budget of the mandate, not per action, so structuring ("salami") is caught.
 4. **A brake that can see the sequence** — the effector reads the mandate's cumulative tally before it acts, so the fifth slice of a salami is refused in milliseconds rather than slashed minutes later. An effector that skips the tally is choosing to be judged by the FDC instead.
-5. **Consequence without a court** — a bond is slashed on proof, pattern lifted from FAssets' challenger role. Challenger gets 10%, the harmed party gets the rest.
+5. **Consequence without a court** — a bond is slashed on proof, pattern lifted from FAssets' challenger role, in proportion to the size of the breach. The challenger is reimbursed for its attestations and earns 10% of the rest; the harmed party gets the remainder; what is left goes back to whoever posted it.
 
 > When a mind becomes alien, its words stop being evidence. Its deeds, confirmed independently, remain. — the thesis, after J. Pachocki's *An Alien Mind*.
 
@@ -82,6 +82,7 @@ A receipt proves *registration*. "A false claim can be immutably registered." DE
 | `scripts/brake-test.sh` — the effector-side brake (SPEC §7) live: a live mandate pays; a missing, revoked or borrowed mandate is refused before any funds move | **done, executed on Coston2** |
 | `Bond.accuseUnanchoredDeed` / `answerAccusation` / `resolveAccusation` + `MandateRegistry.declareExclusive` — the deed nobody wrote down (SPEC §6.4) | **done, executed on Coston2** (both outcomes) |
 | `SpendMeter.sol` + `Bond.challengeUnderReportedSpend` — the running tally that refuses structuring in real time (SPEC §7.1), and convicts the effector whose tally lied (§6.5) | **done, executed on Coston2** |
+| **v0.9** — mandate pins `sourceId` / `assetKey` / `agentRef` / its own `bond`; `acknowledge`; XRPL overrun on FDC `Payment` proofs + `AgentRefs`; proportional, cumulative slashing with pro-rata return of deposits; `CorroborationLog`, `Deeds`, `BondLens`; invariant campaign | tests pass — **not yet deployed, nothing executed live** |
 | `Bond.commitChallenge` — commit–reveal on all five challenges and on the accusation, so the 10 % belongs to whoever detected the violation rather than to whoever copied the calldata (SPEC §6.7) | **done, executed on Coston2** (both directions) |
 
 ### Live on Coston2 (2026-09-14) — v0.8, and the copy was refused
@@ -157,14 +158,15 @@ See [CHANGELOG.md](CHANGELOG.md). Proposal to the receipt ecosystems: [docs/prop
 
 ## Specification
 
-The vocabulary, trust model, evidence classes, challenge invariants, and non-claims are fixed in [SPEC.md](SPEC.md) (v0.1 draft).
+The vocabulary, trust model, evidence classes, challenge invariants, and non-claims are fixed in [SPEC.md](SPEC.md) (v0.6 draft). §10 — *what DELICTI does not claim* — is the section to read first.
 
 ## Build & test
 
 ```bash
 npm install                      # pulls @flarenetwork/flare-periphery-contracts
 forge build
-forge test                       # unit tests with a mock FDC
+forge test                       # 140 tests with a mock FDC, 12 of them invariants (~30 s)
+FOUNDRY_INVARIANT_RUNS=1500 FOUNDRY_INVARIANT_DEPTH=200 forge test --match-contract Invariants   # the long campaign (~10 min)
 forge test --fork-url coston2 --match-contract Coston2ForkTest -vv   # live wiring
 ```
 
@@ -191,8 +193,10 @@ DELICTI names what it can and cannot prove:
 ## Threat model, honestly
 
 - A compromised effector can sign false receipts. That is exactly why witness two exists: FDC does not trust the effector.
-- FDC finality is minutes, not seconds. DELICTI is evidence after the fact, not a real-time brake (a mandate check hook is left in the spec for effectors that want one).
-- Web2 effects need allow-listed sources on FDC; Sprint 0 corroborates on-chain and XRPL/BTC/DOGE effects only.
+- FDC finality is minutes, not seconds, so *consequence* is always after the fact. *Prevention* is not: since v0.5 a DELICTI-aware effector refuses a dead or borrowed mandate before funds move (SPEC §7), and since v0.7 it refuses the slice that would break the cumulative budget, by reading `SpendMeter` in one `eth_call` (§7.1). Both hold only where the effector chooses to check — an effector that does not is judged by the FDC instead, minutes later.
+- On XRPL, DELICTI sees `Payment` transactions in XRP and nothing else. Offers, escrows, AMM deposits and issued currencies (RLUSD) are outside what the FDC's `Payment` attestation covers; SPEC §6.9 names the condition under which that changes.
+- A verdict needs someone to bring it. The reward covers the cost of proving a case only where the bond is large enough for its 10% floor to exceed the attestation fees (20 FLR per request on mainnet). Small bonds are not watched.
+- Web2 effects need allow-listed sources on FDC; DELICTI corroborates EVM transactions and XRPL payments only.
 - Whitehat only. Everything runs on Coston2 / forks. Never real mainnet with other people's funds.
 
 ## License

@@ -1,4 +1,4 @@
-# DELICTI Specification — v0.5 (draft)
+# DELICTI Specification — v0.6 (draft)
 
 *Corpus delicti for autonomous agents: prove the deed happened before anyone is judged.*
 
@@ -43,16 +43,20 @@ An omitted receipt is not invisible: a mandate whose budget is drawn down on-cha
 
 ## 3. Mandates
 
-A mandate `M` is `(principal, agent, mandateHash, authorityRef, parentId, budget, validFrom, validUntil, revoked)`.
+A mandate `M` is `(principal, agent, mandateHash, authorityRef, parentId, budget, validFrom, validUntil, revoked, sourceId, assetKey, agentRef, bond)`. The last four are v0.9 and are appended, so a reader compiled against the first nine keeps decoding them.
 
 - `mandateHash` commits to an off-chain envelope (canonical JSON): allowed effectors, counterparties, per-action limits, purpose text. The envelope is disclosed selectively; only its hash is public.
-- `budget` is cumulative over the mandate's lifetime, in the unit the envelope names (drops, wei, token base units). It is the quantity challenges sum against.
+- `budget` is cumulative over the mandate's lifetime, in base units of the asset the mandate names. It is the quantity challenges sum against.
+- **`sourceId` and `assetKey` say what the budget is made of** (v0.9). `sourceId` is the FDC source the deeds happen on (`testFLR`, `XRP`, …) and may not be zero. `assetKey` is `0` for that source's native asset and, on an EVM source, the ERC-20 address left-padded to 32 bytes. Every challenge reads both from the mandate; none accepts them from calldata. Until v0.9 they lived only in the envelope, so whoever posted collateral could read *how much* it insured and not *of what*.
+- **`agentRef`** is the agent's identity on a non-EVM source: the FDC standard address hash (for XRPL, `keccak256` of the r-address). Zero on EVM sources, where `agent` is the identity. See §6.8.
+- **`bond`** is the one consequence contract allowed to revoke this mandate on proof. The registry has no deployer, no owner and no global Bond: each mandate names its own. That contract can revoke that mandate and nothing else — a power its principal already holds — so new consequence contracts, with new challenge types, can be deployed over the same registry, log and meter without orphaning a single mandate. A Bond refuses collateral for a mandate that names a different one, because it could never carry out the slash.
+- **Acknowledgement.** A principal writes the agent's address unilaterally, and principals may anchor. Until the agent calls `acknowledge(id)` — only it can; sticky; implied by `declareExclusive` — a mandate is a claim *about* an address, not a commitment *by* it. Bonds refuse collateral for unacknowledged mandates and scores must ignore them (§11.1); otherwise naming a stranger's busy address collects a third party's bond and poisons the stranger's record. Acknowledged mandates are enumerable per agent (`mandateCountOf`, `mandateOf`).
 - `authorityRef` is the hash of the authority proof for the delegation — typically a W3C Verifiable Credential chain (KYA-OS style). DELICTI does not implement delegation credentials; it anchors their hash and enforces the on-chain shape.
-- **Monotonic narrowing.** A child mandate must satisfy `budget ≤ parent.budget`, `validFrom ≥ parent.validFrom`, `validUntil ≤ parent.validUntil`, and can only be committed by the parent's agent. Capability semantics: authority can be attenuated, never amplified.
+- **Monotonic narrowing.** A child mandate must satisfy `budget ≤ parent.budget`, `validFrom ≥ parent.validFrom`, `validUntil ≤ parent.validUntil`, **`sourceId = parent.sourceId` and `assetKey = parent.assetKey`**, and can only be committed by the parent's agent. Narrowing attenuates a quantity; a child in another asset is not a smaller share of its parent's budget, it is a different budget. `agentRef` and `bond` are the child's own. Capability semantics: authority can be attenuated, never amplified.
 - **Liveness is transitive.** `isLive(M)` is true iff `M` and every ancestor are unrevoked and inside their windows. Killing a root kills the tree.
 - **Revocation is sticky** and may be performed by any ancestor principal, or by the Bond on a successful challenge.
 
-Non-goal in v0.1: budgets across several assets under one mandate. One mandate, one unit.
+Non-goal: budgets across several assets under one mandate. One mandate, one unit — since v0.9, enforced rather than assumed.
 
 ## 4. Leaves and anchoring
 
@@ -96,8 +100,8 @@ Kind-3 leaf in an anchored root + `ReferencedPaymentNonexistence` proof whose `(
 ### 6.2 Budget overrun, native (`challengeBudgetOverrun`)
 N kind-2 leaves, each in an anchored root, each with an `EVMTransaction` proof: tx hash equals `ref`, `sourceAddress` equals the mandated agent, `status == 1`, `value` and `receivingAddress` equal the leaf. Transaction hashes strictly increasing (dedup without storage). `Σ value > budget`. *Executed live on Coston2.*
 
-### 6.3 Budget overrun, ERC-20 (`challengeBudgetOverrunERC20`)
-As 6.2, but the deed is a `Transfer(agent → payee, value)` event emitted by the mandate's asset inside the proof (`listEvents = true`). This is the real x402 case: settlement is `transferWithAuthorization` on the token, native value is zero. *Executed live on Coston2 with genuine EIP-3009 settlements and genuine flario receipts.*
+### 6.3 Budget overrun, ERC-20 (same entry point since v0.9)
+There is no separate function any more: `challengeBudgetOverrun` reads what a deed's value *is* from the mandate's `assetKey` (the commitment `kind` is still 3). As 6.2, but the deed is a `Transfer(agent → payee, value)` event emitted by the mandate's asset inside the proof (`listEvents = true`). This is the real x402 case: settlement is `transferWithAuthorization` on the token, native value is zero. *Executed live on Coston2 with genuine EIP-3009 settlements and genuine flario receipts.*
 
 Why the sum: a pre-action gate sees one call at a time and passes each of five legal calls. Structuring — many small deeds each inside a limit — is the canonical way a constrained actor drains a budget, and it is the gap the pre-action standards themselves admit. DELICTI judges the sequence because the mandate is a budget, not a per-call limit.
 
@@ -119,7 +123,7 @@ An FDC-proven transaction from the mandate's agent, inside the mandate's window,
 
 The meter (§7.1) is what makes structuring refusable while it is still happening, and an effector can defeat it simply by not writing. This is the challenge that makes silence expensive.
 
-N FDC `EVMTransaction` proofs of deeds by the mandate's agent, inside the mandate's window, summing to more than the meter recorded. No anchored leaves are required: the meter is **witness 1 over the sequence** and the proofs are **witness 2 over the same sequence**, so §5 is not weakened — this is a class-A contradiction about a tally rather than about one deed. `asset = address(0)` sums native transaction value; otherwise it sums `Transfer` events out of the agent emitted by that asset (the x402 case).
+N FDC `EVMTransaction` proofs of deeds by the mandate's agent, inside the mandate's window, summing to more than the meter recorded. No anchored leaves are required: the meter is **witness 1 over the sequence** and the proofs are **witness 2 over the same sequence**, so §5 is not weakened — this is a class-A contradiction about a tally rather than about one deed. What is summed follows the mandate's `assetKey`: native transaction value, or `Transfer` events out of the agent emitted by that token (the x402 case). Each proof's `sourceId` must be the mandate's — until v0.9 this path, having no leaves to borrow one from, checked none.
 
 **Scope is deliberately narrow.** The challenge runs only on a mandate that is both *metered* (§7.1) and *exclusive* (§6.4). Without exclusivity an outflow from the agent's address may be none of this mandate's business, and summing it would convict an honest agent — the same error as accepting a source-scoped nonexistence proof.
 
@@ -143,7 +147,7 @@ commitment = keccak256(abi.encode(challenger, mandateId, kind, deedsDigest, salt
 deedsDigest = keccak256(abi.encode(deedIds))
 ```
 
-`kind` is one of the five `Bond.KIND_*` constants. `deedIds` is the receipt leaf hash for `KIND_FALSE_PAYMENT`, the deed's transaction hash for `KIND_UNANCHORED_DEED`, and the deeds' transaction hashes in the exact ascending order the challenge supplies them for the three cumulative kinds. `commitChallenge(bytes32)` stores nothing but that hash and the timestamp, so the commitment leaks nothing at all.
+`kind` is one of the six `Bond.KIND_*` constants (6 = `KIND_BUDGET_PAYMENT`, §6.8). `deedIds` is the receipt leaf hash for `KIND_FALSE_PAYMENT`, the deed's transaction hash for `KIND_UNANCHORED_DEED`, and the deeds' transaction hashes in the exact ascending order the challenge supplies them for the three cumulative kinds. `commitChallenge(bytes32)` stores nothing but that hash and the timestamp, so the commitment leaks nothing at all.
 
 At reveal, with `R` the **lowest** `votingRound` among the supplied proofs and `roundStart(R)` read live off Flare's `ProtocolsV2` (`firstVotingRoundStartTs`, `votingEpochDurationSeconds` — never hardcoded):
 
@@ -161,7 +165,7 @@ and the commitment is deleted, single-use.
 - *`COMMIT_TTL` (1 h, constant).* `commitLead` alone leaves the other end open, and that end decides whether any of this means anything. Without an upper bound a commitment is a free, permanent option: the deed set is public on three of the five paths — one transaction hash, one published leaf, or the canonical "every deed so far, ascending" — so anyone can pre-commit to cases that have not been challenged yet, at one `SSTORE` each, and copy a reveal months later by changing the salt. The commitment would be old enough to satisfy any lead. The TTL turns that free option into rent: a squatter must re-commit every candidate, with a fresh salt, once per TTL, forever, for every mandate. An honest challenger pays once, for the case it actually found. It is a constant rather than a constructor argument because a deployer with discretion over it could set it just above `commitLead` and make honest challenges against its own agents nearly impossible to time.
 - *A round cannot have begun in the future.* `roundStart(R)` extrapolates: it multiplies a round number that may be years old by the epoch length Flare reports *now*. If Flare lengthens the voting epoch or redeploys with a rebased `firstVotingRoundStartTs`, that product lands in the future and every commitment — including one made in the same block — clears the lead test. The gate would stop existing, silently, with nothing reverting to say so. A finalised round has necessarily started, so this check holds on a healthy chain and fails closed on an unhealthy one. The mirror-image drift (a shortened epoch pushing the product into the past) only refuses challenges, which is the direction to fail in; see §10.
 
-**What the preimage binds, and what it deliberately does not.** `challenger` makes a commitment non-transferable; `mandateId` and `kind` stop a commitment for a cheap challenge type being spent on an expensive one; `deedsDigest` pins the exact ordered set, so a subset, a superset and a reordering are three different cases. The ERC-20 `asset` is **not** bound, because it is not a field a copier can vary to its advantage: naming the wrong asset sums the wrong `Transfer` events and the challenge fails on its own merits.
+**What the preimage binds, and what it deliberately does not.** `challenger` makes a commitment non-transferable; `mandateId` and `kind` stop a commitment for a cheap challenge type being spent on an expensive one; `deedsDigest` pins the exact ordered set, so a subset, a superset and a reordering are three different cases. The ERC-20 asset is not in the preimage and since v0.9 does not need to be: it is no longer a parameter at all.
 
 **Replaying a commitment is a no-op.** Commitments travel in public calldata, so if a second submission could refresh the stored timestamp, a parasite unable to steal a challenge could still grief it past `commitLead` by replaying the victim's own commitment bytes. `commitChallenge` therefore keeps the earliest submission; replaying it early merely registers it on the victim's behalf, since the preimage names the only address that can spend it.
 
@@ -307,6 +311,38 @@ The score is the next floor, and it must be computable from **logs and current s
 - **Receipts:** flario `flario-receipt/2` (implemented); KYA-OS `_meta` proofs and ACTA/ASQAV receipts (adapter specified: `policy_digest`/`previousReceiptHash` map naturally; `mandate_ref` proposed as an extension claim).
 - **Identity/reputation:** ERC-8004 — DELICTI verdicts are a natural input to a Reputation Registry: reputation from corroborated deeds, not declarations.
 - **Chains:** any EVM with an FDC-equivalent second witness could host DELICTI; today only Flare has one enshrined in protocol, which is the entire reason it is built there.
+
+## 13. Roadmap: DELICTI verdicts as native XRPL credentials (specified, not implemented)
+
+*No code exists for this section. It fixes the mechanism and its trust assumptions so that the floors below it are built to carry it.*
+
+**The idea.** XRPL now has an on-ledger permission system, live on mainnet: **Credentials** (XLS-70) — an issuer account writes a typed credential about a subject account (`CredentialCreate`: `Subject`, `CredentialType`, optional `Expiration`, `URI`), the subject accepts it (`CredentialAccept`), either can delete it (`CredentialDelete`); and **Permissioned Domains** (XLS-80) — a domain is a list of accepted `(Issuer, CredentialType)` pairs, and venues such as the permissioned DEX admit only accounts holding one. Today every such credential means *"an issuer vouches"* — KYC by declaration. DELICTI can make one mean *"this account has been acting under a bonded mandate, and no verdict stands against it"* — compliance by proof. The subject is exactly the account `agentRef` names, and `AgentRefs` already proves its holder accepted the mandate.
+
+**Mechanism.**
+
+1. *Eligibility is a pure function of public state on Flare:* mandate acknowledged; `AgentRefs.proven`; live; `bondOf ≥` a published floor; `slashed == false`; no open accusation; optionally minimum `CorroborationLog.valueOf` and mandate age. An `Issuer` contract evaluates it and emits a signing instruction — issue, or delete.
+2. *The issuer account on XRPL is a Protocol Managed Wallet.* Its key is generated and held inside Flare Confidential Compute enclaves and signs only what a Flare contract instructed; no operator, including this project, holds it. The PMW submits `CredentialCreate(Subject = the agent's r-address, CredentialType = "DELICTI/bonded/v1", Expiration = min(validUntil, now + TTL), URI → the mandate on Flare)`.
+3. *The agent accepts* with `CredentialAccept`, from the same key that made the `AgentRefs` payment.
+4. *Revocation is the point.* Any `Verdict`, revocation, expiry, or the bond falling under the floor makes the account ineligible; anyone may then call `revoke(mandateId)` on the `Issuer`, which instructs the PMW to `CredentialDelete`. Short `Expiration` with renewal bounds the damage when the revocation path is slow: a credential the protocol cannot delete still dies on its own.
+5. *Closing the loop (optional).* An FDC attestation that the credential object exists, or no longer does, lets Flare-side contracts act on the XRPL-side fact.
+6. *Domains* are created by venues, not by DELICTI: a venue lists `(DELICTI issuer, "DELICTI/bonded/v1")` among its accepted credentials.
+
+**What this construction trusts, beyond §2.**
+
+- *Flare Confidential Compute*: the TEE hardware vendors and their attestation, Flare's enclave code, and the honesty threshold of whoever operates the enclaves. This is a **new and larger** assumption than §2's "consensus plus FDC", and it is the price of writing to XRPL instead of only reading it. Everything in §§3–8 remains valid without it.
+- *XRPL amendments*: Credentials and Permissioned Domains staying enabled with their present semantics.
+- *The eligibility function*: it is code, it will have thresholds, and those are judgement calls. They must be immutable per credential type (`…/v1`, `…/v2`), never tunable in place — otherwise the issuer is an admin key with extra steps.
+- *Liveness of revocation*: between a verdict on Flare and `CredentialDelete` on XRPL the agent holds a credential it no longer merits. The window is FDC latency (the verdict itself) plus FCC signing plus XRPL close; the expiry is the backstop.
+
+**What the credential does NOT prove** — and venues must be told so:
+
+- Not identity, not KYC, not sanctions screening. It says nothing about who controls the account, only that whoever does has collateral at risk under a public mandate.
+- Not good behaviour in general: only that no verdict stands under *this* mandate, for deeds the FDC can see. On XRPL that currently means **`Payment` transactions in XRP** (§6.8); an agent that trades, escrows or moves IOUs — RLUSD included — does so outside DELICTI's sight (§6.9), credential or not.
+- Not that the agent was watched. Absence of a verdict is absence of a *successful challenge*: nobody may have looked, or the bond may have been too small to be worth watching (§8.1). A venue should read `bondOf`, the mandate's age and `CorroborationLog` alongside the credential, not instead of them.
+- Not that a delegated transaction belongs to the agent: under XLS-75 who FDC attributes a delegated transaction to is unestablished (§6.9).
+- Not solvency. The bond is in FLR on Flare and the budget is in XRP on XRPL; `bond / budget` is a ratio of two different things.
+
+**Condition for moving this out of the roadmap:** FCC/PMW generally available on Coston2 with a documented instruction interface, and one credential issued *and deleted* end to end on XRPL testnet from a Flare-side verdict. Until both, this section describes an intention.
 
 ---
 

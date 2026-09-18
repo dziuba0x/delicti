@@ -61,21 +61,44 @@ contract StructuringTest is Test {
             reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours, meter,
             COMMIT_LEAD, ProtocolsV2Interface(address(rounds))
         );
-        reg.setBond(address(bond));
         vm.warp(1_800_000_000);
 
+        _setUpMandate(bytes32(0));
+    }
+
+    bytes32 assetKey_;
+
+    function _terms() internal view returns (MandateRegistry.Terms memory) {
+        return MandateRegistry.Terms({sourceId: SRC, assetKey: assetKey_, agentRef: bytes32(0), bond: address(bond)});
+    }
+
+    /// @dev Since v0.9 the asset is part of the mandate, so the native and the ERC-20 salami can no
+    ///      longer share one. Same five receipts, re-issued under a mandate in the asset named.
+    bytes32 leafSource_ = SRC;
+
+    function _setUpMandateWithLeafSource(bytes32 leafSource) internal {
+        leafSource_ = leafSource;
+        _setUpMandate(bytes32(0));
+    }
+
+    function _setUpMandate(bytes32 assetKey) internal {
+        assetKey_ = assetKey;
+        delete leaves;
+        delete hashes;
         vm.prank(principal);
         mandateId = reg.commit(
-            agent, keccak256("may spend up to 4 FLR at merchant"), 0, 0, BUDGET,
-            uint64(block.timestamp), uint64(block.timestamp + 1 days)
+            agent, keccak256("may spend up to 4 at merchant"), 0, 0, BUDGET,
+            uint64(block.timestamp), uint64(block.timestamp + 1 days), _terms()
         );
+        vm.prank(agent);
+        reg.acknowledge(mandateId);
 
-        // five receipts, each 1 FLR, tx hashes strictly increasing
+        // five receipts, each 1 unit, tx hashes strictly increasing
         for (uint256 i = 0; i < N; i++) {
             Receipts.Leaf memory l = Receipts.Leaf({
                 receiptHash: keccak256(abi.encode("x402_receipt", i)),
                 kind: Receipts.KIND_EVM_TX,
-                sourceId: SRC,
+                sourceId: leafSource_,
                 destinationAddressHash: bytes32(uint256(uint160(merchant))),
                 amount: EACH,
                 ref: bytes32(uint256(0x1000 + i)), // tx hash
@@ -280,33 +303,66 @@ contract StructuringERC20Test is StructuringTest {
     }
 
     function test_erc20_salami_slash() public {
+        _setUpMandate(bytes32(uint256(uint160(token))));
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
         _arm(bond.KIND_BUDGET_ERC20(), challenger, pr);
         vm.prank(challenger);
-        bond.challengeBudgetOverrunERC20(mandateId, token, idx, ls, paths, pr, SALT);
+        bond.challengeBudgetOverrunERC20(mandateId, idx, ls, paths, pr, SALT);
         assertTrue(bond.slashed(mandateId));
     }
 
     function test_erc20_revert_nativePathRejectsTokenTx() public {
         // the native-value path must NOT be fooled by a token tx (value == 0 != leaf.amount)
+        // — on a native mandate, where it is allowed to run at all
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
         vm.prank(challenger);
         vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
         bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
+    /// v0.9 — the asset used to be the challenger's to name. It is now the mandate's, so the
+    /// old attack surface ("pass another token") no longer exists as calldata; what remains is
+    /// the same five settlements presented against a mandate in a DIFFERENT token.
     function test_erc20_revert_wrongTokenEmitter() public {
+        _setUpMandate(bytes32(uint256(uint160(makeAddr("other-token")))));
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
         vm.prank(challenger);
         vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrunERC20(mandateId, makeAddr("other-token"), idx, ls, paths, pr, SALT);
+        bond.challengeBudgetOverrunERC20(mandateId, idx, ls, paths, pr, SALT);
+    }
+
+    /// v0.9 — each path refuses a mandate denominated in the other kind of asset, before any proof.
+    function test_revert_pathDoesNotMatchMandateAsset() public {
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
+        vm.prank(challenger);
+        vm.expectRevert(Bond.WrongAsset.selector);
+        bond.challengeBudgetOverrunERC20(mandateId, idx, ls, paths, pr, SALT); // native mandate
+
+        _setUpMandate(bytes32(uint256(uint160(token))));
+        (idx, ls, paths, pr) = _bundle(5);
+        vm.prank(challenger);
+        vm.expectRevert(Bond.WrongAsset.selector);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT); // ERC-20 mandate
+    }
+
+    /// v0.9 — a deed on another chain is not a deed under this mandate, whatever the leaf says.
+    function test_revert_deedOnAnotherSource() public {
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundle(5);
+        // the agent anchored a leaf naming another source, and the proof agrees with the leaf
+        _setUpMandateWithLeafSource(bytes32("testETH"));
+        (idx, ls, paths, pr) = _bundle(5);
+        for (uint256 i = 0; i < 5; i++) pr[i].data.sourceId = bytes32("testETH");
+        vm.prank(challenger);
+        vm.expectRevert(Bond.WrongSource.selector);
+        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     function test_erc20_revert_transferFromSomeoneElse() public {
+        _setUpMandate(bytes32(uint256(uint160(token))));
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
         pr[2].data.responseBody.events[0].topics[1] = bytes32(uint256(uint160(makeAddr("stranger"))));
         vm.prank(challenger);
         vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrunERC20(mandateId, token, idx, ls, paths, pr, SALT);
+        bond.challengeBudgetOverrunERC20(mandateId, idx, ls, paths, pr, SALT);
     }
 }

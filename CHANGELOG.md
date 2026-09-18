@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.9.0 — unreleased — what the budget is made of, and who agreed to it
+
+Written for the three floors that are meant to stand on this one — a public score, a risk market, credentials issued on XRPL — and for the rule that none of them may require redeploying the core.
+
+### The mandate now says what its budget is made of
+
+SPEC §10 admitted that the ERC-20 `asset` and the `sourceId` lived only in the off-chain envelope. That made a bond posted by anyone other than the principal worth less than it looked: an insurer could read *how much* a mandate allowed and not *of what*, and on the ERC-20 paths the challenger chose the asset in calldata.
+
+- **`Mandate.sourceId`, `Mandate.assetKey`, `Mandate.agentRef`** — the FDC source the deeds happen on, what `budget` counts (`0` = that source's native asset; on an EVM source, the ERC-20 address left-padded), and the agent's identity on a non-EVM source (FDC standard address hash). Passed to `commit` as one `Terms` struct, appended to the *end* of `Mandate` so a reader compiled against the old nine-field tuple — flario's mandate gate — keeps decoding the prefix it knows.
+- **Every challenge reads them from the mandate.** `challengeBudgetOverrunERC20` and `challengeUnderReportedSpend` lost their `asset` parameter; the native paths refuse a token mandate and the token path refuses a native one (`WrongAsset`), before any proof is verified. Every path compares the proof's `sourceId` with the mandate's (`WrongSource`).
+- **That last check closed a hole nobody had written down.** `challengeUnderReportedSpend` has no leaves, so it had nothing to borrow a `sourceId` from, and it checked none. One key is one address on every EVM chain the FDC attests: a transfer by the agent on Sepolia would have been summed against a Coston2 tally that never promised to cover it. `accuseUnanchoredDeed` had the same gap — exclusivity is a promise about one address on one chain.
+- **Monotonic narrowing covers the unit.** A child must keep its parent's `sourceId` and `assetKey` (`ChangesParentAsset`). Narrowing attenuates a quantity; a child in another asset is not a smaller share of the parent's budget, it is a different budget, and `budget <= parent.budget` would be comparing drops with wei. `agentRef` and `bond` are the child's own: they describe the child, not the unit.
+
+### The agent has to say yes (`acknowledge`)
+
+Not on the list for this release, and the reason pinning the asset was not enough. A principal writes the agent's address unilaterally, and principals may anchor. So a principal could name a stranger's busy address as "agent", anchor receipts for its ordinary transfers, and collect whatever a third party had posted as bond — and, once a public score exists, poison that stranger's contradiction rate for the price of gas. `MandateRegistry.acknowledge(id)` is callable only by the agent and is sticky; `declareExclusive` implies it; **`Bond.post` refuses collateral for a mandate its agent has not acknowledged** (`NotAcknowledged`). A score should ignore unacknowledged mandates for the same reason.
+
+### The registry has no deployer (`Terms.bond`)
+
+Also not on the list, and the precondition for "no redeploy of the core". Until v0.8 the registry had one set-once `bond`, chosen by whoever deployed it. Every new challenge type therefore needed a new Bond, a new Bond needed a new registry, and a new registry orphaned every mandate ever committed — this release would have been the sixth time. Each mandate now names its own consequence contract. That contract can revoke that mandate and nothing else, which is a power its principal already holds, so nothing is delegated that was not already there. `setBond`, the global `bond` and the deployer are gone: the registry has no privileged key at all. `Bond.post` refuses a mandate that names a different Bond (`NotThisBond`), because collateral there could never be slashed — `revokeByBond` would revert every time — and would only *look* like a bond to a counterparty reading the chain.
+
+96 tests (was 82).
+
 ## v0.8.0 — 2026-09-14 — the reward belongs to whoever looked
 
 Every challenge so far paid its 10 % to whoever landed the transaction. That is not the same as paying whoever found the violation, and the difference is not academic: a challenge cannot be assembled in secret, because `FdcHub.requestAttestation` is an on-chain call carrying the deed's transaction hash or payment reference in the clear, minutes ahead of the reveal. A parasite watching `FdcHub` therefore learns of every case before it can be filed, copies the finished calldata out of the mempool and outbids the gas — paying for no monitoring and no analysis. The honest watcher pays for both. The equilibrium number of real watchers is zero, and a consequence layer nobody watches is theatre.

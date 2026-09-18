@@ -229,6 +229,10 @@ contract Bond {
     error CommittedTooLate();
     error CommitmentStale();
     error ClockDrift();
+    error WrongSource();
+    error WrongAsset();
+    error NotThisBond();
+    error NotAcknowledged();
 
     constructor(
         MandateRegistry _registry,
@@ -376,6 +380,13 @@ contract Bond {
         // A mandate can only be slashed once. Funding one that was already slashed buys the
         // depositor nothing and would look like collateral to a counterparty reading the chain.
         if (slashed[mandateId]) revert BondSlashed();
+        // Collateral only means something if THIS contract can carry out the consequence. A mandate
+        // names its own consequence contract; posted anywhere else, the slash would revert on
+        // `revokeByBond` forever and the deposit would merely look like a bond to whoever read it.
+        if (registry.get(mandateId).bond != address(this)) revert NotThisBond();
+        // ...and only if the agent has accepted the mandate. Otherwise the principal can name any
+        // address it likes as "agent" and be paid for that stranger's ordinary activity.
+        if (!registry.acknowledged(mandateId)) revert NotAcknowledged();
         bondOf[mandateId] += msg.value;
         emit BondPosted(mandateId, msg.sender, msg.value, bondOf[mandateId]);
     }
@@ -437,6 +448,7 @@ contract Bond {
         // The leaf must name the mandate being challenged. Without this the budget paths'
         // invariant did not hold here, and any leaf could be replayed under a foreign mandate.
         if (leaf.mandateId != mandateId) revert ProofDoesNotMatchClaim();
+        _requireNativeOn(registry.get(mandateId), leaf.sourceId);
 
         // --- witness 1: the agent really asserted this deed (leaf is in an anchored root) ---
         bytes32 leafHash = Receipts.hash(leaf);
@@ -505,6 +517,7 @@ contract Bond {
             revert LengthMismatch();
         }
         MandateRegistry.Mandate memory m = registry.get(mandateId);
+        if (m.assetKey != bytes32(0)) revert WrongAsset(); // this path sums native value
 
         uint256 spent;
         bytes32 lastTx;
@@ -529,6 +542,7 @@ contract Bond {
             ids[i] = txh;
             if (pr.data.votingRound < minRound) minRound = pr.data.votingRound;
             if (txh != leaf.ref || pr.data.sourceId != leaf.sourceId) revert ProofDoesNotMatchClaim();
+            if (pr.data.sourceId != m.sourceId) revert WrongSource();
             IEVMTransaction.ResponseBody calldata rb = pr.data.responseBody;
             if (rb.sourceAddress != m.agent) revert NotAgentTx();
             if (rb.status != 1) revert TxNotSuccessful();
@@ -554,12 +568,13 @@ contract Bond {
     ///         `transferWithAuthorization` on the token contract, so the tx's native `value` is 0
     ///         and the deed lives in the `Transfer(from,to,value)` event. The FDC EVMTransaction
     ///         proof must be requested with `listEvents = true` and the log index of that event.
-    /// @param asset   the ERC-20 the mandate budget is denominated in (must be the event emitter)
+    /// @dev    The asset is read from the mandate, not from calldata. Until v0.9 it was a parameter,
+    ///         which was safe only as long as the challenger had no reason to lie about it — and
+    ///         left whoever posted the bond unable to read on-chain what the budget was made of.
     /// @param salt    the secret from the commitment made before the attestations were requested
     ///                (`kind = KIND_BUDGET_ERC20`, digest over the deeds' tx hashes in this order)
     function challengeBudgetOverrunERC20(
         uint256 mandateId,
-        address asset,
         uint256[] calldata episodeIndices,
         Receipts.Leaf[] calldata leaves,
         bytes32[][] calldata merkleProofs,
@@ -574,6 +589,7 @@ contract Bond {
             revert LengthMismatch();
         }
         MandateRegistry.Mandate memory m = registry.get(mandateId);
+        address asset = _erc20Of(m);
 
         uint256 spent;
         bytes32 lastTx;
@@ -596,6 +612,7 @@ contract Bond {
             ids[i] = txh;
             if (pr.data.votingRound < minRound) minRound = pr.data.votingRound;
             if (txh != leaf.ref || pr.data.sourceId != leaf.sourceId) revert ProofDoesNotMatchClaim();
+            if (pr.data.sourceId != m.sourceId) revert WrongSource();
             IEVMTransaction.ResponseBody calldata rb = pr.data.responseBody;
             if (rb.status != 1) revert TxNotSuccessful();
             if (rb.timestamp < m.validFrom || rb.timestamp > m.validUntil) revert ClaimOutsideProvenRange();
@@ -646,6 +663,9 @@ contract Bond {
 
         MandateRegistry.Mandate memory m = registry.get(mandateId);
         if (!fdc().verifyEVMTransaction(proof)) revert FdcProofInvalid();
+        // The promise of exclusivity is about one address on one chain. The same key is the same
+        // address on every EVM chain the FDC attests, and what it does elsewhere was never promised.
+        if (proof.data.sourceId != m.sourceId) revert WrongSource();
         IEVMTransaction.ResponseBody calldata rb = proof.data.responseBody;
         if (rb.sourceAddress != m.agent) revert NotAgentTx();
         if (rb.status != 1) revert TxNotSuccessful();
@@ -731,13 +751,12 @@ contract Bond {
     // a source-scoped nonexistence proof.
     // -----------------------------------------------------------------------------------
 
-    /// @param asset address(0) to sum native transaction value; otherwise the ERC-20 whose
-    ///        `Transfer` events out of the agent are summed (the x402 case).
+    /// @dev   What is summed follows the mandate: `assetKey == 0` sums native transaction value,
+    ///        otherwise `Transfer` events out of the agent emitted by that ERC-20 (the x402 case).
     /// @param salt the secret from the commitment made before the attestations were requested
     ///        (`kind = KIND_UNDER_REPORTED`, digest over the deeds' tx hashes in this same order)
     function challengeUnderReportedSpend(
         uint256 mandateId,
-        address asset,
         IEVMTransaction.Proof[] calldata fdcProofs,
         bytes32 salt
     ) external {
@@ -751,6 +770,7 @@ contract Bond {
         uint256 n = fdcProofs.length;
         if (n == 0) revert LengthMismatch();
         MandateRegistry.Mandate memory m = registry.get(mandateId);
+        address asset = m.assetKey == bytes32(0) ? address(0) : _erc20Of(m);
 
         uint256 proven;
         bytes32 lastTx;
@@ -764,6 +784,10 @@ contract Bond {
             lastTx = txh;
             ids[i] = txh;
             if (pr.data.votingRound < minRound) minRound = pr.data.votingRound;
+            // Until v0.9 this path checked no source at all, and it has no leaf to borrow one from:
+            // a transfer by the same key on another EVM chain the FDC attests would have been summed
+            // against a tally that never promised to cover it.
+            if (pr.data.sourceId != m.sourceId) revert WrongSource();
             IEVMTransaction.ResponseBody calldata rb = pr.data.responseBody;
             if (rb.status != 1) revert TxNotSuccessful();
             if (rb.timestamp < m.validFrom || rb.timestamp > m.validUntil) revert ClaimOutsideProvenRange();
@@ -798,6 +822,20 @@ contract Bond {
             if (address(uint160(uint256(e.topics[1]))) != from) continue;
             total += abi.decode(e.data, (uint256));
         }
+    }
+
+    /// @dev The mandate's ERC-20, or a refusal. `assetKey` is a left-padded address on an EVM source;
+    ///      anything with high bits set is some other source's asset identifier and not ours to guess.
+    function _erc20Of(MandateRegistry.Mandate memory m) internal pure returns (address) {
+        if (m.assetKey == bytes32(0) || uint256(m.assetKey) >> 160 != 0) revert WrongAsset();
+        return address(uint160(uint256(m.assetKey)));
+    }
+
+    /// @dev For the external-payment paths: the deed's source must be the mandate's, and the budget
+    ///      must be in that source's native asset — the only thing `Payment`-family attestations count.
+    function _requireNativeOn(MandateRegistry.Mandate memory m, bytes32 sourceId) internal pure {
+        if (sourceId != m.sourceId) revert WrongSource();
+        if (m.assetKey != bytes32(0)) revert WrongAsset();
     }
 
     bytes32 private constant TRANSFER_SIG = keccak256("Transfer(address,address,uint256)");

@@ -30,10 +30,12 @@ echo "mode=$MODE each=$EACH budget=$BUDGET"
 
 echo "== 1. mandate (budget = 4 deeds) + exclusivity + metered effector + bond"
 NOW=$(date +%s)
-cast send $REG "commit(address,bytes32,bytes32,uint256,uint256,uint64,uint64)" $ME "$(cast keccak "metered: every settlement is recorded on the meter")" 0x$(printf '%064d' 0) 0 $BUDGET $((NOW-120)) $((NOW+604800)) --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
+Z32=0x$(printf '%064d' 0)  # v0.9 terms: (sourceId, assetKey, agentRef, bond) — asset and source live in the mandate
+cast send $REG "commit(address,bytes32,bytes32,uint256,uint256,uint64,uint64,(bytes32,bytes32,bytes32,address))" $ME "$(cast keccak "metered: every settlement is recorded on the meter")" 0x$(printf '%064d' 0) 0 $BUDGET $((NOW-120)) $((NOW+604800)) "($SRC,$Z32,$Z32,$BOND)" --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 MID=$(( $(cast call $REG "nextId()(uint256)" --rpc-url $RPC | awk '{print $1}') - 1 ))
 cast send $REG "declareExclusive(uint256)" $MID --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 cast send $METER "declareEffector(uint256,address)" $MID $ME --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
+cast send $REG "acknowledge(uint256)" $MID --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null   # the agent accepts the mandate; Bond refuses collateral without it
 cast send $BOND "post(uint256)" $MID --value 1ether --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 echo "   mandateId=$MID exclusive=$(cast call $REG 'exclusive(uint256)(bool)' $MID --rpc-url $RPC) metered=$(cast call $METER 'metered(uint256)(bool)' $MID --rpc-url $RPC)"
 
@@ -119,5 +121,5 @@ done
 echo "== 4. challengeUnderReportedSpend — the world shows more than the tally admits"
 PRS="["; for i in $ORDER; do PRS+="(${MPS[$i]},${DATAS[$i]}),"; done; PRS="${PRS%,}]"
 TI="${T:1:-1}"
-cast send $BOND "challengeUnderReportedSpend(uint256,address,(bytes32[],$TI)[],bytes32)" $MID 0x0000000000000000000000000000000000000000 "$PRS" "$HONEST_SALT" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
+cast send $BOND "challengeUnderReportedSpend(uint256,(bytes32[],$TI)[],bytes32)" $MID "$PRS" "$HONEST_SALT" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
 echo "   bondOf=$(cast call $BOND 'bondOf(uint256)(uint256)' $MID --rpc-url $RPC) slashed=$(cast call $BOND 'slashed(uint256)(bool)' $MID --rpc-url $RPC) mandateLive=$(cast call $REG 'isLive(uint256)(bool)' $MID --rpc-url $RPC)"

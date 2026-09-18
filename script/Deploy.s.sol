@@ -34,15 +34,14 @@ contract Deploy is Script {
             commitLead,
             ProtocolsV2Interface(address(0))
         );
-        // Only this Bond may revoke on a proven violation. Set once, by the deployer.
-        reg.setBond(address(bond));
+        // No wiring step: since v0.9 each mandate names its own consequence contract
+        // (`Terms.bond`), so the registry has no deployer privilege and nothing to set.
         vm.stopBroadcast();
         console.log("MandateRegistry:", address(reg));
         console.log("AnchorLog:      ", address(anchorLog));
         console.log("SpendMeter:     ", address(meter));
         console.log("Bond:           ", address(bond));
         console.log("FdcVerification:", address(bond.fdc()));
-        console.log("registry.bond:  ", reg.bond());
         console.log("responseWindow: ", bond.responseWindow());
         console.log("anchorGrace:    ", bond.anchorGrace());
         console.log("commitLead:     ", bond.commitLead());

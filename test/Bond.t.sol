@@ -66,7 +66,6 @@ contract BondTest is Test {
             reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours, meter,
             COMMIT_LEAD, ProtocolsV2Interface(address(rounds))
         );
-        reg.setBond(address(bond));
 
         vm.warp(1_800_000_000);
         vm.prank(principal);
@@ -77,7 +76,7 @@ contract BondTest is Test {
             0,
             5_000_000,
             uint64(block.timestamp),
-            uint64(block.timestamp + 1 days)
+            uint64(block.timestamp + 1 days), _terms()
         );
 
         // agent's receipt (witness 1): "I paid 1 XRP with reference REF at T"
@@ -98,10 +97,17 @@ contract BondTest is Test {
         vm.prank(agent);
         anchorLog.anchor(mandateId, root, 2);
 
+        vm.prank(agent);
+        reg.acknowledge(mandateId);
         // operator posts 10 ether bond
         vm.deal(principal, 100 ether);
         vm.prank(principal);
         bond.post{value: 10 ether}(mandateId);
+    }
+
+
+    function _terms() internal view returns (MandateRegistry.Terms memory) {
+        return MandateRegistry.Terms({sourceId: SRC_TESTXRP, assetKey: bytes32(0), agentRef: bytes32(0), bond: address(bond)});
     }
 
     function _proof() internal view returns (IReferencedPaymentNonexistence.Proof memory p) {
@@ -231,19 +237,19 @@ contract BondTest is Test {
         vm.prank(agent);
         uint256 child = reg.commit(
             sub, keccak256("child"), keccak256("vc-chain"), mandateId, 1_000_000,
-            uint64(block.timestamp), uint64(block.timestamp + 1 hours)
+            uint64(block.timestamp), uint64(block.timestamp + 1 hours), _terms()
         );
         assertTrue(reg.isLive(child));
 
         // exceeding parent's budget is refused
         vm.prank(agent);
         vm.expectRevert(MandateRegistry.ExceedsParent.selector);
-        reg.commit(sub, keccak256("too-big"), 0, mandateId, 6_000_000, uint64(block.timestamp), uint64(block.timestamp + 1 hours));
+        reg.commit(sub, keccak256("too-big"), 0, mandateId, 6_000_000, uint64(block.timestamp), uint64(block.timestamp + 1 hours), _terms());
 
         // a stranger cannot delegate from a mandate they don't hold
         vm.prank(challenger);
         vm.expectRevert(MandateRegistry.NotParentAgent.selector);
-        reg.commit(sub, keccak256("x"), 0, mandateId, 1, uint64(block.timestamp), uint64(block.timestamp + 1 hours));
+        reg.commit(sub, keccak256("x"), 0, mandateId, 1, uint64(block.timestamp), uint64(block.timestamp + 1 hours), _terms());
 
         // revoking the parent kills the child
         vm.prank(principal);
@@ -296,6 +302,155 @@ contract BondTest is Test {
         assertTrue(reg.isLive(mandateId));
     }
 
+    // ---------------------------------------------------------------------
+    // v0.9 — what the budget is made of, and who agreed to it.
+    // ---------------------------------------------------------------------
+
+    function _commitAs(address who, address agent_, uint256 parent, MandateRegistry.Terms memory t)
+        internal
+        returns (uint256)
+    {
+        vm.prank(who);
+        return reg.commit(agent_, keccak256("m"), 0, parent, 1_000, uint64(block.timestamp), uint64(block.timestamp + 1 hours), t);
+    }
+
+    function test_revert_mandateWithoutASource() public {
+        MandateRegistry.Terms memory t = _terms();
+        t.sourceId = bytes32(0);
+        vm.prank(principal);
+        vm.expectRevert(MandateRegistry.NoSource.selector);
+        reg.commit(agent, keccak256("m"), 0, 0, 1, uint64(block.timestamp), uint64(block.timestamp + 1 hours), t);
+    }
+
+    /// Narrowing attenuates a quantity. A child in another asset or on another chain is not a
+    /// smaller share of its parent's budget, it is a different budget.
+    function test_revert_childCannotChangeAssetOrSource() public {
+        MandateRegistry.Terms memory t = _terms();
+        t.assetKey = bytes32(uint256(uint160(makeAddr("some token"))));
+        vm.prank(agent);
+        vm.expectRevert(MandateRegistry.ChangesParentAsset.selector);
+        reg.commit(makeAddr("sub"), keccak256("m"), 0, mandateId, 1, uint64(block.timestamp), uint64(block.timestamp + 1 hours), t);
+
+        t = _terms();
+        t.sourceId = bytes32("XRP"); // mainnet instead of testnet: still another chain
+        vm.prank(agent);
+        vm.expectRevert(MandateRegistry.ChangesParentAsset.selector);
+        reg.commit(makeAddr("sub"), keccak256("m"), 0, mandateId, 1, uint64(block.timestamp), uint64(block.timestamp + 1 hours), t);
+    }
+
+    /// The child may name its own sub-agent's identity and its own consequence contract; both are
+    /// about the child, not about what the parent's budget is made of.
+    function test_childKeepsAssetButNamesItsOwnAgentRef() public {
+        MandateRegistry.Terms memory t = _terms();
+        t.agentRef = keccak256("rSubAgentAddress");
+        uint256 child = _commitAs(agent, makeAddr("sub"), mandateId, t);
+        MandateRegistry.Mandate memory m = reg.get(child);
+        assertEq(m.sourceId, SRC_TESTXRP);
+        assertEq(m.assetKey, bytes32(0));
+        assertEq(m.agentRef, keccak256("rSubAgentAddress"));
+    }
+
+    /// A principal writes the agent's address unilaterally. Until the agent says yes, the mandate is
+    /// a claim about an address — and collateral under it would insure a stranger's ordinary life.
+    function test_revert_postUnderUnacknowledgedMandate() public {
+        uint256 id = _commitAs(principal, makeAddr("a busy stranger"), 0, _terms());
+        vm.prank(principal);
+        vm.expectRevert(Bond.NotAcknowledged.selector);
+        bond.post{value: 1 ether}(id);
+    }
+
+    function test_revert_onlyTheAgentAcknowledges() public {
+        uint256 id = _commitAs(principal, agent, 0, _terms());
+        vm.prank(principal);
+        vm.expectRevert(MandateRegistry.NotAgent.selector);
+        reg.acknowledge(id);
+        vm.prank(agent);
+        reg.acknowledge(id);
+        assertTrue(reg.acknowledged(id));
+    }
+
+    /// Collateral posted to a Bond the mandate does not name could never be slashed: `revokeByBond`
+    /// would revert every time. It would only look like a bond.
+    function test_revert_postToABondTheMandateDoesNotName() public {
+        MandateRegistry.Terms memory t = _terms();
+        t.bond = makeAddr("some other consequence contract");
+        uint256 id = _commitAs(principal, agent, 0, t);
+        vm.prank(agent);
+        reg.acknowledge(id);
+        vm.prank(principal);
+        vm.expectRevert(Bond.NotThisBond.selector);
+        bond.post{value: 1 ether}(id);
+    }
+
+    /// The registry has no deployer and no global Bond: a consequence contract can revoke exactly
+    /// the mandates that named it, which is no more than their principals could do anyway.
+    function test_consequenceContractRevokesOnlyMandatesThatNamedIt() public {
+        address other = makeAddr("bond v2");
+        MandateRegistry.Terms memory t = _terms();
+        t.bond = other;
+        uint256 id = _commitAs(principal, agent, 0, t);
+
+        vm.prank(other);
+        vm.expectRevert(MandateRegistry.NotBond.selector);
+        reg.revokeByBond(mandateId); // named `bond`, not `other`
+
+        vm.prank(address(bond));
+        vm.expectRevert(MandateRegistry.NotBond.selector);
+        reg.revokeByBond(id); // and the other way round
+
+        vm.prank(other);
+        reg.revokeByBond(id);
+        assertFalse(reg.isLive(id));
+        assertTrue(reg.isLive(mandateId));
+    }
+
+    /// A mandate that names no consequence contract can be revoked by no contract at all.
+    function test_revert_revokeByBondWhenMandateNamesNone() public {
+        MandateRegistry.Terms memory t = _terms();
+        t.bond = address(0);
+        uint256 id = _commitAs(principal, agent, 0, t);
+        vm.prank(address(0));
+        vm.expectRevert(MandateRegistry.NotBond.selector);
+        reg.revokeByBond(id);
+    }
+
+    /// The false-payment path proves a payment in the source's native asset did not arrive. Against
+    /// a mandate whose budget is some token, that is a true statement about the wrong thing.
+    function test_revert_falsePaymentAgainstATokenMandate() public {
+        MandateRegistry.Terms memory t = _terms();
+        t.assetKey = bytes32(uint256(uint160(makeAddr("token"))));
+        uint256 id = _commitAs(principal, agent, 0, t);
+        Receipts.Leaf memory l = leaf;
+        l.mandateId = id;
+        vm.prank(agent);
+        anchorLog.anchor(id, Receipts.hashMem(l), 1);
+        vm.prank(agent);
+        reg.acknowledge(id);
+        vm.prank(principal);
+        bond.post{value: 1 ether}(id);
+        vm.prank(challenger);
+        vm.expectRevert(Bond.WrongAsset.selector);
+        bond.challengeFalsePayment(id, 0, l, new bytes32[](0), _proof(), SALT);
+    }
+
+    /// ...and a receipt naming another chain than the mandate's is not a deed under the mandate.
+    function test_revert_falsePaymentOnAnotherSource() public {
+        MandateRegistry.Terms memory t = _terms();
+        t.sourceId = bytes32("testBTC");
+        uint256 id = _commitAs(principal, agent, 0, t);
+        Receipts.Leaf memory l = leaf; // says testXRP
+        l.mandateId = id;
+        vm.prank(agent);
+        anchorLog.anchor(id, Receipts.hashMem(l), 1);
+        vm.prank(agent);
+        reg.acknowledge(id);
+        vm.prank(principal);
+        bond.post{value: 1 ether}(id);
+        vm.prank(challenger);
+        vm.expectRevert(Bond.WrongSource.selector);
+        bond.challengeFalsePayment(id, 0, l, new bytes32[](0), _proof(), SALT);
+    }
+
     /// The immunisation attack: burn the leaf under a throwaway mandate of your own, and the
     /// same evidence can never convict anyone again. Killed by binding leaf.mandateId and by
     /// scoping consumedLeaf per mandate.
@@ -304,10 +459,11 @@ contract BondTest is Test {
         vm.deal(attacker, 1 ether);
         vm.startPrank(attacker);
         uint256 decoy = reg.commit(
-            attacker, keccak256("decoy"), bytes32(0), 0, 1, uint64(block.timestamp), uint64(block.timestamp + 1 hours)
+            attacker, keccak256("decoy"), bytes32(0), 0, 1, uint64(block.timestamp), uint64(block.timestamp + 1 hours), _terms()
         );
         // root == leafHash, so the Merkle path is empty and inclusion is trivially true
         anchorLog.anchor(decoy, Receipts.hashMem(leaf), 1);
+        reg.acknowledge(decoy);
         bond.post{value: 1 wei}(decoy);
         vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
         bond.challengeFalsePayment(decoy, 0, leaf, new bytes32[](0), _proof(), SALT);
@@ -351,8 +507,8 @@ contract BondTest is Test {
         vm.startPrank(agent);
         for (uint256 i = 0; i < 65; i++) {
             parent = reg.commit(
-                agent, keccak256("child"), bytes32(0), parent, 1, uint64(block.timestamp), uint64(block.timestamp + 1 hours)
-            );
+                agent, keccak256("child"), bytes32(0), parent, 1, uint64(block.timestamp), uint64(block.timestamp + 1 hours), _terms()
+        );
         }
         vm.stopPrank();
         assertFalse(reg.isLive(parent), "chain deeper than the guard must be dead, not immortal");

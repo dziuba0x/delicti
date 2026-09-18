@@ -36,7 +36,8 @@ echo "   ledger=$LATEST dest=$DESTADDR"
 
 echo "== 2. mandate → anchored false receipt → bond"
 NOW=$(date +%s); MH=$(cast keccak "DELICTI mandate: may pay up to 5 XRP to $DESTADDR")
-cast send $REG "commit(address,bytes32,bytes32,uint256,uint256,uint64,uint64)" $ME $MH 0x$(printf '%064d' 0) 0 5000000 $((NOW-120)) $((NOW+604800)) --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
+Z32=0x$(printf '%064d' 0)  # v0.9 terms: (sourceId, assetKey, agentRef, bond) — asset and source live in the mandate
+cast send $REG "commit(address,bytes32,bytes32,uint256,uint256,uint64,uint64,(bytes32,bytes32,bytes32,address))" $ME $MH 0x$(printf '%064d' 0) 0 5000000 $((NOW-120)) $((NOW+604800)) "($SRC,$Z32,$Z32,$BOND)" --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 MID=$(( $(cast call $REG "nextId()(uint256)" --rpc-url $RPC | awk '{print $1}') - 1 ))
 RH=$(cast keccak "x402_receipt: paid 1 XRP to $DESTADDR ref $REF")
 LEAF="($RH,3,$SRC,$DEST,$AMT,$REF,$CLAIMED,$MID)"
@@ -44,6 +45,7 @@ LH=$(cast keccak "$(cast abi-encode 'f((bytes32,uint8,bytes32,bytes32,uint256,by
 SIB=$(cast keccak "sibling receipt: tool_call get_ftso_price")
 if [[ "$LH" < "$SIB" ]]; then ROOT=$(cast keccak "$(cast concat-hex $LH $SIB)"); else ROOT=$(cast keccak "$(cast concat-hex $SIB $LH)"); fi
 cast send $LOG "anchor(uint256,bytes32,uint64)" $MID $ROOT 2 --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
+cast send $REG "acknowledge(uint256)" $MID --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null   # the agent accepts the mandate; Bond refuses collateral without it
 cast send $BOND "post(uint256)" $MID --value 1ether --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 echo "   mandateId=$MID leaf=$LH root=$ROOT bond=1 C2FLR"
 

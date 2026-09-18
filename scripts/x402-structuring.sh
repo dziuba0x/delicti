@@ -35,8 +35,10 @@ OUT=$(mktemp -d); echo "work dir: $OUT"
 
 echo "== 1. mandate (budget 4 mUSDT0) + bond"
 NOW=$(date +%s)
-cast send $REG "commit(address,bytes32,bytes32,uint256,uint256,uint64,uint64)" $ME "$(cast keccak "may spend up to 4 mUSDT0 at $PAYEE via x402")" 0x$(printf '%064d' 0) 0 $BUDGET $((NOW-120)) $((NOW+604800)) --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
+Z32=0x$(printf '%064d' 0)  # v0.9 terms: (sourceId, assetKey, agentRef, bond) — asset and source live in the mandate
+cast send $REG "commit(address,bytes32,bytes32,uint256,uint256,uint64,uint64,(bytes32,bytes32,bytes32,address))" $ME "$(cast keccak "may spend up to 4 mUSDT0 at $PAYEE via x402")" 0x$(printf '%064d' 0) 0 $BUDGET $((NOW-120)) $((NOW+604800)) "($SRC,$(cast to-uint256 $TOKEN),$Z32,$BOND)" --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 MID=$(( $(cast call $REG "nextId()(uint256)" --rpc-url $RPC | awk '{print $1}') - 1 )); echo "   mandateId=$MID"
+cast send $REG "acknowledge(uint256)" $MID --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null   # the agent accepts the mandate; Bond refuses collateral without it
 cast send $BOND "post(uint256)" $MID --value 1ether --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 BAL=$(cast call $TOKEN "balanceOf(address)(uint256)" $ME --rpc-url $RPC | awk '{print $1}')
 [ "$BAL" -lt $((N*EACH)) ] && cast send $TOKEN "mint(address,uint256)" $ME $((N*EACH)) --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
@@ -102,7 +104,7 @@ echo "== 4. challengeBudgetOverrunERC20 — 5 × 1 mUSDT0 > 4 mUSDT0"
 IDX="["; LS="["; PS="["; PRS="["
 for i in $ORDER; do IDX+="$i,"; LS+="$(python3 -c "import json;print(json.load(open('$OUT/leaf$i.json'))['_tuple'])"),"; PS+="[],"; PRS+="(${MPS[$i]},${DATAS[$i]}),"; done
 IDX="${IDX%,}]"; LS="${LS%,}]"; PS="${PS%,}]"; PRS="${PRS%,}]"
-TI="${T:1:-1}"; SIG="challengeBudgetOverrunERC20(uint256,address,uint256[],(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256)[],bytes32[][],(bytes32[],$TI)[],bytes32)"
-cast send $BOND "$SIG" $MID $TOKEN "$IDX" "$LS" "$PS" "$PRS" "$HONEST_SALT" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
+TI="${T:1:-1}"; SIG="challengeBudgetOverrunERC20(uint256,uint256[],(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256)[],bytes32[][],(bytes32[],$TI)[],bytes32)"
+cast send $BOND "$SIG" $MID "$IDX" "$LS" "$PS" "$PRS" "$HONEST_SALT" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
 echo "   bondOf=$(cast call $BOND 'bondOf(uint256)(uint256)' $MID --rpc-url $RPC) slashed=$(cast call $BOND 'slashed(uint256)(bool)' $MID --rpc-url $RPC) mandateLive=$(cast call $REG 'isLive(uint256)(bool)' $MID --rpc-url $RPC)"
 echo "receipts + leaves kept in $OUT"

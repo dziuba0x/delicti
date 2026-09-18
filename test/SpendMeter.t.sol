@@ -48,8 +48,27 @@ contract SpendMeterTest is Test {
     bytes32 constant SALT = keccak256("the watcher's salt");
 
     uint256 mandateId;
+    bytes32 assetKey_; // what the next committed mandate's budget is made of
+
+    function _terms() internal view returns (MandateRegistry.Terms memory) {
+        return MandateRegistry.Terms({sourceId: SRC, assetKey: assetKey_, agentRef: bytes32(0), bond: address(bond)});
+    }
+
+    /// @dev A second, native-asset mandate: metered, exclusive, bonded — same shape as the ERC-20 one.
+    function _nativeMandate() internal returns (uint256 id) {
+        assetKey_ = bytes32(0);
+        vm.prank(principal);
+        id = reg.commit(agent, keccak256("native, metered"), 0, 0, BUDGET, uint64(block.timestamp), uint64(block.timestamp + 7 days), _terms());
+        vm.prank(agent);
+        reg.declareExclusive(id);
+        vm.prank(principal);
+        meter.declareEffector(id, effector);
+        vm.prank(principal);
+        bond.post{value: 10 ether}(id);
+    }
 
     function setUp() public {
+        assetKey_ = bytes32(uint256(uint160(token)));
         reg = new MandateRegistry();
         anchorLog = new AnchorLog(reg);
         mock = new MockFdcMeter();
@@ -59,13 +78,12 @@ contract SpendMeterTest is Test {
             reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours, meter,
             COMMIT_LEAD, ProtocolsV2Interface(address(rounds))
         );
-        reg.setBond(address(bond));
         vm.warp(1_800_000_000);
 
         vm.prank(principal);
         mandateId = reg.commit(
             agent, keccak256("may spend up to 4 at merchant, metered"), 0, 0, BUDGET,
-            uint64(block.timestamp), uint64(block.timestamp + 7 days)
+            uint64(block.timestamp), uint64(block.timestamp + 7 days), _terms()
         );
         vm.prank(agent);
         reg.declareExclusive(mandateId);
@@ -194,7 +212,7 @@ contract SpendMeterTest is Test {
 
         _arm(challenger, mandateId, _bundle(5, true));
         vm.prank(challenger);
-        bond.challengeUnderReportedSpend(mandateId, token, _bundle(5, true), SALT);
+        bond.challengeUnderReportedSpend(mandateId, _bundle(5, true), SALT);
 
         assertTrue(bond.slashed(mandateId));
         assertFalse(reg.isLive(mandateId));
@@ -203,12 +221,32 @@ contract SpendMeterTest is Test {
     }
 
     function test_underReportedSpend_slashes_native() public {
+        uint256 id = _nativeMandate();
         vm.prank(effector);
-        meter.note(mandateId, EACH);
+        meter.note(id, EACH);
+        _arm(challenger, id, _bundle(3, false));
+        vm.prank(challenger);
+        bond.challengeUnderReportedSpend(id, _bundle(3, false), SALT);
+        assertTrue(bond.slashed(id));
+    }
+
+    /// v0.9 — the asset is the mandate's, not the challenger's. Native transfers by the agent are
+    /// real, but they are not what an ERC-20 mandate's tally promised to cover: summed against it
+    /// they come to zero, and the challenge fails on its merits instead of on a parameter.
+    function test_revert_nativeDeedsAgainstAnErc20Mandate() public {
         _arm(challenger, mandateId, _bundle(3, false));
         vm.prank(challenger);
-        bond.challengeUnderReportedSpend(mandateId, address(0), _bundle(3, false), SALT);
-        assertTrue(bond.slashed(mandateId));
+        vm.expectRevert(Bond.TallyAgrees.selector);
+        bond.challengeUnderReportedSpend(mandateId, _bundle(3, false), SALT);
+    }
+
+    /// v0.9 — same key, same address, another EVM chain. Until now this path checked no source.
+    function test_revert_deedOnAnotherChain() public {
+        IEVMTransaction.Proof[] memory ps = _bundle(5, true);
+        ps[3].data.sourceId = bytes32("testETH");
+        vm.prank(challenger);
+        vm.expectRevert(Bond.WrongSource.selector);
+        bond.challengeUnderReportedSpend(mandateId, ps, SALT);
     }
 
     /// An honest effector is not a target: the tally matches what the world shows.
@@ -219,14 +257,14 @@ contract SpendMeterTest is Test {
         _arm(challenger, mandateId, _bundle(5, true));
         vm.prank(challenger);
         vm.expectRevert(Bond.TallyAgrees.selector);
-        bond.challengeUnderReportedSpend(mandateId, token, _bundle(5, true), SALT);
+        bond.challengeUnderReportedSpend(mandateId, _bundle(5, true), SALT);
     }
 
     /// A mandate nobody meters never promised a tally, so it cannot have broken one.
     function test_revert_whenMandateNotMetered() public {
         vm.prank(principal);
         uint256 other = reg.commit(
-            agent, keccak256("unmetered"), 0, 0, BUDGET, uint64(block.timestamp), uint64(block.timestamp + 1 days)
+            agent, keccak256("unmetered"), 0, 0, BUDGET, uint64(block.timestamp), uint64(block.timestamp + 1 days), _terms()
         );
         vm.prank(agent);
         reg.declareExclusive(other);
@@ -234,7 +272,7 @@ contract SpendMeterTest is Test {
         bond.post{value: 1 ether}(other);
         vm.prank(challenger);
         vm.expectRevert(Bond.NotMetered.selector);
-        bond.challengeUnderReportedSpend(other, token, _bundle(5, true), SALT);
+        bond.challengeUnderReportedSpend(other, _bundle(5, true), SALT);
     }
 
     /// Without exclusivity an outflow from the agent may be none of this mandate's business.
@@ -243,15 +281,17 @@ contract SpendMeterTest is Test {
         vm.prank(principal);
         uint256 other = reg.commit(
             agent, keccak256("metered but not exclusive"), 0, 0, BUDGET,
-            uint64(block.timestamp), uint64(block.timestamp + 1 days)
+            uint64(block.timestamp), uint64(block.timestamp + 1 days), _terms()
         );
+        vm.prank(agent);
+        reg.acknowledge(other);
         vm.prank(principal);
         meter.declareEffector(other, effector);
         vm.prank(principal);
         bond.post{value: 1 ether}(other);
         vm.prank(challenger);
         vm.expectRevert(Bond.NotExclusive.selector);
-        bond.challengeUnderReportedSpend(other, token, _bundle(5, true), SALT);
+        bond.challengeUnderReportedSpend(other, _bundle(5, true), SALT);
     }
 
     function test_revert_duplicateDeedInBundle() public {
@@ -259,7 +299,7 @@ contract SpendMeterTest is Test {
         ps[2] = ps[1];
         vm.prank(challenger);
         vm.expectRevert(Bond.UnorderedTxs.selector);
-        bond.challengeUnderReportedSpend(mandateId, token, ps, SALT);
+        bond.challengeUnderReportedSpend(mandateId, ps, SALT);
     }
 
     function test_revert_deedOutsideMandateWindow() public {
@@ -267,22 +307,23 @@ contract SpendMeterTest is Test {
         ps[1].data.responseBody.timestamp = uint64(block.timestamp - 1);
         vm.prank(challenger);
         vm.expectRevert(Bond.ClaimOutsideProvenRange.selector);
-        bond.challengeUnderReportedSpend(mandateId, token, ps, SALT);
+        bond.challengeUnderReportedSpend(mandateId, ps, SALT);
     }
 
     function test_revert_nativeDeedByAnotherAddress() public {
+        uint256 id = _nativeMandate();
         IEVMTransaction.Proof[] memory ps = _bundle(2, false);
         ps[0].data.responseBody.sourceAddress = makeAddr("someone else");
         vm.prank(challenger);
         vm.expectRevert(Bond.NotAgentTx.selector);
-        bond.challengeUnderReportedSpend(mandateId, address(0), ps, SALT);
+        bond.challengeUnderReportedSpend(id, ps, SALT);
     }
 
     function test_revert_whenFdcRejectsTheProof() public {
         mock.setVerdict(false);
         vm.prank(challenger);
         vm.expectRevert(Bond.FdcProofInvalid.selector);
-        bond.challengeUnderReportedSpend(mandateId, token, _bundle(3, true), SALT);
+        bond.challengeUnderReportedSpend(mandateId, _bundle(3, true), SALT);
     }
 
     // --- commit–reveal over a sequence (SPEC 6.7) ---
@@ -296,7 +337,7 @@ contract SpendMeterTest is Test {
         _arm(challenger, mandateId, _bundle(5, true)); // committed to five deeds
         vm.prank(challenger);
         vm.expectRevert(Bond.NoCommitment.selector);
-        bond.challengeUnderReportedSpend(mandateId, token, _bundle(3, true), SALT); // revealed three
+        bond.challengeUnderReportedSpend(mandateId, _bundle(3, true), SALT); // revealed three
     }
 
     /// The deadline is set by the LOWEST voting round in the bundle, not the highest. Otherwise one
@@ -311,7 +352,7 @@ contract SpendMeterTest is Test {
         _armAged(challenger, mandateId, ps, COMMIT_LEAD - 1);
         vm.prank(challenger);
         vm.expectRevert(Bond.CommittedTooLate.selector);
-        bond.challengeUnderReportedSpend(mandateId, token, ps, SALT);
+        bond.challengeUnderReportedSpend(mandateId, ps, SALT);
     }
 
     /// The counterpart: give the LOWEST round the full lead and the same bundle lands. Separate
@@ -323,7 +364,7 @@ contract SpendMeterTest is Test {
         ps[1].data.votingRound = 500;
         _armAged(challenger, mandateId, ps, COMMIT_LEAD);
         vm.prank(challenger);
-        bond.challengeUnderReportedSpend(mandateId, token, ps, SALT);
+        bond.challengeUnderReportedSpend(mandateId, ps, SALT);
         assertTrue(bond.slashed(mandateId));
     }
 }

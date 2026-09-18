@@ -62,13 +62,12 @@ contract UnanchoredTest is Test {
             reg, anchorLog, IFdcVerification(address(mock)), RESPONSE, 1 hours, meter,
             COMMIT_LEAD, ProtocolsV2Interface(address(rounds))
         );
-        reg.setBond(address(bond));
         vm.warp(1_800_000_000);
 
         vm.prank(principal);
         mandateId = reg.commit(
             agent, keccak256("may spend up to 4 FLR at merchant"), 0, 0, 4 ether,
-            uint64(block.timestamp), uint64(block.timestamp + 7 days)
+            uint64(block.timestamp), uint64(block.timestamp + 7 days), _terms()
         );
         vm.prank(agent);
         reg.declareExclusive(mandateId);
@@ -81,6 +80,10 @@ contract UnanchoredTest is Test {
         STAKE = bond.ACCUSATION_STAKE();
         GRACE = bond.anchorGrace();
         deedTime = uint64(block.timestamp + 60);
+    }
+
+    function _terms() internal view returns (MandateRegistry.Terms memory) {
+        return MandateRegistry.Terms({sourceId: bytes32("testFLR"), assetKey: bytes32(0), agentRef: bytes32(0), bond: address(bond)});
     }
 
     function _proof() internal view returns (IEVMTransaction.Proof memory p) {
@@ -183,8 +186,10 @@ contract UnanchoredTest is Test {
     function test_revert_accuseWithoutExclusivity() public {
         vm.prank(principal);
         uint256 other = reg.commit(
-            agent, keccak256("non-exclusive"), 0, 0, 4 ether, uint64(block.timestamp), uint64(block.timestamp + 7 days)
+            agent, keccak256("non-exclusive"), 0, 0, 4 ether, uint64(block.timestamp), uint64(block.timestamp + 7 days), _terms()
         );
+        vm.prank(agent);
+        reg.acknowledge(other);
         vm.prank(principal);
         bond.post{value: 1 ether}(other);
         vm.warp(deedTime + GRACE + 1);
@@ -236,7 +241,7 @@ contract UnanchoredTest is Test {
     function test_revert_onlyAgentDeclaresExclusive() public {
         vm.prank(principal);
         uint256 other = reg.commit(
-            agent, keccak256("x"), 0, 0, 1 ether, uint64(block.timestamp), uint64(block.timestamp + 1 days)
+            agent, keccak256("x"), 0, 0, 1 ether, uint64(block.timestamp), uint64(block.timestamp + 1 days), _terms()
         );
         vm.prank(principal);
         vm.expectRevert(MandateRegistry.NotAgent.selector);

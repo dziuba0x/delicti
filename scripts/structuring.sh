@@ -29,8 +29,10 @@ T0=$(cast call $FSM "firstVotingRoundStartTs()(uint64)" --rpc-url $RPC | awk '{p
 
 echo "== 1. mandate: budget 4 C2FLR"
 NOW=$(date +%s)
-cast send $REG "commit(address,bytes32,bytes32,uint256,uint256,uint64,uint64)" $ME "$(cast keccak "may spend up to 4 C2FLR at $MERCHANT")" 0x$(printf '%064d' 0) 0 $BUDGET $((NOW-120)) $((NOW+604800)) --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
+Z32=0x$(printf '%064d' 0)  # v0.9 terms: (sourceId, assetKey, agentRef, bond) — asset and source live in the mandate
+cast send $REG "commit(address,bytes32,bytes32,uint256,uint256,uint64,uint64,(bytes32,bytes32,bytes32,address))" $ME "$(cast keccak "may spend up to 4 C2FLR at $MERCHANT")" 0x$(printf '%064d' 0) 0 $BUDGET $((NOW-120)) $((NOW+604800)) "($SRC,$Z32,$Z32,$BOND)" --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 MID=$(( $(cast call $REG "nextId()(uint256)" --rpc-url $RPC | awk '{print $1}') - 1 )); echo "   mandateId=$MID"
+cast send $REG "acknowledge(uint256)" $MID --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null   # the agent accepts the mandate; Bond refuses collateral without it
 cast send $BOND "post(uint256)" $MID --value 1ether --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 
 echo "== 2. $N deeds: 1 C2FLR each → receipt anchored"

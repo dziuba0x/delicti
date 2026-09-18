@@ -51,21 +51,24 @@ echo "== mint if needed"
 [ "$(bal)" -lt $((3*EACH)) ] && cast send $TOKEN "mint(address,uint256)" $ME $((5*EACH)) --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 
 echo "== case 0: live mandate, correct agent → PAID"
-cast send $REG "commit(address,bytes32,bytes32,uint256,uint256,uint64,uint64)" $ME "$(cast keccak "brake test: live")" $ZERO 0 $((10*EACH)) $((NOW-120)) $((NOW+86400)) --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
+Z32=0x$(printf '%064d' 0)  # v0.9 terms: (sourceId, assetKey, agentRef, bond) — asset and source live in the mandate
+cast send $REG "commit(address,bytes32,bytes32,uint256,uint256,uint64,uint64,(bytes32,bytes32,bytes32,address))" $ME "$(cast keccak "brake test: live")" $ZERO 0 $((10*EACH)) $((NOW-120)) $((NOW+86400)) "($(cast format-bytes32-string testFLR),$(cast to-uint256 $TOKEN),$Z32,${BOND:-0x0000000000000000000000000000000000000000})" --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 LIVE=$(newid); run live "$LIVE" PAID
 
 echo "== case 1: no mandate_id (DELICTI_REQUIRE_MANDATE=1) → REFUSED"
 run nomandate "" REFUSED
 
 echo "== case 2: revoked mandate → REFUSED"
-cast send $REG "commit(address,bytes32,bytes32,uint256,uint256,uint64,uint64)" $ME "$(cast keccak "brake test: revoked")" $ZERO 0 $((10*EACH)) $((NOW-120)) $((NOW+86400)) --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
+Z32=0x$(printf '%064d' 0)  # v0.9 terms: (sourceId, assetKey, agentRef, bond) — asset and source live in the mandate
+cast send $REG "commit(address,bytes32,bytes32,uint256,uint256,uint64,uint64,(bytes32,bytes32,bytes32,address))" $ME "$(cast keccak "brake test: revoked")" $ZERO 0 $((10*EACH)) $((NOW-120)) $((NOW+86400)) "($(cast format-bytes32-string testFLR),$(cast to-uint256 $TOKEN),$Z32,${BOND:-0x0000000000000000000000000000000000000000})" --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 DEAD=$(newid)
 cast send $REG "revoke(uint256)" $DEAD --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 echo "   mandate $DEAD isLive=$(cast call $REG 'isLive(uint256)(bool)' $DEAD --rpc-url $RPC)"
 run revoked "$DEAD" REFUSED
 
 echo "== case 3: someone else's mandate → REFUSED"
-cast send $REG "commit(address,bytes32,bytes32,uint256,uint256,uint64,uint64)" $STRANGER "$(cast keccak "brake test: stranger")" $ZERO 0 $((10*EACH)) $((NOW-120)) $((NOW+86400)) --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
+Z32=0x$(printf '%064d' 0)  # v0.9 terms: (sourceId, assetKey, agentRef, bond) — asset and source live in the mandate
+cast send $REG "commit(address,bytes32,bytes32,uint256,uint256,uint64,uint64,(bytes32,bytes32,bytes32,address))" $STRANGER "$(cast keccak "brake test: stranger")" $ZERO 0 $((10*EACH)) $((NOW-120)) $((NOW+86400)) "($(cast format-bytes32-string testFLR),$(cast to-uint256 $TOKEN),$Z32,${BOND:-0x0000000000000000000000000000000000000000})" --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 OTHER=$(newid); echo "   mandate $OTHER belongs to $STRANGER, payer is $ME"
 run borrowed "$OTHER" REFUSED
 

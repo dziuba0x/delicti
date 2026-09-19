@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="assets/social-preview.png" alt="DELICTI — corpus delicti for AI agents" width="720">
-
 # DELICTI
 
 **Accountability for autonomous AI agents: a mandate before the act, an independent witness to the deed, and a bond that pays for the breach — without a court.**

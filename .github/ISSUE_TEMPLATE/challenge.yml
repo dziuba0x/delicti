@@ -1,0 +1,17 @@
+name: New challenge or evidence source
+description: A violation DELICTI cannot prove yet, or an FDC attestation type it could use
+labels: [challenge]
+body:
+  - type: textarea
+    attributes:
+      label: The deed and the violation
+      description: What did the agent do, and which mandate term does it break?
+    validations: { required: true }
+  - type: textarea
+    attributes:
+      label: Second witness
+      description: Which FDC attestation type (or other independent source) would prove the effect?
+  - type: textarea
+    attributes:
+      label: What it would not prove
+      description: The limit that would go into SPEC §10.

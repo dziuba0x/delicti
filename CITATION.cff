@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "If you use DELICTI, please cite it as below."
+title: "DELICTI: corpus delicti for AI agents — mandate before act, independent witness to the deed, bonded consequence"
+type: software
+authors:
+  - family-names: Dziuba
+    given-names: Alan
+    affiliation: Dziuba Technology
+repository-code: "https://github.com/dziuba0x/delicti"
+url: "https://github.com/dziuba0x/delicti"
+abstract: >-
+  An accountability layer for autonomous AI agents on Flare. A principal commits a
+  mandate on-chain before the agent acts; the effector's signed receipt is the first
+  witness and a Flare Data Connector attestation of the effect on EVM chains or XRPL
+  is the second; violations are computed over the whole sequence of deeds, so
+  structuring is caught; and a bond is slashed in proportion to the breach, without a court.
+keywords:
+  - ai-agents
+  - agent-security
+  - accountability
+  - attestation
+  - flare-network
+  - flare-data-connector
+  - xrpl
+  - x402
+  - model-context-protocol
+  - slashing
+license: MIT
+version: 0.9.0
+date-released: "2026-09-19"

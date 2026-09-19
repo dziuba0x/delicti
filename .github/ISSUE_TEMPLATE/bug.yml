@@ -1,0 +1,17 @@
+name: Bug
+description: Something in the contracts, scripts or tools behaves differently from the SPEC
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened, and what the SPEC says should happen
+      description: Cite the SPEC section if you can.
+    validations: { required: true }
+  - type: textarea
+    attributes:
+      label: Reproduction
+      description: A Foundry test, a script run, or a Coston2 transaction hash.
+      render: solidity
+  - type: input
+    attributes:
+      label: Version / commit

@@ -1,14 +1,34 @@
 {
   "name": "delicti",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "version": "0.9.0",
+  "private": true,
+  "description": "Accountability for AI agents on Flare: mandate before act, FDC as independent second witness, proportional bonded slashing.",
+  "keywords": [
+    "ai-agents",
+    "agent-security",
+    "flare",
+    "fdc",
+    "xrpl",
+    "x402",
+    "mcp",
+    "solidity",
+    "attestation",
+    "slashing"
+  ],
+  "homepage": "https://github.com/dziuba0x/delicti#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dziuba0x/delicti.git"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/dziuba0x/delicti/issues"
+  },
+  "author": "Alan Dziuba (Dziuba Technology)",
+  "license": "MIT",
+  "scripts": {
+    "build": "forge build",
+    "test": "forge test"
+  },
   "dependencies": {
     "@flarenetwork/flare-periphery-contracts": "^0.1.52",
     "@openzeppelin/contracts": "^5.6.1"

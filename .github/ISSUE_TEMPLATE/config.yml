@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/dziuba0x/delicti/security/advisories/new
+    about: Please report exploitable bugs privately.
+  - name: Questions and ideas
+    url: https://github.com/dziuba0x/delicti/discussions
+    about: Design questions, integrations, "could DELICTI prove X?"

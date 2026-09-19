@@ -13,13 +13,14 @@
   </g>
   <text x="96" y="230" font-family="Inter, Helvetica, Arial, sans-serif" font-size="128" font-weight="700" letter-spacing="10" fill="url(#ti)">DELICTI</text>
   <text x="102" y="300" font-family="Inter, Helvetica, Arial, sans-serif" font-size="30" fill="#c9d1d9" letter-spacing="1">Corpus delicti for AI agents.</text>
-  <text x="102" y="350" font-family="Inter, Helvetica, Arial, sans-serif" font-size="22" fill="#8b949e">mandate before act · effector receipts · Flare FDC as second witness · bonded consequence</text>
+  <text x="102" y="350" font-family="Inter, Helvetica, Arial, sans-serif" font-size="22" fill="#8b949e">mandate before act · Flare FDC as second witness · proportional slashing · EVM + XRPL</text>
   <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="20" fill="#e62058">
     <text x="102" y="440">receipt says: paid.   FDC says: no.   → slashed.</text>
+    <text x="102" y="476" fill="#c9d1d9">5 × 1 under a budget of 4   → 25 % of the bond.</text>
   </g>
   <g font-family="Inter, Helvetica, Arial, sans-serif" font-size="18" fill="#6e7681">
     <text x="102" y="600">github.com/dziuba0x/delicti</text>
-    <text x="1184" y="600" text-anchor="end">live on Flare Coston2 · MIT · Dziuba Technology</text>
+    <text x="1184" y="600" text-anchor="end">v0.9 · live on Flare Coston2 · MIT · Dziuba Technology</text>
   </g>
   <rect x="1120" y="80" width="64" height="40" fill="#ffffff"/><rect x="1120" y="120" width="64" height="40" fill="#dc143c"/>
 </svg>

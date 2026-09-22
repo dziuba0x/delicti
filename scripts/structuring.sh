@@ -14,7 +14,8 @@ cd "$(dirname "$0")/.."; set -a; . ./.env; set +a
 RPC=$COSTON2_RPC
 REG=${REG:-0x52A61f0B9312042c514B0aC5C053747B0EdF0C17}
 LOG=${LOG:-0x10F4e4bc90d483B9E1D6c90EE6d6275FF825D2ae}
-BOND=${BOND:-0x84Da6082Ba9f453d6aE59A0A3f868F6A1C35046E}
+BOND=${BOND:?set BOND to the v0.11 Vault (the address mandates name in Terms.bond)}
+JUDGE_EVM=${JUDGE_EVM:?set JUDGE_EVM to the v0.11 JudgeEvm}
 MERCHANT=${MERCHANT:-0x2222222222222222222222222222222222222222}
 N=${N:-5}; EACH=1000000000000000000; BUDGET=4000000000000000000
 SNIPE=${SNIPE:-1}
@@ -99,7 +100,7 @@ if [ "$SNIPE" = 1 ]; then
   SNIPE_SALT=$(cast keccak "the copier's salt $RANDOM")
   delicti_commit $BOND 2 $MID "$SORTED" "$SNIPE_SALT"
   set +e
-  OUT=$(cast send $BOND "$SIG" $MID "$IDX" "$LS" "$PS" "$PRS" "$SNIPE_SALT" \
+  OUT=$(cast send $JUDGE_EVM "$SIG" $MID "$IDX" "$LS" "$PS" "$PRS" "$SNIPE_SALT" \
     --gas-limit 3000000 --private-key $PRIVATE_KEY --rpc-url $RPC --json 2>&1)
   set -e
   echo "$OUT" | python3 -c "
@@ -112,9 +113,9 @@ try:
 except json.JSONDecodeError:
     print('   sniper refused before it reached a block:'); print('  ',raw.strip()[:400])
 "
-  echo "   CommittedTooLate: $(cast call $BOND "$SIG" $MID "$IDX" "$LS" "$PS" "$PRS" "$SNIPE_SALT" --from $ME --rpc-url $RPC 2>&1 | tail -1)"
+  echo "   CommittedTooLate: $(cast call $JUDGE_EVM "$SIG" $MID "$IDX" "$LS" "$PS" "$PRS" "$SNIPE_SALT" --from $ME --rpc-url $RPC 2>&1 | tail -1)"
 fi
 
 echo "== 7. challengeBudgetOverrun — sum 5 > budget 4, revealed by the address that committed first"
-cast send $BOND "$SIG" $MID "$IDX" "$LS" "$PS" "$PRS" "$HONEST_SALT" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
+cast send $JUDGE_EVM "$SIG" $MID "$IDX" "$LS" "$PS" "$PRS" "$HONEST_SALT" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
 echo "   bondOf=$(cast call $BOND 'bondOf(uint256)(uint256)' $MID --rpc-url $RPC) slashed=$(cast call $BOND 'slashed(uint256)(bool)' $MID --rpc-url $RPC) mandateLive=$(cast call $REG 'isLive(uint256)(bool)' $MID --rpc-url $RPC)"

@@ -22,7 +22,8 @@ cd "$(dirname "$0")/.."; set -a; . ./.env; set +a
 RPC=$COSTON2_RPC
 REG=${REG:?set REG to the MandateRegistry}
 LOG=${LOG:?set LOG to the AnchorLog}
-BOND=${BOND:?set BOND to the Bond}
+BOND=${BOND:?set BOND to the v0.11 Vault (the address mandates name in Terms.bond)}
+JUDGE_XRPL=${JUDGE_XRPL:?set JUDGE_XRPL to the v0.11 JudgeXrpl}
 REFS=${REFS:?set REFS to the AgentRefs}
 N=${N:-5}; EACH=${EACH:-1000000}; BUDGET=${BUDGET:-4000000}   # drops
 ME=$(cast wallet address --private-key "$PRIVATE_KEY")
@@ -225,7 +226,7 @@ for i in $ORDER; do
 done
 IDX="${IDX%,}]"; LVS="${LVS%,}]"; PATHS="${PATHS%,}]"; PROOFS="${PROOFS%,}]"
 SIG="challengeBudgetOverrunPayment(uint256,uint256[],(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256)[],bytes32[][],(bytes32[],(bytes32,bytes32,uint64,uint64,(bytes32,uint256,uint256),(uint64,uint64,bytes32,bytes32,bytes32,bytes32,int256,int256,int256,int256,bytes32,bool,uint8)))[],bytes32)"
-OUT=$(cast send $BOND "$SIG" $MID "$IDX" "$LVS" "$PATHS" "$PROOFS" "$DELICTI_SALT" \
+OUT=$(cast send $JUDGE_XRPL "$SIG" $MID "$IDX" "$LVS" "$PATHS" "$PROOFS" "$DELICTI_SALT" \
   --private-key $PRIVATE_KEY --rpc-url $RPC --json)
 echo "$OUT" | python3 -c "import sys,json;d=json.load(sys.stdin);print('   reveal',d['transactionHash'],'status',int(d['status'],16),'gas',int(d['gasUsed'],16))"
 

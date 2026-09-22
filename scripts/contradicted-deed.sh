@@ -17,7 +17,8 @@ cd "$(dirname "$0")/.."; set -a; . ./.env; set +a
 RPC=$COSTON2_RPC
 REG=${REG:-0x52A61f0B9312042c514B0aC5C053747B0EdF0C17}
 LOG=${LOG:-0x10F4e4bc90d483B9E1D6c90EE6d6275FF825D2ae}
-BOND=${BOND:-0x84Da6082Ba9f453d6aE59A0A3f868F6A1C35046E}
+BOND=${BOND:?set BOND to the v0.11 Vault (the address mandates name in Terms.bond)}
+JUDGE_EVM=${JUDGE_EVM:?set JUDGE_EVM to the v0.11 JudgeEvm}
 ME=$(cast wallet address --private-key "$PRIVATE_KEY")
 FLARE_REG=0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019
 
@@ -83,5 +84,5 @@ DATA=$(cast abi-decode "f()(bytes32,bytes32,uint64,uint64,(uint64,uint64,uint64,
 
 echo "== 6. Bond.challengeFalsePayment — two witnesses disagree → slash"
 SIG="challengeFalsePayment(uint256,uint256,(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256),bytes32[],(bytes32[],(bytes32,bytes32,uint64,uint64,(uint64,uint64,uint64,bytes32,uint256,bytes32,bool,bytes32),(uint64,uint64,uint64))),bytes32)"
-cast send $BOND "$SIG" $MID 0 "$LEAF" "[$SIB]" "($MP,$DATA)" "$HONEST_SALT" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'])"
+cast send $JUDGE_EVM "$SIG" $MID 0 "$LEAF" "[$SIB]" "($MP,$DATA)" "$HONEST_SALT" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'])"
 echo "   bondOf=$(cast call $BOND 'bondOf(uint256)(uint256)' $MID --rpc-url $RPC) slashed=$(cast call $BOND 'slashed(uint256)(bool)' $MID --rpc-url $RPC) mandateLive=$(cast call $REG 'isLive(uint256)(bool)' $MID --rpc-url $RPC)"

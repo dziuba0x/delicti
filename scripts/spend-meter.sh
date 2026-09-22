@@ -16,7 +16,8 @@ cd "$(dirname "$0")/.."; set -a; . ./.env; set +a
 . scripts/lib/commit.sh
 RPC=$COSTON2_RPC
 REG=${REG:?set REG to the v0.7 MandateRegistry}
-BOND=${BOND:?set BOND to the v0.7 Bond}
+BOND=${BOND:?set BOND to the v0.11 Vault (the address mandates name in Terms.bond)}
+JUDGE_EVM=${JUDGE_EVM:?set JUDGE_EVM to the v0.11 JudgeEvm}
 METER=${METER:?set METER to the v0.7 SpendMeter}
 MERCHANT=${MERCHANT:-0x2222222222222222222222222222222222222222}
 MODE=${MODE:-brake}
@@ -121,5 +122,5 @@ done
 echo "== 4. challengeUnderReportedSpend — the world shows more than the tally admits"
 PRS="["; for i in $ORDER; do PRS+="(${MPS[$i]},${DATAS[$i]}),"; done; PRS="${PRS%,}]"
 TI="${T:1:-1}"
-cast send $BOND "challengeUnderReportedSpend(uint256,(bytes32[],$TI)[],bytes32)" $MID "$PRS" "$HONEST_SALT" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
+cast send $JUDGE_EVM "challengeUnderReportedSpend(uint256,(bytes32[],$TI)[],bytes32)" $MID "$PRS" "$HONEST_SALT" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
 echo "   bondOf=$(cast call $BOND 'bondOf(uint256)(uint256)' $MID --rpc-url $RPC) slashed=$(cast call $BOND 'slashed(uint256)(bool)' $MID --rpc-url $RPC) mandateLive=$(cast call $REG 'isLive(uint256)(bool)' $MID --rpc-url $RPC)"

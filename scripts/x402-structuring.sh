@@ -19,7 +19,8 @@ RPC=$COSTON2_RPC
 FLARIO_DIR=${FLARIO_DIR:-../flario}
 REG=${REG:-0x1e85be1CD6D499f5E8AE12C6Fa1336949188FbB7}
 LOG=${LOG:-0x14E65D83032b85241B764f5fbbEE532a90403D23}
-BOND=${BOND:-0x9bDFE9C95980E7676E64779Cabe1948Ce6F04ae8}
+BOND=${BOND:?set BOND to the v0.11 Vault (the address mandates name in Terms.bond)}
+JUDGE_EVM=${JUDGE_EVM:?set JUDGE_EVM to the v0.11 JudgeEvm}
 TOKEN=${TOKEN:-0x9Eea43feA502609d0D88DAfd1d64B4e929BF18C2}   # MockUSDT0 (EIP-3009), 6 dec
 PAYEE=${PAYEE:-0x2222222222222222222222222222222222222222}
 N=${N:-5}; EACH=1000000; BUDGET=4000000
@@ -105,6 +106,6 @@ IDX="["; LS="["; PS="["; PRS="["
 for i in $ORDER; do IDX+="$i,"; LS+="$(python3 -c "import json;print(json.load(open('$OUT/leaf$i.json'))['_tuple'])"),"; PS+="[],"; PRS+="(${MPS[$i]},${DATAS[$i]}),"; done
 IDX="${IDX%,}]"; LS="${LS%,}]"; PS="${PS%,}]"; PRS="${PRS%,}]"
 TI="${T:1:-1}"; SIG="challengeBudgetOverrun(uint256,uint256[],(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256)[],bytes32[][],(bytes32[],$TI)[],bytes32)"
-cast send $BOND "$SIG" $MID "$IDX" "$LS" "$PS" "$PRS" "$HONEST_SALT" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
+cast send $JUDGE_EVM "$SIG" $MID "$IDX" "$LS" "$PS" "$PRS" "$HONEST_SALT" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
 echo "   bondOf=$(cast call $BOND 'bondOf(uint256)(uint256)' $MID --rpc-url $RPC) slashed=$(cast call $BOND 'slashed(uint256)(bool)' $MID --rpc-url $RPC) mandateLive=$(cast call $REG 'isLive(uint256)(bool)' $MID --rpc-url $RPC)"
 echo "receipts + leaves kept in $OUT"

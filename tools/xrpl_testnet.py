@@ -17,6 +17,13 @@ Commands
     fund                               a funded testnet account:  {"address": ..., "seed": ...}
     pay <seed> <dest> <drops> <memo>   one payment with one 32-byte memo; prints its tx id
     tx <txid>                          the ledger's own view of a transaction (for diagnosis)
+    trust <seed> <issuer> <cur> <limit>  a trust line to <issuer>'s <cur> (so an offer can pay it in)
+    offer <seed> <drops> <value> <cur> <issuer>
+                                       rest an offer SELLING <drops> of XRP for <value> <cur>.<issuer>;
+                                       prints its tx id (the offer's own tx: only the fee leaves here)
+    take <seed> <value> <cur> <drops>  the issuer sells <value> of its OWN <cur> for <drops> of XRP —
+                                       crossing a resting offer; prints its tx id. This is the
+                                       transaction in which the OFFER OWNER's XRP leaves (SPEC §6.10)
 
 Everything here is testnet by construction: the faucet is the testnet faucet and the endpoint is
 the testnet endpoint. There is no mainnet path in this file on purpose.
@@ -26,7 +33,8 @@ import json
 import sys
 
 from xrpl.clients import JsonRpcClient
-from xrpl.models.transactions import Memo, Payment
+from xrpl.models.amounts import IssuedCurrencyAmount
+from xrpl.models.transactions import Memo, OfferCreate, Payment, TrustSet
 from xrpl.transaction import submit_and_wait
 from xrpl.wallet import Wallet, generate_faucet_wallet
 
@@ -64,6 +72,35 @@ def cmd_pay(seed: str, dest: str, drops: str, memo: str) -> None:
     print(json.dumps({"txid": res["hash"], "ledger": res.get("ledger_index")}))
 
 
+def _submit(tx, w) -> dict:
+    res = submit_and_wait(tx, client(), w).result
+    if res["meta"]["TransactionResult"] != "tesSUCCESS":
+        raise SystemExit(f"{type(tx).__name__} failed: {res['meta']['TransactionResult']}")
+    return res
+
+
+def cmd_trust(seed: str, issuer: str, cur: str, limit: str) -> None:
+    w = Wallet.from_seed(seed)
+    res = _submit(TrustSet(account=w.classic_address,
+                           limit_amount=IssuedCurrencyAmount(currency=cur, issuer=issuer, value=limit)), w)
+    print(json.dumps({"txid": res["hash"]}))
+
+
+def cmd_offer(seed: str, drops: str, value: str, cur: str, issuer: str) -> None:
+    w = Wallet.from_seed(seed)
+    res = _submit(OfferCreate(account=w.classic_address, taker_gets=str(int(drops)),
+                              taker_pays=IssuedCurrencyAmount(currency=cur, issuer=issuer, value=value)), w)
+    print(json.dumps({"txid": res["hash"]}))
+
+
+def cmd_take(seed: str, value: str, cur: str, drops: str) -> None:
+    w = Wallet.from_seed(seed)
+    res = _submit(OfferCreate(account=w.classic_address,
+                              taker_gets=IssuedCurrencyAmount(currency=cur, issuer=w.classic_address, value=value),
+                              taker_pays=str(int(drops))), w)
+    print(json.dumps({"txid": res["hash"]}))
+
+
 def cmd_tx(txid: str) -> None:
     from xrpl.models.requests import Tx
 
@@ -74,7 +111,7 @@ def main() -> None:
     if len(sys.argv) < 2:
         raise SystemExit(__doc__)
     cmd, args = sys.argv[1], sys.argv[2:]
-    {"fund": cmd_fund, "pay": cmd_pay, "tx": cmd_tx}[cmd](*args)
+    {"fund": cmd_fund, "pay": cmd_pay, "tx": cmd_tx, "trust": cmd_trust, "offer": cmd_offer, "take": cmd_take}[cmd](*args)
 
 
 if __name__ == "__main__":

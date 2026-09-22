@@ -24,7 +24,8 @@ cd "$(dirname "$0")/.."; set -a; . ./.env; set +a
 RPC=$COSTON2_RPC
 REG=${REG:?set REG to the v0.6 MandateRegistry}
 LOG=${LOG:?set LOG to the v0.6 AnchorLog}
-BOND=${BOND:?set BOND to the v0.6 Bond}
+BOND=${BOND:?set BOND to the v0.11 Vault (the address mandates name in Terms.bond)}
+JUDGE_EVM=${JUDGE_EVM:?set JUDGE_EVM to the v0.11 JudgeEvm}
 MERCHANT=${MERCHANT:-0x2222222222222222222222222222222222222222}
 MODE=${MODE:-silence}
 DEED=${DEED:-10000000000000000}   # 0.01 C2FLR — the deed itself is small; the point is that it is unrecorded
@@ -37,8 +38,8 @@ FEECFG=$(cast call $FLARE_REG "getContractAddressByName(string)(address)" FdcReq
 FSM=$(cast call $FLARE_REG "getContractAddressByName(string)(address)" FlareSystemsManager --rpc-url $RPC)
 T0=$(cast call $FSM "firstVotingRoundStartTs()(uint64)" --rpc-url $RPC | awk '{print $1}')
 DUR=$(cast call $FSM "votingEpochDurationSeconds()(uint64)" --rpc-url $RPC | awk '{print $1}')
-GRACE=$(cast call $BOND "anchorGrace()(uint64)" --rpc-url $RPC | awk '{print $1}')
-WINDOW=$(cast call $BOND "responseWindow()(uint64)" --rpc-url $RPC | awk '{print $1}')
+GRACE=$(cast call $JUDGE_EVM "anchorGrace()(uint64)" --rpc-url $RPC | awk '{print $1}')
+WINDOW=$(cast call $JUDGE_EVM "responseWindow()(uint64)" --rpc-url $RPC | awk '{print $1}')
 STAKE=$(cast call $BOND "ACCUSATION_STAKE()(uint256)" --rpc-url $RPC | awk '{print $1}')
 LEAD=$(cast call $BOND "commitLead()(uint64)" --rpc-url $RPC | awk '{print $1}')
 echo "mode=$MODE anchorGrace=${GRACE}s responseWindow=${WINDOW}s commitLead=${LEAD}s stake=$STAKE wei"
@@ -107,19 +108,19 @@ echo "   proof ok (round $ROUND)"
 echo "== 4. wait out the anchor grace, then accuse"
 WAIT=$(( TS + GRACE + 5 - $(date +%s) )); [ $WAIT -gt 0 ] && { echo "   sleeping ${WAIT}s"; sleep $WAIT; }
 TI="${T:1:-1}"
-ACC=$(cast send $BOND "accuseUnanchoredDeed(uint256,(bytes32[],$TI),bytes32)" $MID "($MP,$DATA)" "$HONEST_SALT" --value $STAKE --private-key $PRIVATE_KEY --rpc-url $RPC --json)
+ACC=$(cast send $JUDGE_EVM "accuseUnanchoredDeed(uint256,(bytes32[],$TI),bytes32)" $MID "($MP,$DATA)" "$HONEST_SALT" --value $STAKE --private-key $PRIVATE_KEY --rpc-url $RPC --json)
 echo "$ACC" | python3 -c "import sys,json;d=json.load(sys.stdin);print('   accusation tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
-AID=$(( $(cast call $BOND "nextAccusationId()(uint256)" --rpc-url $RPC | awk '{print $1}') - 1 ))
-echo "   accusationId=$AID deadline=$(cast call $BOND 'accusations(uint256)(uint256,bytes32,uint64,uint64,address,bool)' $AID --rpc-url $RPC | sed -n '4p')"
+AID=$(( $(cast call $JUDGE_EVM "nextAccusationId()(uint256)" --rpc-url $RPC | awk '{print $1}') - 1 ))
+echo "   accusationId=$AID deadline=$(cast call $JUDGE_EVM 'accusations(uint256)(uint256,bytes32,uint64,uint64,address,bool,uint256)' $AID --rpc-url $RPC | sed -n '4p')"
 
 if [ "$MODE" = answer ]; then
   echo "== 5. the agent answers with the receipt"
-  cast send $BOND "answerAccusation(uint256,uint256,(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256),bytes32[])" $AID 0 "$LEAF" "[]" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   answer tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
+  cast send $JUDGE_EVM "answerAccusation(uint256,uint256,(bytes32,uint8,bytes32,bytes32,uint256,bytes32,uint64,uint256),bytes32[])" $AID 0 "$LEAF" "[]" --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   answer tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
   echo "   slashed=$(cast call $BOND 'slashed(uint256)(bool)' $MID --rpc-url $RPC) (expected false) — accuser's stake forfeited to the principal"
 else
   echo "== 5. wait out the response window — nobody answers"
   sleep $((WINDOW + 10))
-  cast send $BOND "resolveAccusation(uint256)" $AID --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   resolve tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
+  cast send $JUDGE_EVM "resolveAccusation(uint256)" $AID --private-key $PRIVATE_KEY --rpc-url $RPC --json | python3 -c "import sys,json;d=json.load(sys.stdin);print('   resolve tx',d['transactionHash'],'status',d['status'],'gas',int(d['gasUsed'],16))"
   echo "   bondOf=$(cast call $BOND 'bondOf(uint256)(uint256)' $MID --rpc-url $RPC) slashed=$(cast call $BOND 'slashed(uint256)(bool)' $MID --rpc-url $RPC) mandateLive=$(cast call $REG 'isLive(uint256)(bool)' $MID --rpc-url $RPC)"
   echo "   owed(ME)=$(cast call $BOND 'owed(address)(uint256)' $ME --rpc-url $RPC)"
 fi

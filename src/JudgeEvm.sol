@@ -137,6 +137,9 @@ contract JudgeEvm is DelictiErrors {
         // witness 1
         bytes32 leafHash = Receipts.hash(leaf);
         if (consumedLeaf[mandateId][leafHash]) revert LeafConsumed();
+        // Marked before any external call. The Vault is fixed code that calls back into no judge,
+        // but a write that follows a call is exactly what an auditor should not have to reason about.
+        consumedLeaf[mandateId][leafHash] = true;
         AnchorLog.Episode memory ep = log.episode(mandateId, episodeIndex);
         if (!Merkle.verify(merkleProof, ep.root, leafHash)) revert LeafNotAnchored();
 
@@ -156,7 +159,6 @@ contract JudgeEvm is DelictiErrors {
                 || rs.firstOverflowBlockTimestamp <= rq.deadlineTimestamp
         ) revert ClaimOutsideProvenRange();
 
-        consumedLeaf[mandateId][leafHash] = true;
         uint256 taken = vault.verdict(
             Kinds.FALSE_PAYMENT, mandateId, m.budget, leaf.amount, msg.sender, 1, fdcProof.data.attestationType, fdcProof.data.sourceId, true
         );

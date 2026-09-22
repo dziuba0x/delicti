@@ -19,7 +19,7 @@ import {ProtocolsV2Interface} from "@flarenetwork/flare-periphery-contracts/cost
 ///   forge script script/Deploy.s.sol --rpc-url coston2 --broadcast
 ///
 /// v0.11 deploys the consequence layer — a Vault and its judges — and, by default, REUSES the core
-/// that is already on-chain: pass REG, LOG, METER (and CORR) to keep the v0.10 registry, anchor log,
+/// that is already on-chain: pass REG, LOG, METER (and CORROBORATION_LOG) to keep the v0.10 registry, anchor log,
 /// meter and corroboration log. Old mandates stay with the old Bond; new ones name the Vault.
 /// Leave them unset to deploy a fresh core as well.
 contract Deploy is Script {
@@ -39,7 +39,7 @@ contract Deploy is Script {
         if (address(anchorLog) == address(0)) anchorLog = new AnchorLog(reg);
         SpendMeter meter = SpendMeter(vm.envOr("METER", address(0)));
         if (address(meter) == address(0)) meter = new SpendMeter(reg);
-        CorroborationLog corroborations = CorroborationLog(vm.envOr("CORR", address(0)));
+        CorroborationLog corroborations = CorroborationLog(vm.envOr("CORROBORATION_LOG", address(0)));
         if (address(corroborations) == address(0)) {
             corroborations = new CorroborationLog(reg, anchorLog, IFdcVerification(address(0)));
         }

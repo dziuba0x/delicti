@@ -130,7 +130,7 @@ The scripts in [`scripts/`](scripts) each reproduce one row of the table above: 
 
 Testnet timers: `commitLead` 120 s (production 10 min), `responseWindow` 600 s, `anchorGrace` 300 s, `meterGrace` 300 s (production 5 min). The v0.9 deployment and every earlier one are in [docs/DEPLOYMENTS.md](docs/DEPLOYMENTS.md).
 
-Challenges on the `Bond`, each behind a commit–reveal gate so the reward belongs to whoever found the violation, not to whoever copied the calldata:
+Challenges, each behind a commit–reveal gate so the reward belongs to whoever found the violation, not to whoever copied the calldata. On the v0.10 deployment they live on the `Bond`; **from v0.11 the collateral sits in a `Vault` and the challenges on its judges** — `JudgeEvm` and `JudgeXrpl`, fixed at the Vault's construction, no admin (SPEC §8.2). v0.11 is in the code and tests; it is not yet deployed.
 
 | Challenge | What it proves | FDC attestation | SPEC |
 |---|---|---|---|
@@ -139,6 +139,7 @@ Challenges on the `Bond`, each behind a commit–reveal gate so the reward belon
 | `challengeBudgetOverrunPayment` | the same, for XRP payments on XRPL | `Payment` | §6.8 |
 | `challengeUnderReportedSpend` | the effector's tally said less than the world shows | `EVMTransaction` | §6.5 |
 | `accuseUnanchoredDeed` → `answerAccusation` / `resolveAccusation` | an exclusive agent acted and wrote nothing down | `EVMTransaction` | §6.4 |
+| `challengeXrpOutflow` *(v0.11)* | more XRP **left** the agent's account than the mandate allows — any transaction type, fees included, **no receipts**, including an offer consumed in someone else's transaction | `BalanceDecreasingTransaction` | §6.10 |
 
 ## Who this is for
 
@@ -153,7 +154,8 @@ The section of the [SPEC](SPEC.md) to read first is §10, *what DELICTI does not
 
 - **Testnet only, not independently audited.** Everything runs on Coston2 and forks. Slither, a 300,000-call invariant campaign and an internal adversarial pass have run — the last one found two openings, fixed in v0.10 with regression tests. An independent audit has not.
 - **Consequence is after the fact; prevention is optional.** FDC finality is minutes. The brake refuses a dead or borrowed mandate and the slice that would break the budget — but only in effectors that choose to check.
-- **On XRPL, the Bond sums XRP `Payment`s and nothing else — yet.** The FDC can do more: `BalanceDecreasingTransaction` attests *every* decrease of an account's XRP balance, including an offer of the agent's taken inside someone else's transaction, and that has been verified on Coston2 (SPEC §6.9). No challenge uses it yet. Issued currencies (RLUSD included) stay invisible to both.
+- **On XRPL, the live deployment sums XRP `Payment`s only.** v0.11 adds the outflow challenge (§6.10): every decrease of the account's XRP balance, no receipts needed, once the XRPL key has declared exclusivity. It is tested and rehearsed against the verifier, **not yet executed on Coston2**. Issued currencies (RLUSD included) stay invisible to both.
+- **XRPL proofs age out after ~14 days.** The FDC verifier cannot attest older transactions, so a cumulative case over a mandate window longer than that may be unprovable. `JudgeXrpl.fullyEnforceable` says whether a window fits (SPEC §10).
 - **Small bonds are not watched.** A verdict needs someone to bring it; the reward covers the cost of proving a case only when 10 % of the bond exceeds the attestation fees (20 FLR per request on mainnet).
 - **Proportional up to the bond, not beyond.** Past an overrun equal to the budget, further units are free; only a larger bond moves that ceiling.
 - **Deeds, not minds.** It proves what happened and whether it was permitted. It does not prove intent, alignment or reasoning.
@@ -164,7 +166,7 @@ The section of the [SPEC](SPEC.md) to read first is §10, *what DELICTI does not
 In order. Nothing below is promoted before the item above it is live.
 
 1. ~~**XRPL, live.**~~ Done in v0.10: `AgentRefs.prove` and `challengeBudgetOverrunPayment` executed on Coston2 against real testXRP payments.
-2. **Every XRP outflow, not only payments** — a challenge over `BalanceDecreasingTransaction` proofs, with exclusivity declared by the XRPL key itself, so an agent that does not anchor is still convicted (SPEC §6.9). Then an independent audit.
+2. **Every XRP outflow, not only payments** — in the code since v0.11 (`JudgeXrpl.challengeXrpOutflow`, `AgentRefs.proveExclusive`, SPEC §6.10), with the Vault/judges split that made room for it. Next: deploy, `scripts/xrpl-outflow.sh` live, then an independent audit.
 3. **Public score** — coverage, corroboration and contradiction rates per agent, computed from logs and state alone ([SPEC §11](SPEC.md#11-metrics-this-makes-possible)).
 4. **Verdicts as native XRPL credentials** (XLS-70 / XLS-80), issued and deleted by a Protocol Managed Wallet under Flare Confidential Compute ([SPEC §13](SPEC.md#13-roadmap-delicti-verdicts-as-native-xrpl-credentials-specified-not-implemented), specified, not implemented).
 5. **A risk market** priced on those scores.

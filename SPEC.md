@@ -1,4 +1,4 @@
-# DELICTI Specification — v0.7 (draft)
+# DELICTI Specification — v0.8 (draft)
 
 *Corpus delicti for autonomous agents: prove the deed happened before anyone is judged.*
 
@@ -49,7 +49,7 @@ A mandate `M` is `(principal, agent, mandateHash, authorityRef, parentId, budget
 - `budget` is cumulative over the mandate's lifetime, in base units of the asset the mandate names. It is the quantity challenges sum against.
 - **`sourceId` and `assetKey` say what the budget is made of** (v0.9). `sourceId` is the FDC source the deeds happen on (`testFLR`, `XRP`, …) and may not be zero. `assetKey` is `0` for that source's native asset and, on an EVM source, the ERC-20 address left-padded to 32 bytes. Every challenge reads both from the mandate; none accepts them from calldata. Until v0.9 they lived only in the envelope, so whoever posted collateral could read *how much* it insured and not *of what*.
 - **`agentRef`** is the agent's identity on a non-EVM source: the FDC standard address hash (for XRPL, `keccak256` of the r-address). Zero on EVM sources, where `agent` is the identity. See §6.8.
-- **`bond`** is the one consequence contract allowed to revoke this mandate on proof. The registry has no deployer, no owner and no global Bond: each mandate names its own. That contract can revoke that mandate and nothing else — a power its principal already holds — so new consequence contracts, with new challenge types, can be deployed over the same registry, log and meter without orphaning a single mandate. A Bond refuses collateral for a mandate that names a different one, because it could never carry out the slash.
+- **`bond`** is the one consequence contract allowed to revoke this mandate on proof — since v0.11 a `Vault` (§8.2). The registry has no deployer, no owner and no global Bond: each mandate names its own. That contract can revoke that mandate and nothing else — a power its principal already holds — so new consequence contracts, with new challenge types, can be deployed over the same registry, log and meter without orphaning a single mandate. A Bond refuses collateral for a mandate that names a different one, because it could never carry out the slash.
 - **Acknowledgement.** A principal writes the agent's address unilaterally, and principals may anchor. Until the agent calls `acknowledge(id)` — only it can; sticky; implied by `declareExclusive` — a mandate is a claim *about* an address, not a commitment *by* it. Bonds refuse collateral for unacknowledged mandates and scores must ignore them (§11.1); otherwise naming a stranger's busy address collects a third party's bond and poisons the stranger's record. Acknowledged mandates are enumerable per agent (`mandateCountOf`, `mandateOf`).
 - `authorityRef` is the hash of the authority proof for the delegation — typically a W3C Verifiable Credential chain (KYA-OS style). DELICTI does not implement delegation credentials; it anchors their hash and enforces the on-chain shape.
 - **Monotonic narrowing.** A child mandate must satisfy `budget ≤ parent.budget`, `validFrom ≥ parent.validFrom`, `validUntil ≤ parent.validUntil`, **`sourceId = parent.sourceId` and `assetKey = parent.assetKey`**, and can only be committed by the parent's agent. Narrowing attenuates a quantity; a child in another asset is not a smaller share of its parent's budget, it is a different budget. `agentRef` and `bond` are the child's own. Capability semantics: authority can be attenuated, never amplified.
@@ -149,7 +149,7 @@ commitment = keccak256(abi.encode(challenger, mandateId, kind, deedsDigest, salt
 deedsDigest = keccak256(abi.encode(deedIds))
 ```
 
-`kind` is one of the six `Bond.KIND_*` constants (6 = `KIND_BUDGET_PAYMENT`, §6.8). `deedIds` is the receipt leaf hash for `KIND_FALSE_PAYMENT`, the deed's transaction hash for `KIND_UNANCHORED_DEED`, and the deeds' transaction hashes in the exact ascending order the challenge supplies them for the three cumulative kinds. `commitChallenge(bytes32)` stores nothing but that hash and the timestamp, so the commitment leaks nothing at all.
+`kind` is one of the seven `Vault.KIND_*` constants (6 = `KIND_BUDGET_PAYMENT`, §6.8; 7 = `KIND_XRP_OUTFLOW`, §6.10). Kinds are unique across every judge of a Vault, so one gate serves them all (§8.2). `deedIds` is the receipt leaf hash for `KIND_FALSE_PAYMENT`, the deed's transaction hash for `KIND_UNANCHORED_DEED`, and the deeds' transaction hashes in the exact ascending order the challenge supplies them for the cumulative kinds. `commitChallenge(bytes32)` stores nothing but that hash and the timestamp, so the commitment leaks nothing at all.
 
 At reveal, with `R` the **lowest** `votingRound` among the supplied proofs and `roundStart(R)` read live off Flare's `ProtocolsV2` (`firstVotingRoundStartTs`, `votingEpochDurationSeconds` — never hardcoded):
 
@@ -199,7 +199,7 @@ Three choices that are not obvious:
 
 **What this does not see, stated exactly.** The `Payment` attestation type covers XRPL transactions of type `Payment` and nothing else (FDC specification: *"The payment summary on XRPL is applicable only for transactions of type `Payment`"*). `OfferCreate`, `EscrowCreate`, `AMMDeposit`, `CheckCash`, and every issued-currency (IOU) movement — RLUSD included — are invisible to this challenge. An agent whose XRPL deeds are payments in XRP is covered; an agent that trades is not. See §6.9.
 
-### 6.9 XRPL deeds that are not payments — the condition is met, the challenge is next
+### 6.9 XRPL deeds that are not payments — the condition that was met
 
 `BalanceDecreasingTransaction` (BDT) is the FDC type that covers the rest: for XRPL it attests that a given account's XRP balance fell in a given transaction, *or* that the account signed it, and reports the signed balance difference. Until v0.10 this section waited on one condition — *a BDT proof for a non-`Payment` XRPL transaction, obtained on Coston2 and verified by `FdcVerification`*. It has been met (2026-09-20, docs/DEPLOYMENTS.md), and what it showed is larger than the condition:
 
@@ -209,9 +209,40 @@ Three choices that are not obvious:
 
 The earlier text of this section called the counterparty-taken offer a blind spot "no request keyed to the agent's own transactions will ever return". That was wrong: BDT requests are not keyed to the agent's own transactions. A watcher finds such a transaction with `account_tx`, which lists every transaction that touched the account, including the ones it did not sign.
 
-**Consequence for the design (roadmap, v0.11).** A cumulative challenge over BDT proofs covers *every* decrease of the agent's XRP balance — payments, offers crossed or taken later, escrows, AMM deposits, checks — and needs no receipt at all if the agent's XRPL account has declared exclusivity for the mandate. That declaration must come from the XRPL key (a memo statement proven like `AgentRefs`), not from the EVM key. The budget it enforces is **gross XRP outflow including the fees the agent paid**, a different quantity from §6.8's delivered amount, so a mandate has to say which one it promises. Still invisible: issued currencies (RLUSD included), because BDT measures the XRP balance only.
+**Consequence for the design (implemented in v0.11 as §6.10).** A cumulative challenge over BDT proofs covers *every* decrease of the agent's XRP balance — payments, offers crossed or taken later, escrows, AMM deposits, checks — and needs no receipt at all if the agent's XRPL account has declared exclusivity for the mandate. That declaration must come from the XRPL key (a memo statement proven like `AgentRefs`), not from the EVM key. The budget it enforces is **gross XRP outflow including the fees the agent paid**, a different quantity from §6.8's delivered amount, so a mandate has to say which one it promises. Still invisible: issued currencies (RLUSD included), because BDT measures the XRP balance only.
 
 **XRPPayment (`0x08`).** Also verified against the verifier (not yet on-chain by this project): it returns the first memo's bytes whatever their length, and the destination tag, which `Payment` does not — `Payment` reports a reference only for exactly one memo of exactly 32 bytes. FAssets' direct minting consumes `IXRPPayment.Proof`, so this is the type Flare's own XRP rails now use.
+
+### 6.10 Gross XRP outflow (`AgentRefs.proveExclusive`, `JudgeXrpl.challengeXrpOutflow`) (v0.11)
+
+The challenge §6.9 called for. It needs no receipt at all, and it reaches a deed the agent did not sign.
+
+**The measure is the mandate's.** A mandate on XRPL promises one of two quantities, and says which in `assetKey` without any change to the registry:
+
+| `assetKey` | budget counts | judged by |
+|---|---|---|
+| `0` | XRP *delivered* by `Payment` transactions the agent wrote receipts for, fees excluded | §6.8 |
+| `bytes32("XRP/outflow")` | gross XRP that *left* the account, by any transaction, **fees included** | §6.10 |
+
+Each challenge refuses the other's mandates. The key has high bits set, so no EVM path can mistake it for a token (`Deeds.erc20Of`). §6.1 (a receipt for a payment that never existed) accepts both: the unit is drops either way, and a lie is a lie whichever quantity the budget promised.
+
+**Exclusivity, from the XRPL key.** With no receipts, the only thing that makes an outflow the mandate's business is the account's own promise that, inside the window, *everything* leaving it is. `MandateRegistry.declareExclusive` is the EVM key speaking and does not count here. `AgentRefs.proveExclusive(mandateId, proof)` takes an FDC `Payment` proof of a successful payment from `agentRef` whose standard payment reference is
+
+```
+exclusiveFor(mandateId) = keccak256(abi.encode("DELICTI/exclusive", chainid, registry, mandateId))
+```
+
+It is sticky, permissionless (the proof speaks), and implies `proven` (§6.8). The statement payment itself leaves the account; inside the window it counts toward the outflow like anything else. Exempting it would be an exemption keyed on a memo, reusable by whoever holds the key.
+
+**The challenge.** N `BalanceDecreasingTransaction` proofs. Each: `verifyBalanceDecreasingTransaction`; `sourceId` is the mandate's; `requestBody.sourceAddressIndicator == agentRef` **and** `responseBody.sourceAddressHash == agentRef`; `blockTimestamp` inside the window; transaction ids strictly increasing (one account, so one id is one deed). The outflow is the sum of **positive** `spentAmount`s. `outflow > budget` convicts; severity `outflow − budget`, in the budget bucket (§8.1: nested, high-water mark). Commitment kind `7`, deed ids = the transaction ids in that order.
+
+**Why only positive amounts.** A budget of outflow limits what left. XRP that came back does not un-spend what went: selling and buying back is two deeds, and netting would let a round trip hide what it lost to fees and spread.
+
+**Why a conviction for a transaction the agent never signed is sound.** On XRPL nothing but an account's own keys can make its XRP balance fall. Every path by which someone else's transaction moves it — an offer taken, a check cashed, an escrow finished, a delegated transaction (XLS-75) — starts from an object the account created or a permission it granted; clawback exists only for issued currencies. The offer consumed in the counterparty's transaction is the agent's own standing order, executed later.
+
+**What it covers:** Payment, OfferCreate (crossed at once or consumed later), escrow, AMM deposits, checks, AccountDelete, fees. **What it does not:** issued currencies, RLUSD included — BDT measures the XRP balance only. And the verifier's memory (§10).
+
+**Rehearsed** on XRPL testnet on 2026-09-23 with `tools/xrpl_testnet.py` against the verifier's `prepareResponse`: an offer of 5 XRP consumed by the counterparty's `OfferCreate` returns `VALID`, `spentAmount = 5,000,000` for the offer's owner; the owner's own `OfferCreate` returns `10` (the fee). **Not yet executed on Coston2** — `scripts/xrpl-outflow.sh` is the run.
 
 ## 7. The effector-side brake (optional, recommended)
 
@@ -253,9 +284,20 @@ taken by a verdict = P(S_after) − (already taken)
 - **The slope is not a protocol constant.** It is `bond / budget` — the collateralisation ratio `k` the market already chose. Each unit of overrun costs `k` units of bond, so with `k ≥ 1`, which is what §8 tells a counterparty to require, no overrun up to 100 % of the budget pays for itself. At `S ≥ budget` the penalty is the whole bond: you cannot lose more than what is there, and beyond that point the step function is back (§10).
 - **The floor is 10 % of `base`.** Three of the five verdicts are about a *lie* — a payment that never existed, a deed nobody wrote down, a tally that under-reported — and a lie about a small amount is not a small lie. The floor is what that costs. It equals the challenger's whole reward under v0.8.
 - **Severity accumulates; a verdict is not a shield.** "Slashed at most once" plus a proportional penalty would have been worse than what it replaced: an agent could convict itself of the smallest case it could assemble, pay the floor, and thereby protect the rest of the bond from the real case. Instead every verdict takes the *difference* between the penalty for the new total and what was already taken. How severities combine depends on whether two verdicts can be about the same thing: **nested** kinds (overrun, under-reported spend) keep a high-water mark — five deeds and then the same five plus a sixth is one overrun, not two; **additive** kinds (false payment, unanchored deed) sum, because `consumedLeaf` and `accused` guarantee each verdict is about a different receipt or transaction. A direct challenge that would take nothing reverts `NothingNew`; resolving an accusation never reverts.
-- **The challenger is reimbursed for its attestations first.** Since FIP.16 an FDC request costs **20 FLR on mainnet** for every type this protocol uses (read from `FdcRequestFeeConfigurations` on 2026-09-19), so a five-deed case costs its challenger 100 FLR before gas. The Bond reads the current fee for the case's attestation type and source from Flare's own fee contract — the same way it reads the voting-round clock, and for the same reason: a constant would be wrong after the next governance vote — multiplies by the number of proofs supplied, and credits that (capped at what the verdict took) before the 10 %. Where the fee cannot be read the cost is zero and nothing reverts.
-- **What that does and does not guarantee.** The reward covers the cost of proving a case *iff the verdict does*: `min-slash = 10 % × bond ≥ n × fee`. A 1,000-FLR bond is worth watching for a five-deed salami; a 100-FLR bond is not, and the chain says so before anyone spends a wei (`BondLens.penaltyFor`, `Bond.fdcCost`). The protocol cannot pay out more than a verdict takes, so it does not pretend to.
+- **The challenger is reimbursed for its attestations first.** Since FIP.16 an FDC request costs **20 FLR on mainnet** for every type this protocol uses (read from `FdcRequestFeeConfigurations` on 2026-09-19), so a five-deed case costs its challenger 100 FLR before gas. The Vault reads the current fee for the case's attestation type and source from Flare's own fee contract — the same way it reads the voting-round clock, and for the same reason: a constant would be wrong after the next governance vote — multiplies by the number of proofs supplied, and credits that (capped at what the verdict took) before the 10 %. Where the fee cannot be read the cost is zero and nothing reverts.
+- **What that does and does not guarantee.** The reward covers the cost of proving a case *iff the verdict does*: `min-slash = 10 % × bond ≥ n × fee`. A 1,000-FLR bond is worth watching for a five-deed salami; a 100-FLR bond is not, and the chain says so before anyone spends a wei (`BondLens.penaltyFor`, `Vault.fdcCost`). The protocol cannot pay out more than a verdict takes, so it does not pretend to.
 - **The remainder goes back to whoever posted it**, each depositor bearing the same fraction of every verdict (`deposit × bondOf / totalDeposits`, rounded down; the last one out gets exactly the rest). Until v0.9 `post` did not record the depositor and `withdraw` paid the principal, so a bond posted by an insurer was a free option for the agent's own side.
+
+### 8.2 The Vault and its judges (v0.11)
+
+Until v0.11 one contract held the collateral and verified every kind of evidence, and it ended 242 bytes under EIP-170: no further challenge type fitted. It is now split once:
+
+- **`Vault`** holds every wei — bonds, credited proceeds, accusation stakes — so the protocol's balance is one invariant in one contract. It keeps the books of §8 and §8.1, the single commit–reveal gate of §6.7, and `verdict(...)`, the only function through which value leaves a bond.
+- **Judges** hold no funds. Each verifies one family of evidence and, when it stands, calls `Vault.verdict` and `Vault.consumeCommitment` (passing its own caller as the challenger). `JudgeEvm`: §6.1, §6.2–6.3, §6.4, §6.5. `JudgeXrpl`: §6.8, §6.10. A judge keeps only the memory its judgement needs (`consumedLeaf`, `accused`, `accusations`).
+- **The set of judges is fixed at the Vault's construction.** No admin, no setter, no upgrade. Judges are deployed first, at the address the Vault is about to have; the Vault's constructor refuses any judge that does not name it. A depositor can read `judges()` before posting and knows every piece of code that can ever take from its deposit — what EigenLayer calls *unique stake* (ELIP-002), here obtained by immutability rather than by allocation.
+- **A new challenge type is a new Vault** over (the existing judges + the new one). Mandates already bonded stay with the Vault they name; new mandates name the new one in `Terms.bond`. Registry, anchor log and meter do not change — which is what `Mandate.bond` was added for in v0.9.
+
+The split changed no rule: every one of the 146 tests of v0.10 passes against it with the same assertions.
 
 ## 9. Privacy
 
@@ -276,11 +318,14 @@ Nothing sensitive is on-chain: mandate envelopes and receipts live off-chain; th
 - The challenger's reward covers the cost of proving a case only where the verdict does (§8.1). Small bonds are not watched, and nothing here makes them so.
 - Reimbursement is `n × current fee`, not what the challenger paid: a fee change between request and verdict, or proofs bought at a testnet's price, make the two differ. Supplying superfluous proofs moves value from the principal's share to the challenger's only by what those proofs cost to obtain.
 - An accusation freezes withdrawal of a dead mandate's bond for one response window (§6.4). Each costs its accuser a stake, an attestation, and a real unanchored deed to point at, and an answered one forfeits the stake — but for that window the depositors wait.
-- XRPL budgets count what was *delivered*; transaction fees are not summed (§6.8). An agent can burn fees without limit under any budget.
+- Under a *delivered* XRPL budget (§6.8) transaction fees are not summed, and an agent can burn fees without limit. Under an *outflow* budget (§6.10) they are, and it cannot.
+- **Cumulative XRPL challenges only see ~14 days back.** The FDC's XRP verifier indexes about 15 days and `XRPPayment` declares a 14-day limit. A challenge needs every deed it sums to be provable when it is brought, so over a mandate window longer than that, early deeds age out and an overrun completed late in the window may be unprovable. `JudgeXrpl.fullyEnforceable(mandateId)` says whether a window fits inside `PROOF_HORIZON` (14 days); refusing longer mandates would make them immune, which is worse. The remedy — recording proven outflow progressively, deduplicated in storage, so that a verdict sums what was recorded plus what is new — is a design for v0.12.
+- **A principal colluding with its own agent can drain a third party's deposit** — and under an outflow budget (§6.10) more easily than under any other, since every outflow counts and there is no list of permitted counterparties: the agent "overruns" by paying an address the principal controls, and the verdict's remainder goes to the principal, out of whatever an insurer posted. This is economics, not a bug, and it is open. Until it is designed away, a deposit by anyone other than the principal's own side is exposed to it.
+- An XRPL account may declare exclusivity for two overlapping mandates. Each is then judged on the same outflow; the account made two promises it cannot both keep, and that is its doing.
 - An effector that is merely late — writing the deed into the tally within `meterGrace` of it (§6.5) — is not convicted of under-reporting, and neither is one colluding with the agent that manages to write inside that window. The grace is two orders of magnitude above the honest write's latency and well below the earliest possible reveal, so the window is real but narrow; making it zero would convict effectors for a slow block.
 - `CorroborationLog` counts each deed once per agent (v0.10), so the same transaction cannot be entered into an agent's record under several mandates. It still counts what somebody chose to prove. It is a floor on corroboration, never the rate: an agent pays for the attestations it wants on its record and not for the others, and nothing obliges anyone to corroborate anything. It also cannot tell a deed from a wash: an agent can pay dust to itself and corroborate it all day, which is why §11 says to weigh by value — and a score should weigh by counterparty as well.
 - `acknowledge` shows that the EVM key accepted the mandate, and `AgentRefs.prove` that an XRPL account made one payment with one memo. Neither shows that the two are the same party, that either is the model that will act, or that the account was not lent for the occasion.
-- The Bond compiles to 24,160 bytes, 416 under the EIP-170 limit. Nothing of substance can still be added to it; the next challenge type is a new consequence contract over the same registry (§3, `Mandate.bond`), which is what that field is for.
+- A Vault's judges are fixed for ever (§8.2). A bug in a judge is fixed by a new Vault, and deposits already posted stay exposed to the old judge until they are withdrawn. Judges are trusted to name their own caller as the challenger; they are code, fixed at construction, and that is the whole of their privilege.
 - `leavesURI` is not verified, pinned or guaranteed to resolve. The root is the commitment; the URI is a courtesy.
 - Each mandate names its own consequence contract, and the registry does not vet it. A Bond that is not this code can behave in any way at all; `Mandate.bond` tells a counterparty *which* code to read, not that it is sound.
 - Silence is challengeable only for mandates whose agent declared exclusivity (§6.4). An agent that never makes that promise is still judged on what it anchors — the promise is the price of being trusted, not a protocol guarantee.
@@ -307,7 +352,7 @@ The score is the next floor, and it must be computable from **logs and current s
 | coverage — denominator | the source chain itself, plus `ExclusiveDeclared` | outside DELICTI by construction |
 | corroboration | `DeedCorroborated` from `CorroborationLog`; `countOf`, `valueOf`, `countOfAgent` | the good case used to leave no trace on-chain at all — this metric had a definition and no data. Same definition of agreement as the Bond's (`Deeds`). |
 | contradiction, by value | `Verdict(mandateId, challenger, kind, severity, severityTotal, budget, taken, reward, slashedTotal)`; `DeedJudged(mandateId, kind, deedId, value)` per deed summed; `FalsePaymentProven`, `UnanchoredDeedProven`, `UnderReportedSpendProven`, `BudgetOverrunProven` | one shape for every verdict; per-deed events so that "which deeds" is not only in calldata |
-| contradiction, on-chain | `Bond.verdictsAgainst(agent)`, `Bond.takenFrom(agent)`, `severityOf`, `slashedAmount` | this Bond's history only |
+| contradiction, on-chain | `Vault.verdictsAgainst(agent)`, `Vault.takenFrom(agent)`, `severityOf`, `slashedAmount` | this Vault's history only |
 | accusations, both outcomes | `DeedAccused`, `AccusationAnswered`, `UnanchoredDeedProven`; `openAccusations` | an answered accusation is evidence *for* the agent |
 | who is exposed | `BondPosted(by)`, `BondWithdrawn(by)`, `depositOf` | |
 
@@ -344,7 +389,7 @@ The score is the next floor, and it must be computable from **logs and current s
 **What the credential does NOT prove** — and venues must be told so:
 
 - Not identity, not KYC, not sanctions screening. It says nothing about who controls the account, only that whoever does has collateral at risk under a public mandate.
-- Not good behaviour in general: only that no verdict stands under *this* mandate, for deeds the FDC can see. On XRPL that currently means **`Payment` transactions in XRP** (§6.8); an agent that trades, escrows or moves IOUs — RLUSD included — does so outside DELICTI's sight (§6.9), credential or not.
+- Not good behaviour in general: only that no verdict stands under *this* mandate, for deeds the FDC can see. On XRPL that means **`Payment` transactions in XRP** under a delivered budget (§6.8), and **every movement of XRP** under an outflow budget (§6.10); issued currencies — RLUSD included — stay outside DELICTI's sight, credential or not.
 - Not that the agent was watched. Absence of a verdict is absence of a *successful challenge*: nobody may have looked, or the bond may have been too small to be worth watching (§8.1). A venue should read `bondOf`, the mandate's age and `CorroborationLog` alongside the credential, not instead of them.
 - Not that a delegated transaction belongs to the agent: under XLS-75 who FDC attributes a delegated transaction to is unestablished (§6.9).
 - Not solvency. The bond is in FLR on Flare and the budget is in XRP on XRPL; `bond / budget` is a ratio of two different things.

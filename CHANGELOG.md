@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.11.0 — unreleased — the Vault and its judges; the agent convicted for a deed it never signed
+
+**Not deployed yet.** Everything below is in the code and the tests (169, of which 146 are v0.10's, unchanged); the XRPL half of the live run was rehearsed on XRPL testnet against the verifier's free `prepareResponse`. The Coston2 run is `scripts/xrpl-outflow.sh`.
+
+### Bond → Vault + judges (SPEC §8.2)
+
+`forge build --sizes` after v0.10: Bond 24,334 B, **242 B** under EIP-170. The outflow challenge did not fit, and neither would any after it. Split once:
+
+- **`Vault`** — every wei (bonds, credited proceeds, accusation stakes), post/withdraw/claim, pro rata, proportional slashing, the one commit–reveal gate, and `verdict`, callable only by the judges given to its constructor. No admin, no setter, no upgrade; the constructor refuses a judge that names another Vault, and `judges()` tells a depositor, before it posts, every piece of code that can ever take from its deposit.
+- **`JudgeEvm`** (§6.1–6.5) and **`JudgeXrpl`** (§6.8, §6.10) — no funds; verify, then ask the Vault.
+- **Deployment without a set-once step:** judges first, at the Vault's predicted address (`vm.computeCreateAddress`), then the Vault. `Deploy.s.sol` reuses the v0.10 registry, anchor log, meter and corroboration log (`REG`/`LOG`/`METER`/`CORROBORATION_LOG`); old mandates stay with the old Bond.
+- **Errors in one interface** (`DelictiErrors`), so every selector is the one v0.10 had.
+- **The proof that nothing changed:** all 146 tests migrated by changing who is called, never what is asserted. The one exception is where an event is expected *from* — `DeedJudged` now comes from the judge that summed the deeds.
+- Sizes: Vault 7,644 B, JudgeEvm 14,253 B, JudgeXrpl 6,801 B.
+- Slither flagged one new write-after-call (`consumedLeaf` after `vault.consumeCommitment`); not exploitable — the Vault is fixed code and calls back into no judge — but moved before any external call anyway.
+
+### §6.10 — gross XRP outflow, no receipts
+
+- The measure is the mandate's: `assetKey = bytes32("XRP/outflow")` promises a budget of XRP that *left* the account, fees included; `0` keeps §6.8's delivered amount. No change to the registry. The two challenges refuse each other's mandates; §6.1 accepts both.
+- **Exclusivity from the XRPL key:** `AgentRefs.proveExclusive` — a payment from `agentRef` whose one 32-byte memo is `keccak256(abi.encode("DELICTI/exclusive", chainid, registry, mandateId))`. Sticky, implies `proven`. `declareExclusive` (the EVM key) does not count.
+- `challengeXrpOutflow`: N `BalanceDecreasingTransaction` proofs; `sourceAddressIndicator` and `sourceAddressHash` both equal `agentRef`; inside the window; ids strictly increasing; sum of **positive** `spentAmount`; kind 7; nested with the other budget kinds.
+- Fees count under this measure, so §10's "an agent can burn fees without limit" no longer holds for outflow mandates.
+- **Rehearsal, XRPL testnet, 2026-09-23:** agent `rDNVcWzofk1mVYk3Q3HZen3M5VEN7Kuikr`; its offer `30E0E8717AD779EAAB9BD4AD917330FF5710CF2FF5CC60DC92EA245BFFFCB2E9` (BDT for the agent: `VALID`, `spentAmount` 10 = the fee); consumed by the counterparty's `8D26EFE24B17FE2A183442458A84A66D3F179A2790C617A9AA090F973058AF8E` (BDT for the agent: `VALID`, `spentAmount` **5,000,000**). `tools/xrpl_testnet.py` gained `trust`, `offer`, `take`.
+
+### Stated, not solved (SPEC §10)
+
+- **The verifier's memory is ~14 days.** A cumulative XRPL case over a longer window may be unprovable when the overrun comes late. `JudgeXrpl.fullyEnforceable` / `PROOF_HORIZON` make it readable; recording proven outflow progressively is the v0.12 design.
+- Judges are fixed for ever: a bug in one is fixed by a new Vault, and deposits already posted stay exposed until withdrawn.
+
+### Scripts
+
+`BOND` is now the Vault; challenges go to `JUDGE_EVM` / `JUDGE_XRPL`. `unanchored-deed.sh` reads the seven-field `Accusation` (the getter string had not followed v0.9's `value`).
+
+### Not done in this release
+
+A full `delicti-audit` pass, and a handler that drives §6.10 and the `Payment` path. The long invariant campaign did run on the refactored code: **12/12 invariants × 1500 runs × depth 200 = 300,000 calls, clean (1,028 s)** — the Vault's balance, pro rata, claims, accusations and verdict bounds hold exactly as they did on the Bond.
+
 ## v0.10.0 — 2026-09-22 — the first deeds judged on XRPL, and the tally judged at the time of the deed
 
 An adversarial pass over v0.9 (Slither at medium+, a 300,000-call invariant campaign on the final code, and a read of every path against the list of attack classes this repo has already suffered). Slither: the same three false-positive classes as v0.9, nothing new. The campaign: clean. The read found two openings, both reachable from outside the contracts, neither a Solidity bug — one a binding missing in *time*, one missing in *scope*. Both have a regression test in `test/Audit.t.sol` that fails against v0.9.

@@ -1,8 +1,20 @@
 # Changelog
 
-## v0.10.0 — unreleased — the tally is judged at the time of the deed
+## v0.10.0 — 2026-09-22 — the first deeds judged on XRPL, and the tally judged at the time of the deed
 
 An adversarial pass over v0.9 (Slither at medium+, a 300,000-call invariant campaign on the final code, and a read of every path against the list of attack classes this repo has already suffered). Slither: the same three false-positive classes as v0.9, nothing new. The campaign: clean. The read found two openings, both reachable from outside the contracts, neither a Solidity bug — one a binding missing in *time*, one missing in *scope*. Both have a regression test in `test/Audit.t.sol` that fails against v0.9.
+
+### Executed on Coston2 (2026-09-22)
+
+Deployed (addresses in the README and docs/DEPLOYMENTS.md). **The XRPL path is no longer tests-only.** `scripts/xrpl-structuring.sh` (new), mandate #6: the agent's XRPL account confirmed the mandate with a payment carrying `AgentRefs.challengeFor(6)` as its one 32-byte memo → `AgentRefs.prove` `0xa5c17d21…63cd8f`; five payments of 1 XRP under a 4-XRP budget, five anchored kind-3 receipts, five FDC `Payment` proofs → reveal `0xb6856090222fb3083d425bb22126f88fd35e66f14641a8b03c2cd2c4862bcb89` (514,785 gas): `bondOf` 1 → **0.75**. Fees (10 drops a payment) were not summed, as §6.8 says.
+
+`tools/xrpl_testnet.py` (new) does the XRPL side — faucet accounts, payments with exactly one 32-byte memo, which is the only shape for which `Payment` reports a reference. The run is resumable: state goes to `.run/` after every costly step, and `RESUME=1` re-commits over the same deeds if the commitment has aged past `COMMIT_TTL`.
+
+It needed that. The first runs sent the verifier transaction ids as `0x0x…`, the refusals were read as indexer lag, and the first commitment aged out; the deeds, leaves and mandate were still good, so only the commitment was redone. Recorded here because the script's own comments had briefly blamed the verifier.
+
+**SPEC §6.9's condition is met, and the blind spot it named does not exist.** A `BalanceDecreasingTransaction` proof for an `OfferCreate` — and not the agent's own: another account took the agent's resting offer — was requested (`0xc5a32b7b…067b47`, round 1461000) and verified by `FdcVerification` (`true`, `spentAmount` 9,000,000 drops). SPEC v0.7 rewrites §6.9 around what that means: a challenge over every XRP outflow of an exclusive XRPL account, with no receipt required, is v0.11.
+
+Not executed live on this deployment: the §6.5 historical-tally fix and the per-agent corroboration key (both covered by `test/Audit.t.sol`), `CorroborationLog` in general, a second incremental verdict, pro-rata withdrawal after a slash.
 
 ### The effector could destroy the case against itself, after seeing it (HIGH)
 

@@ -4,7 +4,11 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {MandateRegistry} from "../src/MandateRegistry.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
-import {Bond} from "../src/Bond.sol";
+import {Vault} from "../src/Vault.sol";
+import {JudgeEvm} from "../src/JudgeEvm.sol";
+import {JudgeXrpl} from "../src/JudgeXrpl.sol";
+import {DelictiErrors} from "../src/DelictiErrors.sol";
+import {Core} from "./Core.sol";
 import {AgentRefs} from "../src/AgentRefs.sol";
 import {SpendMeter} from "../src/SpendMeter.sol";
 import {Receipts} from "../src/Receipts.sol";
@@ -30,7 +34,9 @@ contract MockFdcEvm2 {
 contract UnanchoredTest is Test {
     MandateRegistry reg;
     AnchorLog anchorLog;
-    Bond bond;
+    Vault bond;
+    JudgeEvm judge;
+    JudgeXrpl xjudge;
     SpendMeter meter;
     MockFdcEvm2 mock;
     MockProtocolsV2 rounds;
@@ -59,7 +65,7 @@ contract UnanchoredTest is Test {
         mock = new MockFdcEvm2();
         meter = new SpendMeter(reg);
         rounds = new MockProtocolsV2();
-        bond = new Bond(
+        (bond, judge, xjudge) = Core.deploy(
             reg, anchorLog, IFdcVerification(address(mock)), RESPONSE, 1 hours, meter,
             COMMIT_LEAD, ProtocolsV2Interface(address(rounds)), new AgentRefs(reg, IFdcVerification(address(0))), 5 minutes);
         vm.warp(1_800_000_000);
@@ -78,7 +84,7 @@ contract UnanchoredTest is Test {
         vm.deal(challenger, 10 ether);
 
         STAKE = bond.ACCUSATION_STAKE();
-        GRACE = bond.anchorGrace();
+        GRACE = judge.anchorGrace();
         deedTime = uint64(block.timestamp + 60);
     }
 
@@ -128,7 +134,7 @@ contract UnanchoredTest is Test {
         vm.warp(deedTime + GRACE + 1);
         _arm(challenger, mandateId, TXH);
         vm.prank(challenger);
-        id = bond.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
+        id = judge.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
     }
 
     // --- the deed nobody wrote down ---
@@ -136,7 +142,7 @@ contract UnanchoredTest is Test {
     function test_silenceResolvesAgainstTheAgent() public {
         uint256 id = _accuse();
         vm.warp(block.timestamp + RESPONSE + 1);
-        bond.resolveAccusation(id); // anyone may resolve
+        judge.resolveAccusation(id); // anyone may resolve
         assertTrue(bond.slashed(mandateId));
         assertFalse(reg.isLive(mandateId));
         // stake back + 10% of the bond, even though a stranger pressed the button
@@ -152,15 +158,15 @@ contract UnanchoredTest is Test {
         anchorLog.anchor(mandateId, lh, 1);
 
         uint256 id = _accuse();
-        bond.answerAccusation(id, 0, _leaf(), new bytes32[](0));
+        judge.answerAccusation(id, 0, _leaf(), new bytes32[](0));
         assertFalse(bond.slashed(mandateId));
         // a false accusation costs the accuser its stake
         assertEq(bond.owed(principal), STAKE);
         assertEq(bond.owed(challenger), 0);
 
         vm.warp(block.timestamp + RESPONSE + 1);
-        vm.expectRevert(Bond.AccusationClosed.selector);
-        bond.resolveAccusation(id);
+        vm.expectRevert(DelictiErrors.AccusationClosed.selector);
+        judge.resolveAccusation(id);
     }
 
     // --- v0.9: two holes the invariant campaign found, both about an accusation left open ---
@@ -171,7 +177,7 @@ contract UnanchoredTest is Test {
         _arm(who, mandateId, txh);
         vm.deal(who, 1 ether);
         vm.prank(who);
-        id = bond.accuseUnanchoredDeed{value: STAKE}(mandateId, p, SALT);
+        id = judge.accuseUnanchoredDeed{value: STAKE}(mandateId, p, SALT);
     }
 
     /// Two silent deeds, two accusers. The first resolution takes the bond; the second used to
@@ -184,9 +190,9 @@ contract UnanchoredTest is Test {
         uint256 a2 = _accuseTx(second, keccak256("another silent deed"));
         vm.warp(block.timestamp + RESPONSE + 1);
 
-        bond.resolveAccusation(a1);
+        judge.resolveAccusation(a1);
         assertTrue(bond.slashed(mandateId));
-        bond.resolveAccusation(a2); // must close, not revert
+        judge.resolveAccusation(a2); // must close, not revert
         // v0.9: and it is paid, because a second silent deed is a second lie — additive severity.
         // Each deed moved 1 under a budget of 4: the first verdict took 25% of the bond, the
         // second raised the total to 50%, and each accuser earns 10% of what its own verdict took.
@@ -208,15 +214,15 @@ contract UnanchoredTest is Test {
         vm.warp(uint256(m.validUntil) + 23 hours); // dead, one hour of cooling window left
         _arm(challenger, mandateId, TXH);
         vm.prank(challenger);
-        uint256 id = bond.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
+        uint256 id = judge.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
 
         vm.warp(block.timestamp + 2 hours); // cooling window over, response window wide open
         vm.prank(principal);
-        vm.expectRevert(Bond.AccusationOpen.selector);
+        vm.expectRevert(DelictiErrors.AccusationOpen.selector);
         bond.withdraw(mandateId, payable(principal));
 
         vm.warp(block.timestamp + RESPONSE);
-        bond.resolveAccusation(id);
+        judge.resolveAccusation(id);
         assertTrue(bond.slashed(mandateId));
         assertEq(bond.owed(challenger), STAKE + 0.25 ether); // 1 of a budget of 4: a quarter of the bond, 10% of that
     }
@@ -227,16 +233,16 @@ contract UnanchoredTest is Test {
         bytes32 lh = Receipts.hashMem(_leaf());
         vm.prank(agent);
         anchorLog.anchor(mandateId, lh, 1); // now, well past the grace
-        vm.expectRevert(Bond.AnchoredTooLate.selector);
-        bond.answerAccusation(id, 0, _leaf(), new bytes32[](0));
+        vm.expectRevert(DelictiErrors.AnchoredTooLate.selector);
+        judge.answerAccusation(id, 0, _leaf(), new bytes32[](0));
     }
 
     /// The agent gets to be slower than the chain — only silence past the grace counts.
     function test_revert_accuseWithinGrace() public {
         vm.warp(deedTime + 10 minutes);
         vm.prank(challenger);
-        vm.expectRevert(Bond.DeedWithinGrace.selector);
-        bond.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
+        vm.expectRevert(DelictiErrors.DeedWithinGrace.selector);
+        judge.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
     }
 
     /// An agent that never promised exclusivity cannot be asked to account for every deed:
@@ -252,29 +258,29 @@ contract UnanchoredTest is Test {
         bond.post{value: 1 ether}(other);
         vm.warp(deedTime + GRACE + 1);
         vm.prank(challenger);
-        vm.expectRevert(Bond.NotExclusive.selector);
-        bond.accuseUnanchoredDeed{value: STAKE}(other, _proof(), SALT);
+        vm.expectRevert(DelictiErrors.NotExclusive.selector);
+        judge.accuseUnanchoredDeed{value: STAKE}(other, _proof(), SALT);
     }
 
     function test_revert_secondAccusationOnSameDeed() public {
         _accuse();
         vm.prank(challenger);
-        vm.expectRevert(Bond.AlreadyAccused.selector);
-        bond.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
+        vm.expectRevert(DelictiErrors.AlreadyAccused.selector);
+        judge.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
     }
 
     function test_revert_resolveBeforeWindowCloses() public {
         uint256 id = _accuse();
         vm.warp(block.timestamp + RESPONSE - 1);
-        vm.expectRevert(Bond.ResponseWindowOpen.selector);
-        bond.resolveAccusation(id);
+        vm.expectRevert(DelictiErrors.ResponseWindowOpen.selector);
+        judge.resolveAccusation(id);
     }
 
     function test_revert_wrongStake() public {
         vm.warp(deedTime + GRACE + 1);
         vm.prank(challenger);
-        vm.expectRevert(Bond.BadStake.selector);
-        bond.accuseUnanchoredDeed{value: 1 wei}(mandateId, _proof(), SALT);
+        vm.expectRevert(DelictiErrors.BadStake.selector);
+        judge.accuseUnanchoredDeed{value: 1 wei}(mandateId, _proof(), SALT);
     }
 
     function test_revert_deedOutsideMandateWindow() public {
@@ -282,8 +288,8 @@ contract UnanchoredTest is Test {
         p.data.responseBody.timestamp = uint64(block.timestamp - 1); // before validFrom
         vm.warp(block.timestamp + 2 hours);
         vm.prank(challenger);
-        vm.expectRevert(Bond.ClaimOutsideProvenRange.selector);
-        bond.accuseUnanchoredDeed{value: STAKE}(mandateId, p, SALT);
+        vm.expectRevert(DelictiErrors.ClaimOutsideProvenRange.selector);
+        judge.accuseUnanchoredDeed{value: STAKE}(mandateId, p, SALT);
     }
 
     function test_revert_deedByAnotherAddress() public {
@@ -291,8 +297,8 @@ contract UnanchoredTest is Test {
         p.data.responseBody.sourceAddress = makeAddr("someone else");
         vm.warp(deedTime + GRACE + 1);
         vm.prank(challenger);
-        vm.expectRevert(Bond.NotAgentTx.selector);
-        bond.accuseUnanchoredDeed{value: STAKE}(mandateId, p, SALT);
+        vm.expectRevert(DelictiErrors.NotAgentTx.selector);
+        judge.accuseUnanchoredDeed{value: STAKE}(mandateId, p, SALT);
     }
 
     /// Exclusivity is the agent's own promise. Nobody else can make it for them.
@@ -314,8 +320,8 @@ contract UnanchoredTest is Test {
         vm.warp(deedTime + GRACE + 1);
         rounds.setRoundStart(_proof().data.votingRound, uint64(block.timestamp));
         vm.prank(challenger);
-        vm.expectRevert(Bond.NoCommitment.selector);
-        bond.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
+        vm.expectRevert(DelictiErrors.NoCommitment.selector);
+        judge.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
     }
 
     /// A parasite watching FdcHub sees the deed's transaction hash in the attestation request and
@@ -333,15 +339,15 @@ contract UnanchoredTest is Test {
             bond.commitmentFor(parasite, mandateId, bond.KIND_UNANCHORED_DEED(), bond.deedsDigest(ids), SALT)
         );
         vm.prank(parasite);
-        vm.expectRevert(Bond.CommittedTooLate.selector);
-        bond.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
+        vm.expectRevert(DelictiErrors.CommittedTooLate.selector);
+        judge.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
 
         // the watcher that found it accuses, and still owns the reward when a stranger resolves
         vm.prank(challenger);
-        uint256 id = bond.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
+        uint256 id = judge.accuseUnanchoredDeed{value: STAKE}(mandateId, _proof(), SALT);
         vm.warp(block.timestamp + RESPONSE + 1);
         vm.prank(parasite);
-        bond.resolveAccusation(id);
+        judge.resolveAccusation(id);
         assertEq(bond.owed(challenger), STAKE + 0.25 ether); // 1 of a budget of 4: a quarter of the bond, 10% of that
         assertEq(bond.owed(parasite), 0);
     }

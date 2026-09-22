@@ -4,7 +4,11 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {MandateRegistry} from "../src/MandateRegistry.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
-import {Bond} from "../src/Bond.sol";
+import {Vault} from "../src/Vault.sol";
+import {JudgeEvm} from "../src/JudgeEvm.sol";
+import {JudgeXrpl} from "../src/JudgeXrpl.sol";
+import {DelictiErrors} from "../src/DelictiErrors.sol";
+import {Core} from "./Core.sol";
 import {AgentRefs} from "../src/AgentRefs.sol";
 import {SpendMeter} from "../src/SpendMeter.sol";
 import {Receipts} from "../src/Receipts.sol";
@@ -31,7 +35,9 @@ contract MockFdcEvm {
 abstract contract StructuringFixture is Test {
     MandateRegistry reg;
     AnchorLog anchorLog;
-    Bond bond;
+    Vault bond;
+    JudgeEvm judge;
+    JudgeXrpl xjudge;
     SpendMeter meter;
     MockFdcEvm mock;
     MockProtocolsV2 rounds;
@@ -60,7 +66,7 @@ abstract contract StructuringFixture is Test {
         mock = new MockFdcEvm();
         meter = new SpendMeter(reg);
         rounds = new MockProtocolsV2();
-        bond = new Bond(
+        (bond, judge, xjudge) = Core.deploy(
             reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours, meter,
             COMMIT_LEAD, ProtocolsV2Interface(address(rounds)), new AgentRefs(reg, IFdcVerification(address(0))), 5 minutes);
         vm.warp(1_800_000_000);
@@ -180,7 +186,7 @@ contract StructuringTest is StructuringFixture {
             _bundle(5);
         _arm(bond.KIND_BUDGET_NATIVE(), challenger, pr);
         vm.prank(challenger);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
         assertTrue(bond.slashed(mandateId));
         // v0.9: 5 spent under a budget of 4 is a 25% overrun: a quarter of the 10-ether bond
         assertEq(bond.slashedAmount(mandateId), 2.5 ether);
@@ -195,8 +201,8 @@ contract StructuringTest is StructuringFixture {
             _bundle(4);
         _arm(bond.KIND_BUDGET_NATIVE(), challenger, pr);
         vm.prank(challenger);
-        vm.expectRevert(Bond.WithinBudget.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.WithinBudget.selector);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     function test_revert_duplicateDeedSmuggledIn() public {
@@ -207,8 +213,8 @@ contract StructuringTest is StructuringFixture {
         ls[4] = leaves[3];
         pr[4] = _evmProof(3);
         vm.prank(challenger);
-        vm.expectRevert(Bond.UnorderedTxs.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.UnorderedTxs.selector);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     function test_revert_txNotByAgent() public {
@@ -216,8 +222,8 @@ contract StructuringTest is StructuringFixture {
             _bundle(5);
         pr[2].data.responseBody.sourceAddress = makeAddr("someone-else");
         vm.prank(challenger);
-        vm.expectRevert(Bond.NotAgentTx.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.NotAgentTx.selector);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     function test_revert_worldDisagreesWithReceipt() public {
@@ -225,8 +231,8 @@ contract StructuringTest is StructuringFixture {
             _bundle(5);
         pr[1].data.responseBody.value = EACH / 2; // chain says half of what the receipt claims
         vm.prank(challenger);
-        vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.ProofDoesNotMatchClaim.selector);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     /// A cumulative budget covers the mandate's life. Deeds from before it must not count,
@@ -236,8 +242,8 @@ contract StructuringTest is StructuringFixture {
             _bundle(5);
         pr[2].data.responseBody.timestamp = uint64(block.timestamp - 1);
         vm.prank(challenger);
-        vm.expectRevert(Bond.ClaimOutsideProvenRange.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.ClaimOutsideProvenRange.selector);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     // --- commit–reveal (SPEC 6.7) on the flagship path: the salami challenge ---
@@ -260,11 +266,11 @@ contract StructuringTest is StructuringFixture {
         );
 
         vm.prank(parasite);
-        vm.expectRevert(Bond.CommittedTooLate.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.CommittedTooLate.selector);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
 
         vm.prank(challenger);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
         assertEq(bond.owed(challenger), 0.25 ether);
         assertEq(bond.owed(parasite), 0);
     }
@@ -275,8 +281,8 @@ contract StructuringTest is StructuringFixture {
             _bundle(5);
         _arm(bond.KIND_BUDGET_ERC20(), challenger, pr); // committed to the wrong kind
         vm.prank(challenger);
-        vm.expectRevert(Bond.NoCommitment.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.NoCommitment.selector);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
 }
@@ -314,7 +320,7 @@ contract StructuringERC20Test is StructuringFixture {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
         _arm(bond.KIND_BUDGET_ERC20(), challenger, pr);
         vm.prank(challenger);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
         assertTrue(bond.slashed(mandateId));
     }
 
@@ -323,8 +329,8 @@ contract StructuringERC20Test is StructuringFixture {
         // — on a native mandate, where it is allowed to run at all
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
         vm.prank(challenger);
-        vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.ProofDoesNotMatchClaim.selector);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     /// v0.9 — the asset used to be the challenger's to name. It is now the mandate's, so the
@@ -334,8 +340,8 @@ contract StructuringERC20Test is StructuringFixture {
         _setUpMandate(bytes32(uint256(uint160(makeAddr("other-token")))));
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
         vm.prank(challenger);
-        vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.ProofDoesNotMatchClaim.selector);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     /// v0.9 — there is one entry point, and what counts as a deed's value follows the mandate.
@@ -345,14 +351,14 @@ contract StructuringERC20Test is StructuringFixture {
         _setUpMandate(bytes32(uint256(uint160(token))));
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundle(5);
         vm.prank(challenger);
-        vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT); // native proofs, token mandate
+        vm.expectRevert(DelictiErrors.ProofDoesNotMatchClaim.selector);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT); // native proofs, token mandate
 
         _setUpMandate(keccak256("not an address: some other source's asset id"));
         (idx, ls, paths, pr) = _bundle(5);
         vm.prank(challenger);
-        vm.expectRevert(Bond.WrongAsset.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.WrongAsset.selector);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     /// v0.9 — a deed on another chain is not a deed under this mandate, whatever the leaf says.
@@ -363,8 +369,8 @@ contract StructuringERC20Test is StructuringFixture {
         (idx, ls, paths, pr) = _bundle(5);
         for (uint256 i = 0; i < 5; i++) pr[i].data.sourceId = bytes32("testETH");
         vm.prank(challenger);
-        vm.expectRevert(Bond.WrongSource.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.WrongSource.selector);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     function test_erc20_revert_transferFromSomeoneElse() public {
@@ -372,7 +378,7 @@ contract StructuringERC20Test is StructuringFixture {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundleErc20(5);
         pr[2].data.responseBody.events[0].topics[1] = bytes32(uint256(uint160(makeAddr("stranger"))));
         vm.prank(challenger);
-        vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.ProofDoesNotMatchClaim.selector);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 }

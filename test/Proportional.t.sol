@@ -2,7 +2,11 @@
 pragma solidity ^0.8.28;
 
 import {StructuringFixture} from "./Structuring.t.sol";
-import {Bond} from "../src/Bond.sol";
+import {Vault} from "../src/Vault.sol";
+import {JudgeEvm} from "../src/JudgeEvm.sol";
+import {JudgeXrpl} from "../src/JudgeXrpl.sol";
+import {DelictiErrors} from "../src/DelictiErrors.sol";
+import {Core} from "./Core.sol";
 import {BondLens} from "../src/BondLens.sol";
 import {Receipts} from "../src/Receipts.sol";
 import {IEVMTransaction} from "@flarenetwork/flare-periphery-contracts/coston2/IEVMTransaction.sol";
@@ -44,7 +48,7 @@ contract ProportionalTest is StructuringFixture {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundle(k);
         _arm(bond.KIND_BUDGET_NATIVE(), who, pr);
         vm.prank(who);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     /// @dev Re-issue the fixture with deeds of `each` instead of 1 ether.
@@ -77,7 +81,7 @@ contract ProportionalTest is StructuringFixture {
         for (uint256 i = 0; i < k; i++) pr[i] = _evmProofOf(i, each);
         _arm(bond.KIND_BUDGET_NATIVE(), who, pr);
         vm.prank(who);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     // ------------------------------------------------------------------ the shape of the penalty
@@ -134,7 +138,7 @@ contract ProportionalTest is StructuringFixture {
         bond.commitChallenge(bond.commitmentFor(challenger, mandateId, bond.KIND_BUDGET_NATIVE(), bond.deedsDigest(ids), "w"));
         vm.warp(t);
         vm.prank(challenger);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, "w");
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, "w");
 
         assertEq(bond.slashedAmount(mandateId), 8.75 ether, "3.5/4 of the bond, as if the small verdict had never happened");
         assertEq(bond.owed(challenger), 0.75 ether, "10% of the 7.5 ether its verdict added");
@@ -149,8 +153,8 @@ contract ProportionalTest is StructuringFixture {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundle(5);
         _arm(bond.KIND_BUDGET_NATIVE(), challenger, pr);
         vm.prank(challenger);
-        vm.expectRevert(Bond.NothingNew.selector);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.NothingNew.selector);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
     }
 
     // ------------------------------------------------------------------ whose money comes back
@@ -178,7 +182,7 @@ contract ProportionalTest is StructuringFixture {
         assertEq(bond.bondOf(mandateId), 0);
 
         vm.prank(principal);
-        vm.expectRevert(Bond.NoDeposit.selector);
+        vm.expectRevert(DelictiErrors.NoDeposit.selector);
         bond.withdraw(mandateId, payable(principal)); // not twice
     }
 
@@ -192,7 +196,7 @@ contract ProportionalTest is StructuringFixture {
         bond.post{value: 5 ether}(id);
         vm.warp(block.timestamp + 26 hours);
         vm.prank(principal);
-        vm.expectRevert(Bond.NoDeposit.selector);
+        vm.expectRevert(DelictiErrors.NoDeposit.selector);
         bond.withdraw(id, payable(principal));
         vm.prank(insurer);
         bond.withdraw(id, payable(insurer));
@@ -203,7 +207,7 @@ contract ProportionalTest is StructuringFixture {
     function test_revert_withdrawRightAfterAPartialSlash() public {
         _challenge(challenger, 5);
         vm.prank(principal);
-        vm.expectRevert(Bond.CoolingWindow.selector);
+        vm.expectRevert(DelictiErrors.CoolingWindow.selector);
         bond.withdraw(mandateId, payable(principal));
     }
 

@@ -4,7 +4,11 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {MandateRegistry} from "../src/MandateRegistry.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
-import {Bond} from "../src/Bond.sol";
+import {Vault} from "../src/Vault.sol";
+import {JudgeEvm} from "../src/JudgeEvm.sol";
+import {JudgeXrpl} from "../src/JudgeXrpl.sol";
+import {DelictiErrors} from "../src/DelictiErrors.sol";
+import {Core} from "./Core.sol";
 import {AgentRefs} from "../src/AgentRefs.sol";
 import {SpendMeter} from "../src/SpendMeter.sol";
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
@@ -29,7 +33,9 @@ contract MockFdcMeter {
 contract SpendMeterTest is Test {
     MandateRegistry reg;
     AnchorLog anchorLog;
-    Bond bond;
+    Vault bond;
+    JudgeEvm judge;
+    JudgeXrpl xjudge;
     SpendMeter meter;
     MockFdcMeter mock;
     MockProtocolsV2 rounds;
@@ -75,7 +81,7 @@ contract SpendMeterTest is Test {
         mock = new MockFdcMeter();
         meter = new SpendMeter(reg);
         rounds = new MockProtocolsV2();
-        bond = new Bond(
+        (bond, judge, xjudge) = Core.deploy(
             reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours, meter,
             COMMIT_LEAD, ProtocolsV2Interface(address(rounds)), new AgentRefs(reg, IFdcVerification(address(0))), 5 minutes);
         vm.warp(1_800_000_000);
@@ -212,7 +218,7 @@ contract SpendMeterTest is Test {
 
         _arm(challenger, mandateId, _bundle(5, true));
         vm.prank(challenger);
-        bond.challengeUnderReportedSpend(mandateId, _bundle(5, true), SALT);
+        judge.challengeUnderReportedSpend(mandateId, _bundle(5, true), SALT);
 
         assertTrue(bond.slashed(mandateId));
         assertFalse(reg.isLive(mandateId));
@@ -227,7 +233,7 @@ contract SpendMeterTest is Test {
         meter.note(id, EACH);
         _arm(challenger, id, _bundle(3, false));
         vm.prank(challenger);
-        bond.challengeUnderReportedSpend(id, _bundle(3, false), SALT);
+        judge.challengeUnderReportedSpend(id, _bundle(3, false), SALT);
         assertTrue(bond.slashed(id));
     }
 
@@ -237,8 +243,8 @@ contract SpendMeterTest is Test {
     function test_revert_nativeDeedsAgainstAnErc20Mandate() public {
         _arm(challenger, mandateId, _bundle(3, false));
         vm.prank(challenger);
-        vm.expectRevert(Bond.TallyAgrees.selector);
-        bond.challengeUnderReportedSpend(mandateId, _bundle(3, false), SALT);
+        vm.expectRevert(DelictiErrors.TallyAgrees.selector);
+        judge.challengeUnderReportedSpend(mandateId, _bundle(3, false), SALT);
     }
 
     /// v0.9 — same key, same address, another EVM chain. Until now this path checked no source.
@@ -246,8 +252,8 @@ contract SpendMeterTest is Test {
         IEVMTransaction.Proof[] memory ps = _bundle(5, true);
         ps[3].data.sourceId = bytes32("testETH");
         vm.prank(challenger);
-        vm.expectRevert(Bond.WrongSource.selector);
-        bond.challengeUnderReportedSpend(mandateId, ps, SALT);
+        vm.expectRevert(DelictiErrors.WrongSource.selector);
+        judge.challengeUnderReportedSpend(mandateId, ps, SALT);
     }
 
     /// An honest effector is not a target: the tally matches what the world shows.
@@ -257,8 +263,8 @@ contract SpendMeterTest is Test {
         vm.stopPrank();
         _arm(challenger, mandateId, _bundle(5, true));
         vm.prank(challenger);
-        vm.expectRevert(Bond.TallyAgrees.selector);
-        bond.challengeUnderReportedSpend(mandateId, _bundle(5, true), SALT);
+        vm.expectRevert(DelictiErrors.TallyAgrees.selector);
+        judge.challengeUnderReportedSpend(mandateId, _bundle(5, true), SALT);
     }
 
     /// A mandate nobody meters never promised a tally, so it cannot have broken one.
@@ -272,8 +278,8 @@ contract SpendMeterTest is Test {
         vm.prank(principal);
         bond.post{value: 1 ether}(other);
         vm.prank(challenger);
-        vm.expectRevert(Bond.NotMetered.selector);
-        bond.challengeUnderReportedSpend(other, _bundle(5, true), SALT);
+        vm.expectRevert(DelictiErrors.NotMetered.selector);
+        judge.challengeUnderReportedSpend(other, _bundle(5, true), SALT);
     }
 
     /// Without exclusivity an outflow from the agent may be none of this mandate's business.
@@ -291,24 +297,24 @@ contract SpendMeterTest is Test {
         vm.prank(principal);
         bond.post{value: 1 ether}(other);
         vm.prank(challenger);
-        vm.expectRevert(Bond.NotExclusive.selector);
-        bond.challengeUnderReportedSpend(other, _bundle(5, true), SALT);
+        vm.expectRevert(DelictiErrors.NotExclusive.selector);
+        judge.challengeUnderReportedSpend(other, _bundle(5, true), SALT);
     }
 
     function test_revert_duplicateDeedInBundle() public {
         IEVMTransaction.Proof[] memory ps = _bundle(3, true);
         ps[2] = ps[1];
         vm.prank(challenger);
-        vm.expectRevert(Bond.UnorderedTxs.selector);
-        bond.challengeUnderReportedSpend(mandateId, ps, SALT);
+        vm.expectRevert(DelictiErrors.UnorderedTxs.selector);
+        judge.challengeUnderReportedSpend(mandateId, ps, SALT);
     }
 
     function test_revert_deedOutsideMandateWindow() public {
         IEVMTransaction.Proof[] memory ps = _bundle(3, true);
         ps[1].data.responseBody.timestamp = uint64(block.timestamp - 1);
         vm.prank(challenger);
-        vm.expectRevert(Bond.ClaimOutsideProvenRange.selector);
-        bond.challengeUnderReportedSpend(mandateId, ps, SALT);
+        vm.expectRevert(DelictiErrors.ClaimOutsideProvenRange.selector);
+        judge.challengeUnderReportedSpend(mandateId, ps, SALT);
     }
 
     function test_revert_nativeDeedByAnotherAddress() public {
@@ -316,15 +322,15 @@ contract SpendMeterTest is Test {
         IEVMTransaction.Proof[] memory ps = _bundle(2, false);
         ps[0].data.responseBody.sourceAddress = makeAddr("someone else");
         vm.prank(challenger);
-        vm.expectRevert(Bond.NotAgentTx.selector);
-        bond.challengeUnderReportedSpend(id, ps, SALT);
+        vm.expectRevert(DelictiErrors.NotAgentTx.selector);
+        judge.challengeUnderReportedSpend(id, ps, SALT);
     }
 
     function test_revert_whenFdcRejectsTheProof() public {
         mock.setVerdict(false);
         vm.prank(challenger);
-        vm.expectRevert(Bond.FdcProofInvalid.selector);
-        bond.challengeUnderReportedSpend(mandateId, _bundle(3, true), SALT);
+        vm.expectRevert(DelictiErrors.FdcProofInvalid.selector);
+        judge.challengeUnderReportedSpend(mandateId, _bundle(3, true), SALT);
     }
 
     // --- commit–reveal over a sequence (SPEC 6.7) ---
@@ -337,8 +343,8 @@ contract SpendMeterTest is Test {
         meter.note(mandateId, EACH);
         _arm(challenger, mandateId, _bundle(5, true)); // committed to five deeds
         vm.prank(challenger);
-        vm.expectRevert(Bond.NoCommitment.selector);
-        bond.challengeUnderReportedSpend(mandateId, _bundle(3, true), SALT); // revealed three
+        vm.expectRevert(DelictiErrors.NoCommitment.selector);
+        judge.challengeUnderReportedSpend(mandateId, _bundle(3, true), SALT); // revealed three
     }
 
     /// The deadline is set by the LOWEST voting round in the bundle, not the highest. Otherwise one
@@ -352,8 +358,8 @@ contract SpendMeterTest is Test {
         // round 0 — the lowest — began one second too late for this commitment; round 500 did not.
         _armAged(challenger, mandateId, ps, COMMIT_LEAD - 1);
         vm.prank(challenger);
-        vm.expectRevert(Bond.CommittedTooLate.selector);
-        bond.challengeUnderReportedSpend(mandateId, ps, SALT);
+        vm.expectRevert(DelictiErrors.CommittedTooLate.selector);
+        judge.challengeUnderReportedSpend(mandateId, ps, SALT);
     }
 
     /// The counterpart: give the LOWEST round the full lead and the same bundle lands. Separate
@@ -365,7 +371,7 @@ contract SpendMeterTest is Test {
         ps[1].data.votingRound = 500;
         _armAged(challenger, mandateId, ps, COMMIT_LEAD);
         vm.prank(challenger);
-        bond.challengeUnderReportedSpend(mandateId, ps, SALT);
+        judge.challengeUnderReportedSpend(mandateId, ps, SALT);
         assertTrue(bond.slashed(mandateId));
     }
 }

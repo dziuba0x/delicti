@@ -4,7 +4,11 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {MandateRegistry} from "../../src/MandateRegistry.sol";
 import {AnchorLog} from "../../src/AnchorLog.sol";
-import {Bond} from "../../src/Bond.sol";
+import {Vault} from "../../src/Vault.sol";
+import {JudgeEvm} from "../../src/JudgeEvm.sol";
+import {JudgeXrpl} from "../../src/JudgeXrpl.sol";
+import {DelictiErrors} from "../../src/DelictiErrors.sol";
+import {Core} from "../Core.sol";
 import {SpendMeter} from "../../src/SpendMeter.sol";
 import {Receipts} from "../../src/Receipts.sol";
 import {IPayment} from "@flarenetwork/flare-periphery-contracts/coston2/IPayment.sol";
@@ -42,7 +46,8 @@ contract CredulousFdc {
 contract Handler is Test {
     MandateRegistry public reg;
     AnchorLog public anchorLog;
-    Bond public bond;
+    Vault public bond;
+    JudgeEvm public judge;
     SpendMeter public meter;
     MockProtocolsV2 public rounds;
 
@@ -101,8 +106,9 @@ contract Handler is Test {
     Pending[] public pendings;
     uint256[] public accusationIds;
 
-    constructor(MandateRegistry r, AnchorLog l, Bond b, SpendMeter m, MockProtocolsV2 p) {
+    constructor(MandateRegistry r, AnchorLog l, Vault b, JudgeEvm j, SpendMeter m, MockProtocolsV2 p) {
         reg = r;
+        judge = j;
         anchorLog = l;
         bond = b;
         meter = m;
@@ -478,7 +484,7 @@ contract Handler is Test {
             if (p.kind == bond.KIND_UNANCHORED_DEED()) {
                 // an accusation also has to wait out the anchor grace; an honest accuser commits
                 // late enough that both fit inside COMMIT_TTL, which the fuzzer will sometimes miss
-                uint256 graceEnd = uint256(deeds[p.deedIndex].ts) + bond.anchorGrace();
+                uint256 graceEnd = uint256(deeds[p.deedIndex].ts) + judge.anchorGrace();
                 if (graceEnd > block.timestamp + wait) wait = graceEnd - block.timestamp;
             }
             vm.warp(block.timestamp + wait);
@@ -492,7 +498,7 @@ contract Handler is Test {
             IEVMTransaction.Proof memory pr = _proof(deeds[p.deedIndex], round);
             uint256 stake = bond.ACCUSATION_STAKE();
             vm.prank(p.challenger);
-            try bond.accuseUnanchoredDeed{value: stake}(p.mandateId, pr, p.salt) returns (uint256 aid) {
+            try judge.accuseUnanchoredDeed{value: stake}(p.mandateId, pr, p.salt) returns (uint256 aid) {
                 ghostStaked += stake;
                 accusationIds.push(aid);
                 nAccusations++;
@@ -510,7 +516,7 @@ contract Handler is Test {
 
         if (under) {
             vm.prank(p.challenger);
-            try bond.challengeUnderReportedSpend(p.mandateId, proofs, p.salt) {
+            try judge.challengeUnderReportedSpend(p.mandateId, proofs, p.salt) {
                 _afterReveal(p, true, bondBefore);
             } catch {
                 nRefusedReveals++;
@@ -526,7 +532,7 @@ contract Handler is Test {
             paths[i] = new bytes32[](0);
         }
         vm.prank(p.challenger);
-        try bond.challengeBudgetOverrun(p.mandateId, eps, ls, paths, proofs, p.salt) {
+        try judge.challengeBudgetOverrun(p.mandateId, eps, ls, paths, proofs, p.salt) {
             _afterReveal(p, true, bondBefore);
         } catch {}
     }
@@ -534,11 +540,11 @@ contract Handler is Test {
     function answer(uint256 aSeed, uint256 whoSeed) external {
         if (accusationIds.length == 0) return;
         uint256 aid = accusationIds[aSeed % accusationIds.length];
-        (uint256 mid, bytes32 txh,,,,,) = bond.accusations(aid);
+        (uint256 mid, bytes32 txh,,,,,) = judge.accusations(aid);
         for (uint256 i = 0; i < deeds.length; i++) {
             if (deeds[i].mandateId == mid && deeds[i].txh == txh && deeds[i].anchored) {
                 vm.prank(_actor(whoSeed));
-                try bond.answerAccusation(aid, deeds[i].episode, _leaf(deeds[i]), new bytes32[](0)) {
+                try judge.answerAccusation(aid, deeds[i].episode, _leaf(deeds[i]), new bytes32[](0)) {
                     nAnswered++;
                 } catch {}
                 return;
@@ -549,10 +555,10 @@ contract Handler is Test {
     function resolve(uint256 aSeed, uint256 whoSeed) external {
         if (accusationIds.length == 0) return;
         uint256 aid = accusationIds[aSeed % accusationIds.length];
-        (uint256 mid,,,,,,) = bond.accusations(aid);
+        (uint256 mid,,,,,,) = judge.accusations(aid);
         uint256 bondBefore = bond.bondOf(mid);
         vm.prank(_actor(whoSeed));
-        try bond.resolveAccusation(aid) {
+        try judge.resolveAccusation(aid) {
             nResolved++;
             _recordSlash(mid, bondBefore);
         } catch {}

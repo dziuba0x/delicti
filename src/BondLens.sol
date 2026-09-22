@@ -1,27 +1,26 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {Bond} from "./Bond.sol";
+import {Vault} from "./Vault.sol";
+import {Kinds} from "./Kinds.sol";
 import {MandateRegistry} from "./MandateRegistry.sol";
 
-/// @title BondLens — read-only arithmetic over a Bond's public state
+/// @title BondLens — read-only arithmetic over a Vault's public state
 /// @notice Holds nothing, is trusted with nothing, and can be redeployed or replaced by anyone at any
-///         time: every number it returns is derived from public getters. It exists because the Bond
-///         sits close to the EIP-170 size limit, and because "what would this case take?" is a
+///         time: every number it returns is derived from public getters. It exists because "what would this case take?" is a
 ///         question a watcher asks BEFORE paying 20 FLR per attestation, and a risk market asks
 ///         when it prices loss-given-breach.
 contract BondLens {
     /// @notice What a verdict of this kind and severity would take from this mandate right now.
-    ///         Mirrors `Bond._severityAfter` + `Bond._penalty`; `test/Proportional.t.sol` pins the
+    ///         Mirrors `Vault._accumulate` + `Vault._penalty`; `test/Proportional.t.sol` pins the
     ///         two against each other.
-    function penaltyFor(Bond bond, uint256 mandateId, uint8 kind, uint256 severity)
+    function penaltyFor(Vault bond, uint256 mandateId, uint8 kind, uint256 severity)
         external
         view
         returns (uint256 increment, uint256 target)
     {
-        bool additive = kind == bond.KIND_FALSE_PAYMENT() || kind == bond.KIND_UNANCHORED_DEED();
-        uint8 bucket =
-            (kind == bond.KIND_BUDGET_ERC20() || kind == bond.KIND_BUDGET_PAYMENT()) ? bond.KIND_BUDGET_NATIVE() : kind;
+        bool additive = Kinds.additive(kind);
+        uint8 bucket = Kinds.bucket(kind);
         uint256 prev = bond.severityIn(mandateId, bucket);
         uint256 add = additive ? severity : (severity > prev ? severity - prev : 0);
         uint256 total = bond.severityOf(mandateId);
@@ -47,7 +46,7 @@ contract BondLens {
     ///         bond per unit of budget, in basis points of 1:1. Units differ (bond is native, budget
     ///         is the mandate's asset), so this is a number to compare across mandates in the SAME
     ///         asset, not a solvency statement.
-    function coverBps(Bond bond, uint256 mandateId) external view returns (uint256) {
+    function coverBps(Vault bond, uint256 mandateId) external view returns (uint256) {
         uint256 budget = bond.registry().get(mandateId).budget;
         if (budget == 0) return type(uint256).max;
         return (bond.bondOf(mandateId) * 10_000) / budget;

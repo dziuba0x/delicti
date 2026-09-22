@@ -4,7 +4,11 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {MandateRegistry} from "../src/MandateRegistry.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
-import {Bond} from "../src/Bond.sol";
+import {Vault} from "../src/Vault.sol";
+import {JudgeEvm} from "../src/JudgeEvm.sol";
+import {JudgeXrpl} from "../src/JudgeXrpl.sol";
+import {DelictiErrors} from "../src/DelictiErrors.sol";
+import {Core} from "./Core.sol";
 import {AgentRefs} from "../src/AgentRefs.sol";
 import {SpendMeter} from "../src/SpendMeter.sol";
 import {Receipts} from "../src/Receipts.sol";
@@ -35,7 +39,9 @@ contract MockFdc {
 contract BondTest is Test {
     MandateRegistry reg;
     AnchorLog anchorLog;
-    Bond bond;
+    Vault bond;
+    JudgeEvm judge;
+    JudgeXrpl xjudge;
     SpendMeter meter;
     MockFdc mock;
     MockProtocolsV2 rounds;
@@ -63,7 +69,7 @@ contract BondTest is Test {
         mock = new MockFdc();
         meter = new SpendMeter(reg);
         rounds = new MockProtocolsV2();
-        bond = new Bond(
+        (bond, judge, xjudge) = Core.deploy(
             reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours, meter,
             COMMIT_LEAD, ProtocolsV2Interface(address(rounds)), new AgentRefs(reg, IFdcVerification(address(0))), 5 minutes);
 
@@ -167,7 +173,7 @@ contract BondTest is Test {
 
         _arm(challenger);
         vm.prank(challenger);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
 
         // v0.9: proportional. The lie was about 1 XRP under a 5-XRP budget: 20% of the 10-ether bond.
         assertEq(bond.bondOf(mandateId), 8 ether);
@@ -192,8 +198,8 @@ contract BondTest is Test {
     function test_revert_whenFdcSaysProofInvalid() public {
         mock.setVerdict(false);
         vm.prank(challenger);
-        vm.expectRevert(Bond.FdcProofInvalid.selector);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        vm.expectRevert(DelictiErrors.FdcProofInvalid.selector);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
     }
 
     function test_revert_whenProofIsAboutDifferentPayment() public {
@@ -201,8 +207,8 @@ contract BondTest is Test {
         p.data.requestBody.amount = AMOUNT + 1; // proof about a different amount
         _arm(challenger);
         vm.prank(challenger);
-        vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), p, SALT);
+        vm.expectRevert(DelictiErrors.ProofDoesNotMatchClaim.selector);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), p, SALT);
     }
 
     function test_revert_whenClaimOutsideProvenRange() public {
@@ -210,8 +216,8 @@ contract BondTest is Test {
         p.data.requestBody.deadlineTimestamp = leaf.claimedTimestamp - 1; // deadline before claim
         _arm(challenger);
         vm.prank(challenger);
-        vm.expectRevert(Bond.ClaimOutsideProvenRange.selector);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), p, SALT);
+        vm.expectRevert(DelictiErrors.ClaimOutsideProvenRange.selector);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), p, SALT);
     }
 
     function test_revert_whenLeafNotAnchored() public {
@@ -220,17 +226,17 @@ contract BondTest is Test {
         IReferencedPaymentNonexistence.Proof memory p = _proof();
         p.data.requestBody.amount = AMOUNT + 5;
         vm.prank(challenger);
-        vm.expectRevert(Bond.LeafNotAnchored.selector);
-        bond.challengeFalsePayment(mandateId, 0, forged, _path(), p, SALT);
+        vm.expectRevert(DelictiErrors.LeafNotAnchored.selector);
+        judge.challengeFalsePayment(mandateId, 0, forged, _path(), p, SALT);
     }
 
     function test_revert_doubleSlash() public {
         _arm(challenger);
         vm.prank(challenger);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
         vm.prank(challenger);
-        vm.expectRevert(Bond.LeafConsumed.selector); // the same lie does not pay twice
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        vm.expectRevert(DelictiErrors.LeafConsumed.selector); // the same lie does not pay twice
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
     }
 
     function test_delegation_monotonicNarrowing() public {
@@ -269,14 +275,14 @@ contract BondTest is Test {
     function test_revert_revokeAndWithdrawInSameTransaction() public {
         vm.startPrank(principal);
         reg.revoke(mandateId);
-        vm.expectRevert(Bond.CoolingWindow.selector);
+        vm.expectRevert(DelictiErrors.CoolingWindow.selector);
         bond.withdraw(mandateId, payable(principal));
         vm.stopPrank();
 
         // still slashable during the window
         vm.warp(block.timestamp + 23 hours);
         vm.prank(principal);
-        vm.expectRevert(Bond.CoolingWindow.selector);
+        vm.expectRevert(DelictiErrors.CoolingWindow.selector);
         bond.withdraw(mandateId, payable(principal));
 
         vm.warp(block.timestamp + 2 hours);
@@ -291,7 +297,7 @@ contract BondTest is Test {
         vm.warp(block.timestamp + 1 days + 1);
         assertFalse(reg.isLive(mandateId));
         vm.prank(principal);
-        vm.expectRevert(Bond.CoolingWindow.selector);
+        vm.expectRevert(DelictiErrors.CoolingWindow.selector);
         bond.withdraw(mandateId, payable(principal));
     }
 
@@ -357,7 +363,7 @@ contract BondTest is Test {
     function test_revert_postUnderUnacknowledgedMandate() public {
         uint256 id = _commitAs(principal, makeAddr("a busy stranger"), 0, _terms());
         vm.prank(principal);
-        vm.expectRevert(Bond.NotAcknowledged.selector);
+        vm.expectRevert(DelictiErrors.NotAcknowledged.selector);
         bond.post{value: 1 ether}(id);
     }
 
@@ -380,7 +386,7 @@ contract BondTest is Test {
         vm.prank(agent);
         reg.acknowledge(id);
         vm.prank(principal);
-        vm.expectRevert(Bond.NotThisBond.selector);
+        vm.expectRevert(DelictiErrors.NotThisBond.selector);
         bond.post{value: 1 ether}(id);
     }
 
@@ -431,8 +437,8 @@ contract BondTest is Test {
         vm.prank(principal);
         bond.post{value: 1 ether}(id);
         vm.prank(challenger);
-        vm.expectRevert(Bond.WrongAsset.selector);
-        bond.challengeFalsePayment(id, 0, l, new bytes32[](0), _proof(), SALT);
+        vm.expectRevert(DelictiErrors.WrongAsset.selector);
+        judge.challengeFalsePayment(id, 0, l, new bytes32[](0), _proof(), SALT);
     }
 
     /// ...and a receipt naming another chain than the mandate's is not a deed under the mandate.
@@ -449,8 +455,8 @@ contract BondTest is Test {
         vm.prank(principal);
         bond.post{value: 1 ether}(id);
         vm.prank(challenger);
-        vm.expectRevert(Bond.WrongSource.selector);
-        bond.challengeFalsePayment(id, 0, l, new bytes32[](0), _proof(), SALT);
+        vm.expectRevert(DelictiErrors.WrongSource.selector);
+        judge.challengeFalsePayment(id, 0, l, new bytes32[](0), _proof(), SALT);
     }
 
     /// The immunisation attack: burn the leaf under a throwaway mandate of your own, and the
@@ -467,14 +473,14 @@ contract BondTest is Test {
         anchorLog.anchor(decoy, Receipts.hashMem(leaf), 1);
         reg.acknowledge(decoy);
         bond.post{value: 1 wei}(decoy);
-        vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeFalsePayment(decoy, 0, leaf, new bytes32[](0), _proof(), SALT);
+        vm.expectRevert(DelictiErrors.ProofDoesNotMatchClaim.selector);
+        judge.challengeFalsePayment(decoy, 0, leaf, new bytes32[](0), _proof(), SALT);
         vm.stopPrank();
 
         // the real challenge still lands
         _arm(challenger);
         vm.prank(challenger);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
         assertTrue(bond.slashed(mandateId));
     }
 
@@ -487,8 +493,8 @@ contract BondTest is Test {
         p.data.requestBody.sourceAddressesRoot = keccak256("some other payer");
         _arm(challenger);
         vm.prank(challenger);
-        vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), p, SALT);
+        vm.expectRevert(DelictiErrors.ProofDoesNotMatchClaim.selector);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), p, SALT);
     }
 
     /// One slash per mandate. Funding an already-slashed mandate buys nothing but looks like
@@ -496,9 +502,9 @@ contract BondTest is Test {
     function test_revert_postToSlashedMandate() public {
         _arm(challenger);
         vm.prank(challenger);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
         vm.deal(address(this), 1 ether);
-        vm.expectRevert(Bond.BondSlashed.selector);
+        vm.expectRevert(DelictiErrors.BondSlashed.selector);
         bond.post{value: 1 ether}(mandateId);
     }
 
@@ -533,8 +539,8 @@ contract BondTest is Test {
     function test_revert_challengeWithoutAnyCommitment() public {
         rounds.setRoundStart(_proof().data.votingRound, uint64(block.timestamp));
         vm.prank(challenger);
-        vm.expectRevert(Bond.NoCommitment.selector);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        vm.expectRevert(DelictiErrors.NoCommitment.selector);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
     }
 
     /// Committing after the evidence round started is exactly what a copier can do, and it fails.
@@ -543,8 +549,8 @@ contract BondTest is Test {
         rounds.setRoundStart(_proof().data.votingRound, uint64(block.timestamp) - 1);
         bond.commitChallenge(_commitmentOf(challenger));
         vm.prank(challenger);
-        vm.expectRevert(Bond.CommittedTooLate.selector);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        vm.expectRevert(DelictiErrors.CommittedTooLate.selector);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
     }
 
     /// One second short of `commitLead` is short.
@@ -555,15 +561,15 @@ contract BondTest is Test {
     function test_revert_commitmentOneSecondTooYoung() public {
         _armAged(challenger, _digest(), bond.KIND_FALSE_PAYMENT(), COMMIT_LEAD - 1, _proof().data.votingRound);
         vm.prank(challenger);
-        vm.expectRevert(Bond.CommittedTooLate.selector);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        vm.expectRevert(DelictiErrors.CommittedTooLate.selector);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
     }
 
     /// Exactly `commitLead` is enough: the window is inclusive at the near end.
     function test_commitmentExactlyAtTheLeadStands() public {
         _arm(challenger);
         vm.prank(challenger);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
         assertTrue(bond.slashed(mandateId));
     }
 
@@ -573,8 +579,8 @@ contract BondTest is Test {
     function test_revert_commitmentOlderThanTheTtl() public {
         _armAged(challenger, _digest(), bond.KIND_FALSE_PAYMENT(), bond.COMMIT_TTL() + 1, _proof().data.votingRound);
         vm.prank(challenger);
-        vm.expectRevert(Bond.CommitmentStale.selector);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        vm.expectRevert(DelictiErrors.CommitmentStale.selector);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
     }
 
     /// Exactly COMMIT_TTL still stands: the window is [commitLead, COMMIT_TTL], inclusive at both
@@ -582,7 +588,7 @@ contract BondTest is Test {
     function test_commitmentExactlyAtTheTtlStands() public {
         _armAged(challenger, _digest(), bond.KIND_FALSE_PAYMENT(), bond.COMMIT_TTL(), _proof().data.votingRound);
         vm.prank(challenger);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
         assertTrue(bond.slashed(mandateId));
     }
 
@@ -594,8 +600,8 @@ contract BondTest is Test {
         // three days before anybody challenges anything, the squatter commits to this leaf
         _armAged(squatter, _digest(), bond.KIND_FALSE_PAYMENT(), 3 days, _proof().data.votingRound);
         vm.prank(squatter);
-        vm.expectRevert(Bond.CommitmentStale.selector);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        vm.expectRevert(DelictiErrors.CommitmentStale.selector);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
     }
 
     /// THE attack this release exists for. The challenger has committed in time and is about to
@@ -607,12 +613,12 @@ contract BondTest is Test {
 
         bond.commitChallenge(_commitmentOf(parasite)); // the best a copier can do: commit now
         vm.prank(parasite);
-        vm.expectRevert(Bond.CommittedTooLate.selector);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        vm.expectRevert(DelictiErrors.CommittedTooLate.selector);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
 
         // and the watcher who actually did the work still gets paid
         vm.prank(challenger);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
         assertEq(bond.owed(challenger), 0.2 ether);
         assertEq(bond.owed(parasite), 0);
     }
@@ -634,8 +640,8 @@ contract BondTest is Test {
         later.data.votingRound = base + 1;
         vm.warp(block.timestamp + dur); // that round has now begun, so ClockDrift is not what bites
         vm.prank(parasite);
-        vm.expectRevert(Bond.CommittedTooLate.selector);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), later, SALT);
+        vm.expectRevert(DelictiErrors.CommittedTooLate.selector);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), later, SALT);
 
         // the residual, stated rather than hidden: far enough out, the copier is just a slower
         // watcher. COMMIT_LEAD is sized so "far enough" exceeds the FDC latency spread, and
@@ -644,7 +650,7 @@ contract BondTest is Test {
         later.data.votingRound = base + rounds_;
         vm.warp(block.timestamp + uint256(rounds_) * dur);
         vm.prank(parasite);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), later, SALT);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), later, SALT);
         assertEq(bond.owed(parasite), 0.2 ether);
     }
 
@@ -660,24 +666,24 @@ contract BondTest is Test {
         // Flare doubles the epoch: this round's computed start jumps far into the future
         rounds.setRoundStart(base, uint64(block.timestamp) + 1);
         vm.prank(parasite);
-        vm.expectRevert(Bond.ClockDrift.selector);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        vm.expectRevert(DelictiErrors.ClockDrift.selector);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
     }
 
     /// `msg.sender` is inside the preimage, so a commitment is not transferable.
     function test_revert_revealingSomeoneElsesCommitment() public {
         _arm(challenger);
         vm.prank(makeAddr("thief"));
-        vm.expectRevert(Bond.NoCommitment.selector);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        vm.expectRevert(DelictiErrors.NoCommitment.selector);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
     }
 
     /// A commitment for a cheap challenge type cannot be spent on an expensive one.
     function test_revert_commitmentForAnotherKind() public {
         _armAged(challenger, _digest(), bond.KIND_UNANCHORED_DEED(), COMMIT_LEAD, _proof().data.votingRound);
         vm.prank(challenger);
-        vm.expectRevert(Bond.NoCommitment.selector);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        vm.expectRevert(DelictiErrors.NoCommitment.selector);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
     }
 
     /// Nor on another mandate, nor against a deed it did not name.
@@ -694,8 +700,8 @@ contract BondTest is Test {
         rounds.setRoundStart(_proof().data.votingRound, t);
 
         vm.prank(challenger);
-        vm.expectRevert(Bond.NoCommitment.selector);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        vm.expectRevert(DelictiErrors.NoCommitment.selector);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
     }
 
     /// Spent on reveal. The slot is the single-use token, not a standing licence.
@@ -704,7 +710,7 @@ contract BondTest is Test {
         _arm(challenger);
         assertEq(bond.committedAt(c), uint64(block.timestamp) - COMMIT_LEAD);
         vm.prank(challenger);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
         assertEq(bond.committedAt(c), 0, "commitment must not survive its reveal");
     }
 
@@ -722,7 +728,7 @@ contract BondTest is Test {
         assertEq(bond.committedAt(c), first, "a replay must not move the commitment forward");
 
         vm.prank(challenger);
-        bond.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
+        judge.challengeFalsePayment(mandateId, 0, leaf, _path(), _proof(), SALT);
         assertTrue(bond.slashed(mandateId));
     }
 

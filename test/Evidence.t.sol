@@ -2,7 +2,11 @@
 pragma solidity ^0.8.28;
 
 import {StructuringFixture} from "./Structuring.t.sol";
-import {Bond} from "../src/Bond.sol";
+import {Vault} from "../src/Vault.sol";
+import {JudgeEvm} from "../src/JudgeEvm.sol";
+import {JudgeXrpl} from "../src/JudgeXrpl.sol";
+import {DelictiErrors} from "../src/DelictiErrors.sol";
+import {Core} from "./Core.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
 import {CorroborationLog} from "../src/CorroborationLog.sol";
 import {Deeds} from "../src/Deeds.sol";
@@ -90,11 +94,11 @@ contract EvidenceTest is StructuringFixture {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IEVMTransaction.Proof[] memory pr) = _bundle(5);
         _arm(bond.KIND_BUDGET_NATIVE(), challenger, pr);
         for (uint256 i = 0; i < 5; i++) {
-            vm.expectEmit(true, true, true, true, address(bond));
+            vm.expectEmit(true, true, true, true, address(judge)); // v0.11: the judge that summed the deeds emits them
             emit DeedJudged(mandateId, 2, leaves[i].ref, EACH);
         }
         vm.prank(challenger);
-        bond.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
+        judge.challengeBudgetOverrun(mandateId, idx, ls, paths, pr, SALT);
         assertEq(bond.verdictsAgainst(agent), 1);
         assertEq(bond.takenFrom(agent), 2.5 ether);
     }

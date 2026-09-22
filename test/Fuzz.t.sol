@@ -4,7 +4,11 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {MandateRegistry} from "../src/MandateRegistry.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
-import {Bond} from "../src/Bond.sol";
+import {Vault} from "../src/Vault.sol";
+import {JudgeEvm} from "../src/JudgeEvm.sol";
+import {JudgeXrpl} from "../src/JudgeXrpl.sol";
+import {DelictiErrors} from "../src/DelictiErrors.sol";
+import {Core} from "./Core.sol";
 import {AgentRefs} from "../src/AgentRefs.sol";
 import {SpendMeter} from "../src/SpendMeter.sol";
 import {Receipts} from "../src/Receipts.sol";
@@ -18,7 +22,9 @@ import {CredulousFdc} from "./invariant/Handler.sol";
 contract FuzzTest is Test {
     MandateRegistry reg;
     AnchorLog anchorLog;
-    Bond bond;
+    Vault bond;
+    JudgeEvm judge;
+    JudgeXrpl xjudge;
     MockProtocolsV2 rounds;
 
     address principal = makeAddr("principal");
@@ -33,7 +39,7 @@ contract FuzzTest is Test {
         reg = new MandateRegistry();
         anchorLog = new AnchorLog(reg);
         rounds = new MockProtocolsV2();
-        bond = new Bond(
+        (bond, judge, xjudge) = Core.deploy(
             reg, anchorLog, IFdcVerification(address(new CredulousFdc())), 24 hours, 1 hours,
             new SpendMeter(reg), LEAD, ProtocolsV2Interface(address(rounds)), new AgentRefs(reg, IFdcVerification(address(0))), 5 minutes);
     }
@@ -119,7 +125,7 @@ contract FuzzTest is Test {
         uint256[] memory eps = new uint256[](1);
         bytes32[][] memory paths = new bytes32[][](1);
         vm.prank(watcher);
-        try bond.challengeBudgetOverrun(id, eps, ls, paths, pr, "salt") {
+        try judge.challengeBudgetOverrun(id, eps, ls, paths, pr, "salt") {
             assertTrue(expected, "the gate opened outside its window");
         } catch {
             assertFalse(expected, "the gate stayed shut inside its window");

@@ -4,7 +4,11 @@ pragma solidity ^0.8.28;
 import {Test, console} from "forge-std/Test.sol";
 import {MandateRegistry} from "../../src/MandateRegistry.sol";
 import {AnchorLog} from "../../src/AnchorLog.sol";
-import {Bond} from "../../src/Bond.sol";
+import {Vault} from "../../src/Vault.sol";
+import {JudgeEvm} from "../../src/JudgeEvm.sol";
+import {JudgeXrpl} from "../../src/JudgeXrpl.sol";
+import {DelictiErrors} from "../../src/DelictiErrors.sol";
+import {Core} from "../Core.sol";
 import {AgentRefs} from "../../src/AgentRefs.sol";
 import {SpendMeter} from "../../src/SpendMeter.sol";
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
@@ -20,7 +24,9 @@ import {Handler, CredulousFdc} from "./Handler.sol";
 contract Invariants is Test {
     MandateRegistry reg;
     AnchorLog anchorLog;
-    Bond bond;
+    Vault bond;
+    JudgeEvm judge;
+    JudgeXrpl xjudge;
     SpendMeter meter;
     MockProtocolsV2 rounds;
     Handler h;
@@ -31,7 +37,7 @@ contract Invariants is Test {
         anchorLog = new AnchorLog(reg);
         meter = new SpendMeter(reg);
         rounds = new MockProtocolsV2();
-        bond = new Bond(
+        (bond, judge, xjudge) = Core.deploy(
             reg,
             anchorLog,
             IFdcVerification(address(new CredulousFdc())),
@@ -40,7 +46,7 @@ contract Invariants is Test {
             meter,
             10 minutes,
             ProtocolsV2Interface(address(rounds)), new AgentRefs(reg, IFdcVerification(address(0))), 5 minutes);
-        h = new Handler(reg, anchorLog, bond, meter, rounds);
+        h = new Handler(reg, anchorLog, bond, judge, meter, rounds);
         targetContract(address(h));
     }
 
@@ -92,7 +98,7 @@ contract Invariants is Test {
         for (uint256 i = 0; i < h.mandateCount(); i++) books += bond.bondOf(h.mandates(i));
         for (uint256 i = 0; i < h.actorCount(); i++) books += bond.owed(h.actors(i));
         for (uint256 i = 0; i < h.accusationCount(); i++) {
-            (,,,,, bool closed,) = bond.accusations(h.accusationIds(i));
+            (,,,,, bool closed,) = judge.accusations(h.accusationIds(i));
             if (!closed) books += bond.ACCUSATION_STAKE();
         }
         assertEq(address(bond).balance, books, "balance != bonds + credits + open stakes");
@@ -201,7 +207,7 @@ contract Invariants is Test {
     /// mandate was slashed by another path. It can never have been quietly withdrawn from under it.
     function invariant_openAccusationIsNeverLeftWithoutCollateral() public view {
         for (uint256 i = 0; i < h.accusationCount(); i++) {
-            (uint256 mid,,,,, bool closed,) = bond.accusations(h.accusationIds(i));
+            (uint256 mid,,,,, bool closed,) = judge.accusations(h.accusationIds(i));
             if (closed) continue;
             assertTrue(bond.bondOf(mid) > 0 || bond.slashed(mid), "bond withdrawn from under an open accusation");
         }
@@ -212,10 +218,10 @@ contract Invariants is Test {
     function invariant_everyExpiredAccusationCanBeClosed() public {
         for (uint256 i = 0; i < h.accusationCount(); i++) {
             uint256 aid = h.accusationIds(i);
-            (,,, uint64 deadline,, bool closed,) = bond.accusations(aid);
+            (,,, uint64 deadline,, bool closed,) = judge.accusations(aid);
             if (closed || block.timestamp <= deadline) continue;
             uint256 snap = vm.snapshotState();
-            try bond.resolveAccusation(aid) {}
+            try judge.resolveAccusation(aid) {}
             catch (bytes memory err) {
                 revert(string.concat("expired accusation cannot be resolved: ", vm.toString(err)));
             }

@@ -5,7 +5,11 @@ import {Test} from "forge-std/Test.sol";
 import {StructuringFixture} from "./Structuring.t.sol";
 import {MandateRegistry} from "../src/MandateRegistry.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
-import {Bond} from "../src/Bond.sol";
+import {Vault} from "../src/Vault.sol";
+import {JudgeEvm} from "../src/JudgeEvm.sol";
+import {JudgeXrpl} from "../src/JudgeXrpl.sol";
+import {DelictiErrors} from "../src/DelictiErrors.sol";
+import {Core} from "./Core.sol";
 import {AgentRefs} from "../src/AgentRefs.sol";
 import {SpendMeter} from "../src/SpendMeter.sol";
 import {CorroborationLog} from "../src/CorroborationLog.sol";
@@ -29,7 +33,9 @@ contract MockFdcAudit {
 contract AuditMeterTest is Test {
     MandateRegistry reg;
     AnchorLog anchorLog;
-    Bond bond;
+    Vault bond;
+    JudgeEvm judge;
+    JudgeXrpl xjudge;
     SpendMeter meter;
     MockFdcAudit mock;
     MockProtocolsV2 rounds;
@@ -54,7 +60,7 @@ contract AuditMeterTest is Test {
         mock = new MockFdcAudit();
         meter = new SpendMeter(reg);
         rounds = new MockProtocolsV2();
-        bond = new Bond(
+        (bond, judge, xjudge) = Core.deploy(
             reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours, meter,
             COMMIT_LEAD, ProtocolsV2Interface(address(rounds)), new AgentRefs(reg, IFdcVerification(address(0)))
         , 5 minutes);
@@ -134,7 +140,7 @@ contract AuditMeterTest is Test {
         assertEq(meter.spent(mandateId), 5 * EACH, "the tally NOW agrees with the world");
 
         vm.prank(challenger);
-        bond.challengeUnderReportedSpend(mandateId, ps, SALT);
+        judge.challengeUnderReportedSpend(mandateId, ps, SALT);
 
         assertTrue(bond.slashed(mandateId), "the tally at the time of the deeds is what is judged");
         assertLt(bond.bondOf(mandateId), 10 ether);
@@ -156,8 +162,8 @@ contract AuditMeterTest is Test {
         vm.warp(block.timestamp + 15 minutes);
         _arm(challenger, ps);
         vm.prank(challenger);
-        vm.expectRevert(Bond.TallyAgrees.selector);
-        bond.challengeUnderReportedSpend(mandateId, ps, SALT);
+        vm.expectRevert(DelictiErrors.TallyAgrees.selector);
+        judge.challengeUnderReportedSpend(mandateId, ps, SALT);
     }
 
     /// @notice The control: a tally that stayed silent is convicted, as in v0.9.
@@ -170,7 +176,7 @@ contract AuditMeterTest is Test {
         vm.warp(block.timestamp + 15 minutes);
         _arm(challenger, ps);
         vm.prank(challenger);
-        bond.challengeUnderReportedSpend(mandateId, ps, SALT);
+        judge.challengeUnderReportedSpend(mandateId, ps, SALT);
         assertTrue(bond.slashed(mandateId));
     }
 

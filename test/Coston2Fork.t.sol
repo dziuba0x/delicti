@@ -4,7 +4,11 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {MandateRegistry} from "../src/MandateRegistry.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
-import {Bond} from "../src/Bond.sol";
+import {Vault} from "../src/Vault.sol";
+import {JudgeEvm} from "../src/JudgeEvm.sol";
+import {JudgeXrpl} from "../src/JudgeXrpl.sol";
+import {DelictiErrors} from "../src/DelictiErrors.sol";
+import {Core} from "./Core.sol";
 import {AgentRefs} from "../src/AgentRefs.sol";
 import {SpendMeter} from "../src/SpendMeter.sol";
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
@@ -19,10 +23,10 @@ contract Coston2ForkTest is Test {
         if (block.chainid != 114) return; // Coston2 only
         MandateRegistry reg = new MandateRegistry();
         AnchorLog anchorLog = new AnchorLog(reg);
-        Bond bond = new Bond(
+        (Vault bond, JudgeEvm judge,) = Core.deploy(
             reg, anchorLog, IFdcVerification(address(0)), 24 hours, 1 hours, new SpendMeter(reg),
             10 minutes, ProtocolsV2Interface(address(0)), new AgentRefs(reg, IFdcVerification(address(0))), 5 minutes);
-        IFdcVerification fdc = bond.fdc();
+        IFdcVerification fdc = judge.fdc();
         assertTrue(address(fdc) != address(0), "FdcVerification resolved");
         assertTrue(address(fdc).code.length > 0, "has code");
         assertTrue(address(fdc.relay()) != address(0), "relay resolved");

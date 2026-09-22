@@ -4,7 +4,11 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {MandateRegistry} from "../src/MandateRegistry.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
-import {Bond} from "../src/Bond.sol";
+import {Vault} from "../src/Vault.sol";
+import {JudgeEvm} from "../src/JudgeEvm.sol";
+import {JudgeXrpl} from "../src/JudgeXrpl.sol";
+import {DelictiErrors} from "../src/DelictiErrors.sol";
+import {Core} from "./Core.sol";
 import {AgentRefs} from "../src/AgentRefs.sol";
 import {SpendMeter} from "../src/SpendMeter.sol";
 import {CorroborationLog} from "../src/CorroborationLog.sol";
@@ -30,7 +34,9 @@ contract MockFdcPayment {
 contract XrplTest is Test {
     MandateRegistry reg;
     AnchorLog anchorLog;
-    Bond bond;
+    Vault bond;
+    JudgeEvm judge;
+    JudgeXrpl xjudge;
     MockFdcPayment mock;
     AgentRefs agentRefs;
     MockProtocolsV2 rounds;
@@ -58,7 +64,7 @@ contract XrplTest is Test {
         anchorLog = new AnchorLog(reg);
         mock = new MockFdcPayment();
         rounds = new MockProtocolsV2();
-        bond = new Bond(
+        (bond, judge, xjudge) = Core.deploy(
             reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours, new SpendMeter(reg),
             COMMIT_LEAD, ProtocolsV2Interface(address(rounds)), agentRefs = new AgentRefs(reg, IFdcVerification(address(mock))), 5 minutes);
         vm.warp(1_800_000_000);
@@ -160,7 +166,7 @@ contract XrplTest is Test {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _bundle(5);
         _arm(challenger, mandateId, pr);
         vm.prank(challenger);
-        bond.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
         assertTrue(bond.slashed(mandateId));
         assertFalse(reg.isLive(mandateId));
     }
@@ -169,8 +175,8 @@ contract XrplTest is Test {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _bundle(4);
         _arm(challenger, mandateId, pr);
         vm.prank(challenger);
-        vm.expectRevert(Bond.WithinBudget.selector);
-        bond.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.WithinBudget.selector);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
     }
 
     /// The fee leaves the account too, but it is not what the budget counts: four payments that
@@ -182,52 +188,52 @@ contract XrplTest is Test {
         assertGt(uint256(spent), BUDGET, "the premise: with fees, the account lost more than the budget");
         _arm(challenger, mandateId, pr);
         vm.prank(challenger);
-        vm.expectRevert(Bond.WithinBudget.selector);
-        bond.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.WithinBudget.selector);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
     }
 
     function test_revert_paymentFromAnotherAccount() public {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _bundle(5);
         pr[2].data.responseBody.sourceAddressHash = keccak256("rSomebodyElse");
         vm.prank(challenger);
-        vm.expectRevert(Bond.NotAgentTx.selector);
-        bond.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.NotAgentTx.selector);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
     }
 
     function test_revert_failedPayment() public {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _bundle(5);
         pr[1].data.responseBody.status = 2; // failed, receiver's fault: nothing was delivered
         vm.prank(challenger);
-        vm.expectRevert(Bond.TxNotSuccessful.selector);
-        bond.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.TxNotSuccessful.selector);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
     }
 
     function test_revert_paymentOutsideTheWindow() public {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _bundle(5);
         pr[0].data.responseBody.blockTimestamp = uint64(block.timestamp - 1);
         vm.prank(challenger);
-        vm.expectRevert(Bond.ClaimOutsideProvenRange.selector);
-        bond.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.ClaimOutsideProvenRange.selector);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
     }
 
     function test_revert_receiptDisagreesWithThePayment() public {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _bundle(5);
         pr[3].data.responseBody.receivedAmount = int256(EACH + 1);
         vm.prank(challenger);
-        vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.ProofDoesNotMatchClaim.selector);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
 
         (,,, pr) = _bundle(5);
         pr[3].data.responseBody.standardPaymentReference = keccak256("some other invoice");
         vm.prank(challenger);
-        vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.ProofDoesNotMatchClaim.selector);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
 
         (,,, pr) = _bundle(5);
         pr[3].data.responseBody.receivingAddressHash = keccak256("rSomewhereElse");
         vm.prank(challenger);
-        vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
-        bond.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.ProofDoesNotMatchClaim.selector);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
     }
 
     function test_revert_samePaymentTwice() public {
@@ -236,8 +242,8 @@ contract XrplTest is Test {
         ls[4] = ls[3];
         idx[4] = idx[3];
         vm.prank(challenger);
-        vm.expectRevert(Bond.DuplicateLeaf.selector);
-        bond.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.DuplicateLeaf.selector);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
     }
 
     /// The leaf does not carry the transaction id, so — unlike the EVM paths — two distinct payments
@@ -250,24 +256,24 @@ contract XrplTest is Test {
         // a second, genuinely different payment with the same destination, amount and reference
         pr[4] = _payment(bytes32(uint256(0x2000)), AGENT_XRPL, MERCHANT_XRPL, EACH, leaves[3].ref, leaves[3].claimedTimestamp);
         vm.prank(challenger);
-        vm.expectRevert(Bond.DuplicateLeaf.selector);
-        bond.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.DuplicateLeaf.selector);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
     }
 
     function test_revert_aUtxoStyleManyToManyPayment() public {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _bundle(5);
         pr[0].data.responseBody.oneToOne = false;
         vm.prank(challenger);
-        vm.expectRevert(Bond.TxNotSuccessful.selector);
-        bond.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.TxNotSuccessful.selector);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
     }
 
     function test_revert_paymentOnAnotherLedger() public {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _bundle(5);
         pr[0].data.sourceId = bytes32("XRP"); // mainnet proof against a testnet mandate
         vm.prank(challenger);
-        vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector); // the leaf says testXRP
-        bond.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.ProofDoesNotMatchClaim.selector); // the leaf says testXRP
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
     }
 
     function test_revert_mandateWithNoXrplIdentity() public {
@@ -278,8 +284,8 @@ contract XrplTest is Test {
         bond.post{value: 1 ether}(id);
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _bundle(5);
         vm.prank(challenger);
-        vm.expectRevert(Bond.NoAgentRef.selector);
-        bond.challengeBudgetOverrunPayment(id, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.NoAgentRef.selector);
+        xjudge.challengeBudgetOverrunPayment(id, idx, ls, paths, pr, SALT);
     }
 
     function test_revert_copiedRevealWithALateCommitment() public {
@@ -290,8 +296,8 @@ contract XrplTest is Test {
         address copier = makeAddr("copier");
         bond.commitChallenge(bond.commitmentFor(copier, mandateId, bond.KIND_BUDGET_PAYMENT(), bond.deedsDigest(ids), SALT));
         vm.prank(copier);
-        vm.expectRevert(Bond.CommittedTooLate.selector);
-        bond.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+        vm.expectRevert(DelictiErrors.CommittedTooLate.selector);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
     }
 
     /// The good case leaves a trace too: a payment that happened exactly as the receipt says.
@@ -314,7 +320,7 @@ contract XrplTest is Test {
         vm.prank(agent);
         reg.acknowledge(id); // the EVM key says yes — which shows nothing about the XRPL key
         vm.prank(principal);
-        vm.expectRevert(Bond.AgentRefNotProven.selector);
+        vm.expectRevert(DelictiErrors.AgentRefNotProven.selector);
         bond.post{value: 1 ether}(id);
     }
 
@@ -330,7 +336,7 @@ contract XrplTest is Test {
     function test_revert_controlProofReplayedForAnotherMandate() public {
         uint256 id = _mandate(AGENT_XRPL);
         IPayment.Proof memory p = _controlProof(mandateId);
-        vm.expectRevert(Bond.ProofDoesNotMatchClaim.selector);
+        vm.expectRevert(DelictiErrors.ProofDoesNotMatchClaim.selector);
         agentRefs.prove(id, p);
         assertFalse(agentRefs.proven(id));
     }
@@ -339,7 +345,7 @@ contract XrplTest is Test {
         uint256 id = _mandate(AGENT_XRPL);
         mock.setVerdict(false);
         IPayment.Proof memory p = _controlProof(id);
-        vm.expectRevert(Bond.FdcProofInvalid.selector);
+        vm.expectRevert(DelictiErrors.FdcProofInvalid.selector);
         agentRefs.prove(id, p);
     }
 }

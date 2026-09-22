@@ -62,7 +62,7 @@ abstract contract StructuringFixture is Test {
         rounds = new MockProtocolsV2();
         bond = new Bond(
             reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours, meter,
-            COMMIT_LEAD, ProtocolsV2Interface(address(rounds)), new AgentRefs(reg, IFdcVerification(address(0))));
+            COMMIT_LEAD, ProtocolsV2Interface(address(rounds)), new AgentRefs(reg, IFdcVerification(address(0))), 5 minutes);
         vm.warp(1_800_000_000);
 
         _setUpMandate(bytes32(0));

@@ -40,6 +40,22 @@ contract SpendMeter {
     ///         challenged for under-reporting, because it never promised a tally.
     mapping(uint256 => bool) public metered;
 
+    /// @notice The tally is a claim about a MOMENT, so it is kept with its moments.
+    /// @dev    v0.10. Until then only the running total was stored, and §6.5 read it at the instant
+    ///         of the reveal — minutes after the challenger had been forced to publish the case by
+    ///         requesting its attestations (§6.7). An effector colluding with the agent could watch
+    ///         `FdcHub`, note the amounts it had hidden, and the challenge then reverted
+    ///         `TallyAgrees` against a tally that had been true for about a minute. The case was
+    ///         destroyed rather than stolen, so commit–reveal could not help: it protects who owns
+    ///         a reward, not whether there is one. Checkpoints make the comparison a historical
+    ///         fact, which nothing written later can change.
+    struct Checkpoint {
+        uint64 at;
+        uint256 total;
+    }
+
+    mapping(uint256 => Checkpoint[]) private _history;
+
     event EffectorDeclared(uint256 indexed mandateId, address indexed effector, address indexed by);
     event Noted(uint256 indexed mandateId, address indexed effector, uint256 amount, uint256 total);
 
@@ -74,10 +90,47 @@ contract SpendMeter {
         if (!registry.isLive(mandateId)) revert MandateNotLive();
         uint256 total = spent[mandateId] + amount;
         spent[mandateId] = total;
+        Checkpoint[] storage h = _history[mandateId];
+        uint256 n = h.length;
+        // One checkpoint per second at most: several settlements inside one block are one moment,
+        // and the last write wins because the total is cumulative.
+        if (n != 0 && h[n - 1].at == uint64(block.timestamp)) {
+            h[n - 1].total = total;
+        } else {
+            h.push(Checkpoint({at: uint64(block.timestamp), total: total}));
+        }
         emit Noted(mandateId, msg.sender, amount, total);
     }
 
     /// @notice What an effector reads before acting. One eth_call, no transaction, no wait.
+    /// @notice What the tally said at `ts` — the total recorded by the last `note` at or before it.
+    /// @dev    Binary search over an append-only, strictly increasing-in-time array. Zero before
+    ///         the first note. This is what §6.5 compares against, so that the question a verdict
+    ///         answers is "had the effector written this down by then", not "has it written it
+    ///         down by the time the reveal landed".
+    function spentAt(uint256 mandateId, uint64 ts) external view returns (uint256) {
+        Checkpoint[] storage h = _history[mandateId];
+        uint256 lo = 0;
+        uint256 hi = h.length;
+        if (hi == 0 || h[0].at > ts) return 0;
+        while (lo + 1 < hi) {
+            uint256 mid = (lo + hi) / 2;
+            if (h[mid].at <= ts) lo = mid;
+            else hi = mid;
+        }
+        return h[lo].total;
+    }
+
+    /// @notice How many checkpoints the tally has. For indexers and for tests.
+    function checkpointCount(uint256 mandateId) external view returns (uint256) {
+        return _history[mandateId].length;
+    }
+
+    function checkpoint(uint256 mandateId, uint256 i) external view returns (uint64 at, uint256 total) {
+        Checkpoint storage c = _history[mandateId][i];
+        return (c.at, c.total);
+    }
+
     function wouldExceed(uint256 mandateId, uint256 amount) external view returns (bool) {
         return spent[mandateId] + amount > registry.get(mandateId).budget;
     }

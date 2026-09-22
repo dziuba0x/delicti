@@ -1,4 +1,4 @@
-# DELICTI Specification — v0.6 (draft)
+# DELICTI Specification — v0.7 (draft)
 
 *Corpus delicti for autonomous agents: prove the deed happened before anyone is judged.*
 
@@ -127,6 +127,8 @@ N FDC `EVMTransaction` proofs of deeds by the mandate's agent, inside the mandat
 
 **Scope is deliberately narrow.** The challenge runs only on a mandate that is both *metered* (§7.1) and *exclusive* (§6.4). Without exclusivity an outflow from the agent's address may be none of this mandate's business, and summing it would convict an honest agent — the same error as accepting a source-scoped nonexistence proof.
 
+**The tally is read as of the deed, not as of the verdict (v0.10).** Until v0.10 the comparison was against `meter.spent()` at the moment of the reveal, and that was a hole rather than a detail: `note()` is the effector's own call, open for as long as the mandate lives, and the challenger has to publish the case ~13 minutes early — the attestation request carries the deeds' hashes in the clear and the reveal cannot land before the round finalises and `commitLead` has passed (§6.7). A colluding effector watched `FdcHub`, noted exactly what it had hidden, and the challenge died on `TallyAgrees`; commit–reveal could not help, because it protects who owns a reward, not whether a case exists. The verdict now compares against `SpendMeter.spentAt(mandateId, lastDeed + meterGrace)` — what the tally said when it should have said it. `meterGrace` is an immutable of the consequence contract (5 minutes in production): the meter is written in the same payment path that reads it, seconds around the deed, and the grace is an honest effector's slack, not a defendant's. §10 states the limit it leaves.
+
 **Who is at fault, and who pays.** The effector keeps the tally, but the bond sits on the mandate and the remainder goes to the principal. That is the intended incentive: the principal chose the effector. Picking one that lies, or one that is not DELICTI-aware at all, is a decision with a price.
 
 ### 6.6 Roadmap challenges (specified, not implemented)
@@ -220,6 +222,7 @@ The brake above sees one call at a time, and every slice of a structuring attack
 
 Three properties are deliberate:
 
+- **The tally is a sequence of moments, not a number.** Every `note` appends a checkpoint `(timestamp, total)`, collapsed per second, and `spentAt(mandateId, ts)` answers what the tally said at any past moment — zero before the first note. §6.5 judges that, so nothing written after a case becomes public can erase it.
 - **The meter records past the budget.** A meter that refuses to record an overrun is a meter that lies about one. The overrun must stay publicly readable — that is what makes `exceeded()` meaningful to the next counterparty.
 - **The meter alone never slashes.** It is one witness. Consequence still requires the divergence in §6.5, which carries both.
 - **Not writing is not a loophole, it is the division of labour.** The fast path protects against a constrained agent; the slow path convicts the effector that lied about what it did. An effector that skips the meter is choosing to be judged by the FDC instead.
@@ -271,7 +274,8 @@ Nothing sensitive is on-chain: mandate envelopes and receipts live off-chain; th
 - Reimbursement is `n × current fee`, not what the challenger paid: a fee change between request and verdict, or proofs bought at a testnet's price, make the two differ. Supplying superfluous proofs moves value from the principal's share to the challenger's only by what those proofs cost to obtain.
 - An accusation freezes withdrawal of a dead mandate's bond for one response window (§6.4). Each costs its accuser a stake, an attestation, and a real unanchored deed to point at, and an answered one forfeits the stake — but for that window the depositors wait.
 - XRPL budgets count what was *delivered*; transaction fees are not summed (§6.8). An agent can burn fees without limit under any budget.
-- `CorroborationLog` counts what somebody chose to prove. It is a floor on corroboration, never the rate: an agent pays for the attestations it wants on its record and not for the others, and nothing obliges anyone to corroborate anything. It also cannot tell a deed from a wash: an agent can pay dust to itself and corroborate it all day, which is why §11 says to weigh by value — and a score should weigh by counterparty as well.
+- An effector that is merely late — writing the deed into the tally within `meterGrace` of it (§6.5) — is not convicted of under-reporting, and neither is one colluding with the agent that manages to write inside that window. The grace is two orders of magnitude above the honest write's latency and well below the earliest possible reveal, so the window is real but narrow; making it zero would convict effectors for a slow block.
+- `CorroborationLog` counts each deed once per agent (v0.10), so the same transaction cannot be entered into an agent's record under several mandates. It still counts what somebody chose to prove. It is a floor on corroboration, never the rate: an agent pays for the attestations it wants on its record and not for the others, and nothing obliges anyone to corroborate anything. It also cannot tell a deed from a wash: an agent can pay dust to itself and corroborate it all day, which is why §11 says to weigh by value — and a score should weigh by counterparty as well.
 - `acknowledge` shows that the EVM key accepted the mandate, and `AgentRefs.prove` that an XRPL account made one payment with one memo. Neither shows that the two are the same party, that either is the model that will act, or that the account was not lent for the occasion.
 - The Bond compiles to 24,160 bytes, 416 under the EIP-170 limit. Nothing of substance can still be added to it; the next challenge type is a new consequence contract over the same registry (§3, `Mandate.bond`), which is what that field is for.
 - `leavesURI` is not verified, pinned or guaranteed to resolve. The root is the commitment; the URI is a courtesy.

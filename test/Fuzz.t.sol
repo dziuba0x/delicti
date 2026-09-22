@@ -35,7 +35,7 @@ contract FuzzTest is Test {
         rounds = new MockProtocolsV2();
         bond = new Bond(
             reg, anchorLog, IFdcVerification(address(new CredulousFdc())), 24 hours, 1 hours,
-            new SpendMeter(reg), LEAD, ProtocolsV2Interface(address(rounds)), new AgentRefs(reg, IFdcVerification(address(0))));
+            new SpendMeter(reg), LEAD, ProtocolsV2Interface(address(rounds)), new AgentRefs(reg, IFdcVerification(address(0))), 5 minutes);
     }
 
     function _terms(bytes32 src, bytes32 asset) internal view returns (MandateRegistry.Terms memory) {

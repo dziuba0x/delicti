@@ -60,7 +60,7 @@ contract XrplTest is Test {
         rounds = new MockProtocolsV2();
         bond = new Bond(
             reg, anchorLog, IFdcVerification(address(mock)), 24 hours, 1 hours, new SpendMeter(reg),
-            COMMIT_LEAD, ProtocolsV2Interface(address(rounds)), agentRefs = new AgentRefs(reg, IFdcVerification(address(mock))));
+            COMMIT_LEAD, ProtocolsV2Interface(address(rounds)), agentRefs = new AgentRefs(reg, IFdcVerification(address(mock))), 5 minutes);
         vm.warp(1_800_000_000);
         vm.deal(principal, 100 ether);
 

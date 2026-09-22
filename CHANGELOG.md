@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.10.0 — unreleased — the tally is judged at the time of the deed
+
+An adversarial pass over v0.9 (Slither at medium+, a 300,000-call invariant campaign on the final code, and a read of every path against the list of attack classes this repo has already suffered). Slither: the same three false-positive classes as v0.9, nothing new. The campaign: clean. The read found two openings, both reachable from outside the contracts, neither a Solidity bug — one a binding missing in *time*, one missing in *scope*. Both have a regression test in `test/Audit.t.sol` that fails against v0.9.
+
+### The effector could destroy the case against itself, after seeing it (HIGH)
+
+`challengeUnderReportedSpend` convicted on `proven > meter.spent(mandateId)`, read at the moment of the reveal. But `note()` belongs to the effector, stays open while the mandate lives, and takes any amount — and the challenger is *forced to announce the case first*: `FdcHub.requestAttestation` carries the deeds' transaction hashes in the clear, and the reveal cannot land before that round finalises and `commitLead` (10 min) has elapsed (§6.7). So an effector colluding with the agent had ~13 minutes to note exactly what it had hidden, and the challenge then reverted `TallyAgrees` against a tally that had been true for about a minute. Commit–reveal does not help here: it protects who *owns* a reward, not whether a case exists at all. One transaction, and §6.5 was gone.
+
+- `SpendMeter` now keeps the tally as checkpoints `(timestamp, total)` — one per second, since several settlements in one block are one moment — and answers `spentAt(mandateId, ts)` by binary search, zero before the first note.
+- `Bond.meterGrace` (immutable, 5 minutes in production) and the verdict reads `spentAt(lastDeed + meterGrace)`, `lastDeed` being the newest deed among the supplied proofs. What the tally said when it should have said it is a fact; nothing written later can change it.
+- Why a grace at all, and why this one: the meter is written in the same payment path that reads it, seconds around the deed, so five minutes is two orders of magnitude of slack for an honest effector — and it is far below the earliest moment any challenger can reveal, which is the number that closes the race. Zero would convict an effector for a slow block. SPEC §10 states what the window still allows.
+- Regressions: `test_effectorCannotCatchUpTheTallyOnceTheCaseIsPublic`, `test_effectorMayBeLateWithinTheGrace` (the limit, stated), `test_controlUntouchedTallyStillConvicts`, plus two on the history itself.
+
+### One deed could be counted many times in an agent's public record (MEDIUM)
+
+`CorroborationLog` keyed `corroborated` and `deedRecorded` per mandate, which is right for a mandate's own episode — but `countOfAgent` crosses mandates. Anyone may commit a mandate naming any agent, an agent may acknowledge its own, and the same FDC proof verifies under every one of them. So one real transaction could be entered into an agent's record as many times as someone was willing to pay gas for: a second mandate over the same window and source, one anchor, one call. §10 admitted this log cannot tell a deed from a wash — but a wash costs a transaction on the source chain, and this cost none. It matters because the next floor is a public score.
+
+- `deedRecordedForAgent[agent][deedId]`, checked alongside the per-mandate keys. Each deed enters an agent's record once, whatever mandate it is claimed under.
+- Regression: `test_oneDeedIsCountedOncePerAgentAcrossMandates`.
+
+### Checked and sound
+
+`_penalty` arithmetic and its bounds; severity accumulation across kinds and buckets; pro-rata `withdraw` (rounding favours the contract, the last depositor out takes the rest); `post` refusing unacknowledged mandates, unproven `agentRef`s, foreign Bonds and slashed mandates; the commitment gate's three clauses and `ClockDrift`; `fdcCost` failing to zero rather than reverting on `resolveAccusation`'s path; `Deeds` as the single definition of agreement. The one thing a depositor can still do is withdraw its share before a *later* verdict lands during the cooling window, which is inherent in a first-come withdrawal and is bounded by the window itself.
+
+Slither after the fixes: the same false-positive classes plus two more of the same kind — `uninitialized-state` on `SpendMeter._history` (a mapping of arrays is written by `push`, which the detector does not follow) and `incorrect-equality` on `h[n-1].at == block.timestamp` (the deliberate "same second, same moment" collapse).
+
+146 tests (was 140), 12 of them invariants.
+
 ## v0.9.0 — 2026-09-19 — what the budget is made of, and who agreed to it
 
 Written for the three floors that are meant to stand on this one — a public score, a risk market, credentials issued on XRPL — and for the rule that none of them may require redeploying the core.

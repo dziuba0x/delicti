@@ -36,6 +36,15 @@ contract CorroborationLog {
     /// @notice mandateId => source transaction id => already recorded (one effect, one corroboration —
     ///         on the payment path two receipts can describe the same payment)
     mapping(uint256 => mapping(bytes32 => bool)) public deedRecorded;
+    /// @notice agent => deed id => already in this agent's record, under ANY mandate.
+    /// @dev    v0.10. The per-mandate keys above count a mandate's episode correctly and were the
+    ///         wrong scope for `countOfAgent`, which crosses mandates: anyone may commit a mandate
+    ///         naming any agent and the agent may acknowledge its own, the same FDC proof verifies
+    ///         under each of them, so one real transaction could be entered into an agent's public
+    ///         record as many times as somebody was willing to pay gas for — no second deed, no
+    ///         second transaction, nothing on the source chain to see. §10 admitted that this log
+    ///         cannot tell a deed from a wash; a wash at least costs a transaction.
+    mapping(address => mapping(bytes32 => bool)) public deedRecordedForAgent;
     mapping(uint256 => uint256) public countOf; // per mandate
     mapping(uint256 => uint256) public valueOf; // per mandate, in the mandate's unit
     mapping(address => uint256) public countOfAgent; // per EVM agent, across mandates (units differ: count only)
@@ -118,9 +127,13 @@ contract CorroborationLog {
         uint64 deedTime,
         uint64 votingRound
     ) internal {
-        if (corroborated[mandateId][leafHash] || deedRecorded[mandateId][deedId]) revert AlreadyCorroborated();
+        if (
+            corroborated[mandateId][leafHash] || deedRecorded[mandateId][deedId]
+                || deedRecordedForAgent[agent][deedId]
+        ) revert AlreadyCorroborated();
         corroborated[mandateId][leafHash] = true;
         deedRecorded[mandateId][deedId] = true;
+        deedRecordedForAgent[agent][deedId] = true;
         countOf[mandateId]++;
         valueOf[mandateId] += value;
         countOfAgent[agent]++;

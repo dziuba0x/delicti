@@ -128,6 +128,20 @@ contract Bond {
     ///         without waiting out production timers. Both values are read off the contract.
     uint64 public immutable anchorGrace;
 
+    /// @notice How long after a deed the effector's tally has to show it, before §6.5 calls it
+    ///         hidden.
+    /// @dev    v0.10, and the smallest fix for an opening v0.9 left: `note()` is the effector's
+    ///         own call and stays open while the mandate lives, while the challenger is forced to
+    ///         publish its case ~13 minutes early (FDC finality plus `commitLead`, §6.7). A
+    ///         colluding effector therefore watched `FdcHub` and "caught up" its tally before the
+    ///         reveal, and the challenge died on `TallyAgrees`. The verdict now reads the tally as
+    ///         it stood at the last deed plus this grace (`SpendMeter.spentAt`), which nothing
+    ///         written afterwards can change. The value is an honest effector's slack, not a
+    ///         defendant's: the meter is read and written in the same payment path, seconds around
+    ///         the deed, so 5 minutes is two orders of magnitude of room — and it is far below the
+    ///         earliest moment a challenger can reveal, which is what closes the race.
+    uint64 public immutable meterGrace;
+
     /// @notice Stake an accuser must put up. Returned if the accusation stands, forfeited to the
     ///         principal if the agent answers it — accusing is cheap, but not free.
     uint256 public constant ACCUSATION_STAKE = 0.1 ether;
@@ -341,8 +355,10 @@ contract Bond {
         SpendMeter meter_,
         uint64 commitLead_,
         ProtocolsV2Interface protocolsOverride,
-        AgentRefs agentRefs_
+        AgentRefs agentRefs_,
+        uint64 meterGrace_
     ) {
+        meterGrace = meterGrace_;
         agentRefs = agentRefs_;
         registry = _registry;
         log = _log;
@@ -902,6 +918,7 @@ contract Bond {
         bytes32 lastTx;
         bytes32[] memory ids = new bytes32[](n);
         uint64 minRound = type(uint64).max;
+        uint64 lastDeed; // the moment the tally is judged against
         for (uint256 i = 0; i < n; i++) {
             IEVMTransaction.Proof calldata pr = fdcProofs[i];
             if (!fdc().verifyEVMTransaction(pr)) revert FdcProofInvalid();
@@ -924,13 +941,15 @@ contract Bond {
             } else {
                 v = Deeds.erc20OutflowFrom(rb.events, asset, m.agent);
             }
+            if (rb.timestamp > lastDeed) lastDeed = rb.timestamp;
             proven += v;
             emit DeedJudged(mandateId, KIND_UNDER_REPORTED, txh, v);
         }
 
         _consumeCommitment(KIND_UNDER_REPORTED, mandateId, keccak256(abi.encode(ids)), salt, minRound);
 
-        uint256 recorded = meter.spent(mandateId);
+        // What the tally SAID when it should have said it — not what it says now. See `meterGrace`.
+        uint256 recorded = meter.spentAt(mandateId, lastDeed + meterGrace);
         if (proven <= recorded) revert TallyAgrees();
 
         // severity: what the tally hid

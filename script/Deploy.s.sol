@@ -25,6 +25,8 @@ contract Deploy is Script {
         // How much older than its evidence round a challenge commitment must be. 10 min in
         // production (see Bond.commitLead); COMMIT_LEAD lets a demo run finish in one sitting.
         uint64 commitLead = uint64(vm.envOr("COMMIT_LEAD", uint256(10 minutes)));
+        // How late an effector's tally may still be honest (SPEC §6.5). Production: 5 minutes.
+        uint64 meterGrace = uint64(vm.envOr("METER_GRACE", uint256(5 minutes)));
         SpendMeter meter = new SpendMeter(reg);
         AgentRefs agentRefs = new AgentRefs(reg, IFdcVerification(address(0)));
         // FDC and the voting-round clock both resolved via ContractRegistry.
@@ -37,7 +39,8 @@ contract Deploy is Script {
             meter,
             commitLead,
             ProtocolsV2Interface(address(0)),
-            agentRefs
+            agentRefs,
+            meterGrace
         );
         // Stateless companions: no funds, no privileges, replaceable by anyone at any time.
         CorroborationLog corroborations = new CorroborationLog(reg, anchorLog, IFdcVerification(address(0)));
@@ -56,6 +59,7 @@ contract Deploy is Script {
         console.log("responseWindow: ", bond.responseWindow());
         console.log("anchorGrace:    ", bond.anchorGrace());
         console.log("commitLead:     ", bond.commitLead());
+        console.log("meterGrace:     ", bond.meterGrace());
         console.log("ProtocolsV2:    ", address(bond.protocols()));
     }
 }

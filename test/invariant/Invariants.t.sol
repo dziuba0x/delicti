@@ -39,7 +39,7 @@ contract Invariants is Test {
             1 hours,
             meter,
             10 minutes,
-            ProtocolsV2Interface(address(rounds)), new AgentRefs(reg, IFdcVerification(address(0))));
+            ProtocolsV2Interface(address(rounds)), new AgentRefs(reg, IFdcVerification(address(0))), 5 minutes);
         h = new Handler(reg, anchorLog, bond, meter, rounds);
         targetContract(address(h));
     }

@@ -115,6 +115,82 @@ contract JudgeXrpl is DelictiErrors {
         emit BudgetOverrunProven(mandateId, spent, m.budget, n, msg.sender, taken);
     }
 
+    // -----------------------------------------------------------------------------------
+    // §6.8 on a docket (v0.12+). The same case as `challengeBudgetOverrunPayment`, filed the way
+    // §6.10 is: each receipted payment once, while the verifier can still prove it, counted for ever
+    // after. Below the budget a filing only records; the crossing filing is the committed conviction.
+    // Nested with every other budget kind, so it and the one-shot path can never double-count.
+    // -----------------------------------------------------------------------------------
+
+    mapping(uint256 => uint256) public paymentDocket;
+    /// @notice mandateId => payment transaction id => on the docket
+    mapping(uint256 => mapping(bytes32 => bool)) public paymentFiled;
+    /// @notice mandateId => receipt leaf hash => on the docket (one receipt accounts for one payment)
+    mapping(uint256 => mapping(bytes32 => bool)) public receiptFiled;
+
+    event PaymentsFiled(uint256 indexed mandateId, address indexed filer, uint256 added, uint256 docketTotal, uint256 newDeeds);
+
+    function fileBudgetPayments(
+        uint256 mandateId,
+        uint256[] calldata episodeIndices,
+        Receipts.Leaf[] calldata leaves,
+        bytes32[][] calldata merkleProofs,
+        IPayment.Proof[] calldata fdcProofs,
+        bytes32 salt
+    ) external {
+        if (vault.bondOf(mandateId) == 0) revert NothingToSlash();
+        uint256 n = leaves.length;
+        if (n == 0 || episodeIndices.length != n || merkleProofs.length != n || fdcProofs.length != n) {
+            revert LengthMismatch();
+        }
+        MandateRegistry.Mandate memory m = registry.get(mandateId);
+        if (m.agentRef == bytes32(0)) revert NoAgentRef();
+        if (m.assetKey != bytes32(0)) revert WrongAsset();
+
+        uint256 added;
+        uint256 fresh;
+        uint64 minRound = type(uint64).max;
+        bytes32[] memory ids = new bytes32[](n);
+        for (uint256 i = 0; i < n; i++) {
+            bytes32 txid = fdcProofs[i].data.requestBody.transactionId;
+            if (i != 0 && txid <= ids[i - 1]) revert UnorderedTxs();
+            ids[i] = txid;
+            if (paymentFiled[mandateId][txid]) continue; // already counted: skipped, not refused
+            added += _filePayment(mandateId, episodeIndices[i], leaves[i], merkleProofs[i], fdcProofs[i], m);
+            fresh++;
+            if (fdcProofs[i].data.votingRound < minRound) minRound = fdcProofs[i].data.votingRound;
+        }
+        if (fresh == 0) revert NothingNew();
+        uint256 before = paymentDocket[mandateId];
+        uint256 total = before + added;
+        paymentDocket[mandateId] = total;
+        emit PaymentsFiled(mandateId, msg.sender, added, total, fresh);
+        if (total <= m.budget || total == before) return;
+
+        vault.consumeCommitment(msg.sender, Kinds.BUDGET_PAYMENT, mandateId, keccak256(abi.encode(ids)), salt, minRound);
+        uint256 taken = vault.verdict(
+            Kinds.BUDGET_PAYMENT, mandateId, m.budget, total - m.budget, msg.sender, fresh, bytes32("Payment"), m.sourceId, true
+        );
+        emit BudgetOverrunProven(mandateId, total, m.budget, fresh, msg.sender, taken);
+    }
+
+    /// @dev One receipted payment onto the docket: both witnesses, and the receipt used once.
+    function _filePayment(
+        uint256 mandateId,
+        uint256 episodeIndex,
+        Receipts.Leaf calldata leaf,
+        bytes32[] calldata path,
+        IPayment.Proof calldata pr,
+        MandateRegistry.Mandate memory m
+    ) internal returns (uint256 v) {
+        bytes32 leafHash = _witnessOne(mandateId, episodeIndex, leaf, path, new bytes32[](0), 0);
+        if (receiptFiled[mandateId][leafHash]) revert DuplicateLeaf();
+        receiptFiled[mandateId][leafHash] = true;
+        paymentFiled[mandateId][pr.data.requestBody.transactionId] = true;
+        v = Deeds.payment(fdc(), pr, leaf, m);
+        emit DeedJudged(mandateId, Kinds.BUDGET_PAYMENT, pr.data.requestBody.transactionId, v);
+    }
+
     /// @dev Witness 1 for §6.8: a receipt of kind 3 (named by memo reference) or 4 (v0.12, named by
     ///      transaction id — the only handle an x402-on-XRPL facilitator gives back), naming this
     ///      mandate, anchored, and distinct from the receipts before it.

@@ -162,6 +162,83 @@ contract XrplTest is Test {
 
     // ------------------------------------------------------------------ the salami, on XRPL
 
+    // ------------------------------------------------------------------ §6.8 on a docket
+
+    /// Slice [from, from+k) of the five receipted payments, in the shape the docket takes.
+    function _slice(uint256 from, uint256 k)
+        internal
+        view
+        returns (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr)
+    {
+        idx = new uint256[](k);
+        ls = new Receipts.Leaf[](k);
+        paths = new bytes32[][](k);
+        pr = new IPayment.Proof[](k);
+        for (uint256 i = 0; i < k; i++) {
+            idx[i] = from + i;
+            ls[i] = leaves[from + i];
+            paths[i] = new bytes32[](0);
+            pr[i] = _proofFor(from + i);
+        }
+    }
+
+    function test_paymentDocketRecordsBelowTheBudgetWithoutACommitment() public {
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _slice(0, 3);
+        vm.prank(challenger);
+        xjudge.fileBudgetPayments(mandateId, idx, ls, paths, pr, bytes32(0));
+        assertEq(xjudge.paymentDocket(mandateId), 3 * EACH, "delivered amounts, fees excluded");
+        assertFalse(bond.slashed(mandateId));
+    }
+
+    /// Three payments filed early by anyone; the crossing filing proves only the two new ones.
+    function test_paymentDocketConvictsWithOnlyTheNewDeeds() public {
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _slice(0, 3);
+        vm.prank(makeAddr("keeper"));
+        xjudge.fileBudgetPayments(mandateId, idx, ls, paths, pr, bytes32(0));
+        (idx, ls, paths, pr) = _slice(3, 2);
+        _arm(challenger, mandateId, pr);
+        vm.prank(challenger);
+        xjudge.fileBudgetPayments(mandateId, idx, ls, paths, pr, SALT);
+        assertTrue(bond.slashed(mandateId));
+        assertEq(bond.severityOf(mandateId), EACH, "5 delivered against 4");
+    }
+
+    /// A copier front-running part of the honest crossing filing only records it; the honest
+    /// transaction still lands and the conviction is its own.
+    function test_paymentDocketFrontRunSubsetDoesNotStealTheCase() public {
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _bundle(5);
+        _arm(challenger, mandateId, pr);
+        (uint256[] memory i2, Receipts.Leaf[] memory l2, bytes32[][] memory p2, IPayment.Proof[] memory r2) = _slice(1, 2);
+        vm.prank(makeAddr("copier"));
+        xjudge.fileBudgetPayments(mandateId, i2, l2, p2, r2, bytes32(0));
+        vm.prank(challenger);
+        xjudge.fileBudgetPayments(mandateId, idx, ls, paths, pr, SALT);
+        assertTrue(bond.slashed(mandateId));
+        assertGt(bond.owed(challenger), 0);
+        assertEq(bond.owed(makeAddr("copier")), 0);
+    }
+
+    /// One receipt accounts for one payment, across filings too.
+    function test_revert_paymentDocketReusesAReceipt() public {
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _slice(0, 1);
+        vm.prank(challenger);
+        xjudge.fileBudgetPayments(mandateId, idx, ls, paths, pr, bytes32(0));
+        // a second, different payment presented under the same receipt
+        pr[0] = _payment(bytes32(uint256(0x7777)), AGENT_XRPL, MERCHANT_XRPL, EACH, leaves[0].ref, leaves[0].claimedTimestamp);
+        vm.prank(challenger);
+        vm.expectRevert(DelictiErrors.DuplicateLeaf.selector);
+        xjudge.fileBudgetPayments(mandateId, idx, ls, paths, pr, bytes32(0));
+    }
+
+    function test_revert_paymentDocketNothingNew() public {
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _slice(0, 2);
+        vm.prank(challenger);
+        xjudge.fileBudgetPayments(mandateId, idx, ls, paths, pr, bytes32(0));
+        vm.prank(challenger);
+        vm.expectRevert(DelictiErrors.NothingNew.selector);
+        xjudge.fileBudgetPayments(mandateId, idx, ls, paths, pr, bytes32(0));
+    }
+
     // ------------------------------------------------------------------ v0.12: receipts keyed by transaction (x402 on XRPL)
 
     /// x402 on XRPL binds a payment with `InvoiceID`, which no FDC payment type returns — so the

@@ -2,6 +2,7 @@
 
 ## Unreleased (after v0.12.0)
 
+- **§6.8 on a docket:** `JudgeXrpl.fileBudgetPayments` works like §6.10's docket (record below the budget without commitment, convict on the committed crossing, skip already-filed payments, one receipt per payment across filings). The verifier's ~14-day memory no longer bounds a receipted XRPL case. Five tests.
 - **XLS-56 Batch, measured on devnet:** the XRP leaves in the inner transactions (own hashes, fee 0, unsigned, `ParentBatchID`), not in the outer one. Whether the FDC verifier attests an inner transaction is unknown until the testnet enables `BatchV1_1`. This is a possible §6.10 blind spot, stated in SPEC §10. `tools/xrpl_testnet.py batch` is the probe to rerun.
 - Mutation testing (mewt, Trail of Bits) on the v0.12 code: in the first 24 mutants, 23 were caught. The one that survived was the removal of the receipt-kind check on the XRPL payment path, a test gap rather than a code bug. `test_revert_receiptOfAnotherKind` now kills it, confirmed by re-applying the mutant.
 - `testFuzz_docketIsTheSumOverDistinctTransactions`: however filings are ordered, batched and repeated, the docket equals the positive outflow over distinct transactions (512 runs).

@@ -149,8 +149,9 @@ echo "== 4. bond: 1 C2FLR from the principal, 1 C2FLR from an outside insurer (v
 cast send $BOND "post(uint256)" $MID --value 1ether --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 INS_KEY=$(cast wallet new --json | python3 -c "import sys,json;print(json.load(sys.stdin)[0]['private_key'])")
 INSURER=$(cast wallet address --private-key $INS_KEY)
-cast send $INSURER --value 1.2ether --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
+cast send $INSURER --value 1.5ether --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
 cast send $BOND "post(uint256)" $MID --value 1ether --private-key $INS_KEY --rpc-url $RPC --json >/dev/null
+[ "$(cast call $BOND 'depositOf(uint256,address)(uint256)' $MID $INSURER --rpc-url $RPC | awk '{print $1}')" != "0" ] || { echo "   !! the insurer's deposit did not land"; exit 1; }
 echo "   insurer $INSURER — plain post, so its deposit compensates itself: beneficiaryOf = $(cast call $BOND 'beneficiaryOf(uint256,address)(address)' $MID $INSURER --rpc-url $RPC)"
 
 echo "== 5. the deeds — no receipts, nothing anchored"

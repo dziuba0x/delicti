@@ -117,21 +117,21 @@ Or deploy your own: `forge script script/Deploy.s.sol --rpc-url coston2 --broadc
 
 The scripts in [`scripts/`](scripts) each reproduce one row of the table above: `structuring.sh`, `xrpl-structuring.sh`, `x402-structuring.sh`, `mcp-structuring.sh`, `brake-test.sh`, `spend-meter.sh`, `unanchored-deed.sh`, `contradicted-deed.sh`. Test funds: [Coston2 faucet](https://faucet.flare.network/coston2).
 
-## Contracts (v0.11 on Coston2)
+## Contracts (v0.12 on Coston2)
 
 | Contract | Role | Address |
 |---|---|---|
 | `MandateRegistry` | mandates, delegation tree with monotonic narrowing, acknowledgement, revocation. No deployer, no admin key. | [`0x2c58fb05…263AA3`](https://coston2-explorer.flare.network/address/0x2c58fb0504377fef325DceB66219bC6302263AA3) |
 | `AnchorLog` | per-mandate sequence of Merkle roots over receipts (witness 1), with `leavesURI` | [`0xF2b7A266…Fa40a8`](https://coston2-explorer.flare.network/address/0xF2b7A2668e7430611c9b225ea7c966E489Fa40a8) |
 | `SpendMeter` | the running tally an effector reads before it acts, kept as `(timestamp, total)` checkpoints (SPEC §7.1) | [`0xa5e06ADc…576dE2`](https://coston2-explorer.flare.network/address/0xa5e06ADc76b96cc8c941B98FDA365f10a0576dE2) |
-| `Vault` | every wei: bonds, proceeds, stakes; the commit–reveal gate; `verdict`, callable only by its judges (SPEC §8.2) | [`0x40A149aC…AbDAAB`](https://coston2-explorer.flare.network/address/0x40A149aCdA2A3D2e299e0FaE4aAA695662AbDAAB) |
-| `JudgeEvm` | §6.1 false payment, §6.2–6.3 overrun, §6.4 unanchored deed, §6.5 under-reported spend. No funds. | [`0xB6bbb261…ea9c6c`](https://coston2-explorer.flare.network/address/0xB6bbb2612d74B2751e8A05C2C5EC3911dBeA9c6c) |
-| `JudgeXrpl` | §6.8 overrun over receipted payments, §6.10 gross XRP outflow. No funds. | [`0xFc4Ae81b…06ABAa`](https://coston2-explorer.flare.network/address/0xFc4Ae81bfD8dA949Af04177FcCF47A91C006ABAa) |
+| `Vault` | every wei: bonds, proceeds, stakes; the commit–reveal gate; `verdict`, callable only by its judges (§8.2); each deposit compensates whom its depositor names (§8.3) | [`0xFd09d395…93Ffae`](https://coston2-explorer.flare.network/address/0xFd09d39519F51Ccf12c57bd2D5cF8A71a593Ffae) |
+| `JudgeEvm` | §6.1 false payment, §6.2–6.3 overrun, §6.4 unanchored deed, §6.5 under-reported spend. No funds. | [`0xb3565787…F783aB`](https://coston2-explorer.flare.network/address/0xb3565787D1d61BF95fA5ACAa394dEAA7deF783aB) |
+| `JudgeXrpl` | §6.8 overrun over receipted payments, §6.10 gross XRP outflow on a docket that outlives the verifier. No funds. | [`0xcf08E6ac…DBcAca63`](https://coston2-explorer.flare.network/address/0xcf08E6acCbe9042394625350d1DA1888DBcAca63) |
 | `AgentRefs` | an XRPL account accepts a mandate (`prove`) or declares exclusivity (`proveExclusive`) with a memo | [`0x6036B279…E0fca0`](https://coston2-explorer.flare.network/address/0x6036B279d6Fe4aB5DAcbea97162C5394B6E0fca0) |
 | `CorroborationLog` | records deeds whose two witnesses agreed, once per deed per agent — the data a public score needs | [`0xf51c8241…56ed89`](https://coston2-explorer.flare.network/address/0xf51c82410ad01239a1e708aa5c4c68a25c56ed89) |
-| `BondLens` | stateless: what a case would take, before paying for a single attestation | [`0x37Bf9084…2CcD5d`](https://coston2-explorer.flare.network/address/0x37Bf9084b1320336A698D5e72E37A2c87E2CcD5d) |
+| `BondLens` | stateless: what a case would take, before paying for a single attestation | [`0xE2D2FE0B…412283`](https://coston2-explorer.flare.network/address/0xE2D2FE0B5145e0794D984B5Fe7E59f58E2412283) |
 
-The v0.10 `Bond` [`0x68004002…3cf65B`](https://coston2-explorer.flare.network/address/0x6800400225e03539c4B719f470cC2C8edC3cf65B) stays live for the mandates that name it. Testnet timers: `commitLead` 120 s (production 10 min), `responseWindow` 600 s, `anchorGrace` 300 s, `meterGrace` 300 s (production 5 min). The v0.10 deployment and every earlier one are in [docs/DEPLOYMENTS.md](docs/DEPLOYMENTS.md).
+The v0.11 Vault [`0x40A149aC…AbDAAB`](https://coston2-explorer.flare.network/address/0x40A149aCdA2A3D2e299e0FaE4aAA695662AbDAAB) and the v0.10 `Bond` [`0x68004002…3cf65B`](https://coston2-explorer.flare.network/address/0x6800400225e03539c4B719f470cC2C8edC3cf65B) stay live for the mandates that name them. Testnet timers: `commitLead` 120 s (production 10 min), `responseWindow` 600 s, `anchorGrace` 300 s, `meterGrace` 300 s (production 5 min). The v0.10 deployment and every earlier one are in [docs/DEPLOYMENTS.md](docs/DEPLOYMENTS.md).
 
 Challenges, each behind a commit–reveal gate so the reward belongs to whoever found the violation, not to whoever copied the calldata. Since v0.11 the collateral sits in the `Vault` and the challenges on its judges, `JudgeEvm` and `JudgeXrpl`, fixed at the Vault's construction, no admin (SPEC §8.2).
 

@@ -4,6 +4,10 @@
 
 Two open problems from v0.11's §10, both economic, both closed by changing who is owed what rather than by adding a check.
 
+### Executed on Coston2 (2026-09-23)
+
+Mandate #9: the first two deeds were filed on the docket below the budget, with no commitment ([`0xb4aac39e…`](https://coston2-explorer.flare.network/tx/0xb4aac39e872a1263963bf6c450213cca218993b9233304d3e2907cbcaa73e654)). Then an offer consumed by the counterparty and a payment went on in a committed crossing filing over those two only ([`0x639f368d…`](https://coston2-explorer.flare.network/tx/0x639f368dcb08830c186d1cdab42553ffd9027c919f9b31ddb5938dbf79126a59)). `bondOf` went 2 → 1.6667 (1 principal + 1 insurer), and after `settle` **the insurer is owed its half of the remainder, 0.15 C2FLR**, which v0.11 would have paid the principal. Addresses and the run in the README and docs/DEPLOYMENTS.md.
+
 ### The surety rule — a deposit compensates whom its depositor names (SPEC §8.3)
 
 Until now the remainder of every verdict went to the principal, whoever had posted the money. Principal and agent could agree on a fake overrun, paid to an address the principal controls, and the verdict handed the principal an insurer's collateral. Under an outflow budget (§6.10), which has no list of counterparties, this was easier than anywhere else. The protocol cannot tell a principal from its sock puppet, so it asks the party that bears the risk:
@@ -24,7 +28,7 @@ The FDC's XRP verifier remembers about 14 days, so a case that had to prove ever
 
 ### Also
 
-`Deploy.s.sol` can reuse an `AgentRefs` (`REUSE_REFS`) so XRPL statements already made stay valid. Vault 9,385 B. 177 tests.
+`Deploy.s.sol` can reuse an `AgentRefs` (`REUSE_REFS`) so XRPL statements already made stay valid. Vault 9,385 B. 177 tests. Long invariant campaign on this code: 12/12 × 1500 × 200 = 300,000 calls, clean (949 s).
 
 ## v0.11.0 — 2026-09-23 — the Vault and its judges; the agent convicted for a deed it never signed
 

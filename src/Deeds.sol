@@ -91,9 +91,16 @@ library Deeds {
         if (rb.blockTimestamp < m.validFrom || rb.blockTimestamp > m.validUntil) revert ClaimOutsideProvenRange();
         if (
             rb.receivedAmount <= 0 || uint256(rb.receivedAmount) != leaf.amount
-                || rb.receivingAddressHash != leaf.destinationAddressHash || rb.standardPaymentReference != leaf.ref
+                || rb.receivingAddressHash != leaf.destinationAddressHash || !_names(pr, leaf)
         ) revert ProofDoesNotMatchClaim();
         return uint256(rb.receivedAmount);
+    }
+
+    /// @dev Whether the receipt names this payment: by memo reference (kind 3) or, since v0.12, by
+    ///      transaction id (kind 4 — x402 on XRPL binds with `InvoiceID`, which no FDC type returns).
+    function _names(IPayment.Proof calldata pr, Receipts.Leaf calldata leaf) private pure returns (bool) {
+        if (leaf.kind == Receipts.KIND_EXTERNAL_TX) return pr.data.requestBody.transactionId == leaf.ref;
+        return pr.data.responseBody.standardPaymentReference == leaf.ref;
     }
 
     /// @dev Every `Transfer` out of `from` emitted by `asset`, whoever the counterparty is.

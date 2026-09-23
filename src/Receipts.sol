@@ -10,6 +10,11 @@ library Receipts {
     uint8 internal constant KIND_TOOL_CALL = 1; // no world-observable effect (class B evidence)
     uint8 internal constant KIND_EVM_TX = 2; // corroborable via FDC EVMTransaction
     uint8 internal constant KIND_EXTERNAL_PAYMENT = 3; // corroborable via FDC Payment / *Nonexistence
+    /// @dev v0.12: an external payment whose receipt names the TRANSACTION, not a memo reference —
+    ///      `ref` is the transaction id. x402 on XRPL binds a payment to its request with the
+    ///      `InvoiceID` field, which no FDC payment type returns; the facilitator does return the
+    ///      transaction hash. Positive corroboration only: a nonexistence proof needs a reference.
+    uint8 internal constant KIND_EXTERNAL_TX = 4;
 
     struct Leaf {
         bytes32 receiptHash; // hash of the original third-party receipt (format-specific)

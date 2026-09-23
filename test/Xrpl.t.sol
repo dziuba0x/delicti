@@ -162,6 +162,65 @@ contract XrplTest is Test {
 
     // ------------------------------------------------------------------ the salami, on XRPL
 
+    // ------------------------------------------------------------------ v0.12: receipts keyed by transaction (x402 on XRPL)
+
+    /// x402 on XRPL binds a payment with `InvoiceID`, which no FDC payment type returns — so the
+    /// payments carry no memo, `standardPaymentReference` is zero, and the receipt names the
+    /// transaction the facilitator reported instead (kind 4). The salami still convicts.
+    function _x402Bundle()
+        internal
+        returns (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr)
+    {
+        idx = new uint256[](N);
+        ls = new Receipts.Leaf[](N);
+        paths = new bytes32[][](N);
+        pr = new IPayment.Proof[](N);
+        for (uint256 i = 0; i < N; i++) {
+            bytes32 txid = bytes32(uint256(0x9000 + i));
+            ls[i] = Receipts.Leaf({
+                receiptHash: keccak256(abi.encode("x402-xrpl receipt", i)),
+                kind: 4,
+                sourceId: SRC,
+                destinationAddressHash: MERCHANT_XRPL,
+                amount: EACH,
+                ref: txid,
+                claimedTimestamp: uint64(block.timestamp + i * 60),
+                mandateId: mandateId
+            });
+            vm.prank(agent);
+            idx[i] = anchorLog.anchor(mandateId, Receipts.hashMem(ls[i]), 1);
+            paths[i] = new bytes32[](0);
+            pr[i] = _payment(txid, AGENT_XRPL, MERCHANT_XRPL, EACH, bytes32(0), ls[i].claimedTimestamp);
+        }
+    }
+
+    function test_x402ReceiptsKeyedByTransactionConvict() public {
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _x402Bundle();
+        _arm(challenger, mandateId, pr);
+        vm.prank(challenger);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+        assertTrue(bond.slashed(mandateId));
+    }
+
+    function test_revert_x402ReceiptForAnotherTransaction() public {
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _x402Bundle();
+        pr[4].data.requestBody.transactionId = bytes32(uint256(0x9100)); // still ascending, not the one the receipt names
+        vm.prank(challenger);
+        vm.expectRevert(DelictiErrors.ProofDoesNotMatchClaim.selector);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+    }
+
+    /// A kind-4 receipt is not matched by memo: a proof whose reference happens to equal the
+    /// receipt's `ref` but for a different transaction does not count.
+    function test_revert_kind4IsNotMatchedByReference() public {
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _x402Bundle();
+        pr[0].data.responseBody.standardPaymentReference = ls[0].ref;
+        pr[0].data.requestBody.transactionId = bytes32(uint256(0x8fff));
+        vm.prank(challenger);
+        vm.expectRevert(DelictiErrors.ProofDoesNotMatchClaim.selector);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+    }
+
     function test_xrplSalamiSlashes() public {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _bundle(5);
         _arm(challenger, mandateId, pr);

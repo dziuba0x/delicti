@@ -63,7 +63,7 @@ Non-goal: budgets across several assets under one mandate. One mandate, one unit
 A leaf is `(receiptHash, kind, sourceId, destinationAddressHash, amount, ref, claimedTimestamp, mandateId)`, hashed as `keccak256(abi.encode(leaf))`.
 
 - `receiptHash` binds the leaf to the effector's own signed artifact, so an auditor can always walk back to witness 1 in its native format.
-- `kind` ∈ {1 tool call, 2 EVM transaction, 3 external payment (XRPL/BTC/DOGE)}.
+- `kind` ∈ {1 tool call, 2 EVM transaction, 3 external payment named by its payment reference (XRPL/BTC/DOGE), 4 external payment named by its transaction id (v0.12, §6.8)}.
 - `sourceId` is the FDC source identifier (`testFLR`, `FLR`, `testXRP`, …).
 - `destinationAddressHash` is the FDC standard address hash for kind 3, and the left-padded address for kind 2.
 - `ref` is the payment reference (kind 3) or the transaction hash (kind 2).
@@ -188,6 +188,8 @@ agentRefChallenge(mandateId) = keccak256(abi.encode("DELICTI/agentRef", chainid,
 Any amount, any destination; permissionless, because the proof speaks and not the caller. The reference binds chain, registry and mandate, so a confirmation cannot be replayed for another mandate or another deployment. **`post` refuses collateral for a mandate with an `agentRef` until this has been done** — otherwise a principal with a sock-puppet `agent` names a stranger's busy account, anchors leaves mirroring its ordinary payments, and is paid out of a third party's bond.
 
 **The challenge.** N kind-3 leaves, each in an anchored root, each with a *positive* `Payment` proof: `sourceId` equals the mandate's and the leaf's; `sourceAddressHash == agentRef`; `status == 0`; `oneToOne`; `blockTimestamp` inside the mandate's window; `receivingAddressHash`, `receivedAmount` and `standardPaymentReference` equal the leaf's destination, amount and `ref`. Transaction ids strictly increasing. `Σ receivedAmount > budget`. Commitment kind `6`, deed ids = the transaction ids in that order.
+
+**Receipts keyed by transaction (v0.12, kind 4).** x402 on XRPL, live on mainnet through facilitators such as t54, binds a payment to its request with the transaction's `InvoiceID` field (SHA-256 of the invoice id), not with a memo. No FDC payment type returns `InvoiceID`, and `Payment` reports a reference only for exactly one 32-byte memo. So an x402-on-XRPL receipt cannot be matched by reference. It can be matched by what the facilitator does return: the transaction hash. A kind-4 leaf carries that hash as `ref`, and the proof must be of that very transaction (`requestBody.transactionId == leaf.ref`) with the leaf's destination and amount. This is positive corroboration only. A payment that never happened cannot be proven absent without a reference (§6.1). The outflow challenge (§6.10) covers these payments with no receipt at all.
 
 Three choices that are not obvious:
 

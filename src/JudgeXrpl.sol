@@ -90,27 +90,16 @@ contract JudgeXrpl is DelictiErrors {
         if (m.assetKey != bytes32(0)) revert WrongAsset(); // delivered XRP only; outflow is §6.10
 
         uint256 spent;
-        bytes32 lastTx;
         bytes32[] memory ids = new bytes32[](n);
         bytes32[] memory leafHashes = new bytes32[](n);
         uint64 minRound = type(uint64).max;
         for (uint256 i = 0; i < n; i++) {
             Receipts.Leaf calldata leaf = leaves[i];
-            if (leaf.kind != Receipts.KIND_EXTERNAL_PAYMENT) revert WrongReceiptKind();
-            if (leaf.mandateId != mandateId) revert ProofDoesNotMatchClaim();
-
-            bytes32 leafHash = Receipts.hash(leaf);
-            for (uint256 j = 0; j < i; j++) {
-                if (leafHashes[j] == leafHash) revert DuplicateLeaf();
-            }
-            leafHashes[i] = leafHash;
-            AnchorLog.Episode memory ep = log.episode(mandateId, episodeIndices[i]);
-            if (!Merkle.verify(merkleProofs[i], ep.root, leafHash)) revert LeafNotAnchored();
+            leafHashes[i] = _witnessOne(mandateId, episodeIndices[i], leaf, merkleProofs[i], leafHashes, i);
 
             IPayment.Proof calldata pr = fdcProofs[i];
             bytes32 txid = pr.data.requestBody.transactionId;
-            if (txid <= lastTx) revert UnorderedTxs();
-            lastTx = txid;
+            if (i != 0 && txid <= ids[i - 1]) revert UnorderedTxs();
             ids[i] = txid;
             if (pr.data.votingRound < minRound) minRound = pr.data.votingRound;
             uint256 v = Deeds.payment(fdc(), pr, leaf, m);
@@ -124,6 +113,28 @@ contract JudgeXrpl is DelictiErrors {
             Kinds.BUDGET_PAYMENT, mandateId, m.budget, spent - m.budget, msg.sender, n, fdcProofs[0].data.attestationType, m.sourceId, true
         );
         emit BudgetOverrunProven(mandateId, spent, m.budget, n, msg.sender, taken);
+    }
+
+    /// @dev Witness 1 for §6.8: a receipt of kind 3 (named by memo reference) or 4 (v0.12, named by
+    ///      transaction id — the only handle an x402-on-XRPL facilitator gives back), naming this
+    ///      mandate, anchored, and distinct from the receipts before it.
+    function _witnessOne(
+        uint256 mandateId,
+        uint256 episodeIndex,
+        Receipts.Leaf calldata leaf,
+        bytes32[] calldata path,
+        bytes32[] memory seen,
+        uint256 i
+    ) internal view returns (bytes32 leafHash) {
+        if (leaf.kind != Receipts.KIND_EXTERNAL_PAYMENT && leaf.kind != Receipts.KIND_EXTERNAL_TX) {
+            revert WrongReceiptKind();
+        }
+        if (leaf.mandateId != mandateId) revert ProofDoesNotMatchClaim();
+        leafHash = Receipts.hash(leaf);
+        for (uint256 j = 0; j < i; j++) {
+            if (seen[j] == leafHash) revert DuplicateLeaf();
+        }
+        if (!Merkle.verify(path, log.episode(mandateId, episodeIndex).root, leafHash)) revert LeafNotAnchored();
     }
 
     // -----------------------------------------------------------------------------------

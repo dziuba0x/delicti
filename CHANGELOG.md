@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (after v0.12.0)
+
+- **Kind-4 receipts: an XRPL payment named by its transaction id** (SPEC §4, §6.8). x402 on XRPL binds payments with `InvoiceID`, which no FDC type returns, so memo-referenced receipts could never match a real x402-XRPL settlement. `JudgeXrpl.challengeBudgetOverrunPayment` now also accepts kind 4, matched on `requestBody.transactionId`. Three tests. 180 tests.
+- `test/halmos/VaultMath.t.sol`: bounded symbolic checks of the Vault's arithmetic (penalty bounded and monotone; the surety split conserves value). The conservation check does not finish at 600 s over 64-bit inputs; it is recorded, not claimed.
+- **Tooling trap, found by mutation testing:** the npm distribution of `forge` (`@foundry-rs/forge`, a Node shim) exits **0 when tests fail**, setUp failures included. The native binary exits 1. Every result in this repo's history was read from the output, not the exit code. Scripts now judge a run by its summary line (`scripts/lib/green.sh`).
+
 ## v0.12.0 — 2026-09-23 — the surety rule and the docket
 
 Two open problems from v0.11's §10, both economic, both closed by changing who is owed what rather than by adding a check.

@@ -57,4 +57,7 @@ interface DelictiErrors {
     error NoJudges();
     error NoAccusationOpen();
     error NotExclusiveOnXrpl();
+    // v0.12
+    error NoBeneficiary();
+    error BeneficiaryFixed();
 }

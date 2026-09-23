@@ -142,7 +142,7 @@ Challenges, each behind a commit–reveal gate so the reward belongs to whoever 
 | `challengeBudgetOverrunPayment` | the same, for XRP payments on XRPL | `Payment` | §6.8 |
 | `challengeUnderReportedSpend` | the effector's tally said less than the world shows | `EVMTransaction` | §6.5 |
 | `accuseUnanchoredDeed` → `answerAccusation` / `resolveAccusation` | an exclusive agent acted and wrote nothing down | `EVMTransaction` | §6.4 |
-| `challengeXrpOutflow` | more XRP **left** the agent's account than the mandate allows — any transaction type, fees included, **no receipts**, including an offer consumed in someone else's transaction | `BalanceDecreasingTransaction` | §6.10 |
+| `fileXrpOutflow` | more XRP **left** the agent's account than the mandate allows — any transaction type, fees included, **no receipts**, including an offer consumed in someone else's transaction | `BalanceDecreasingTransaction` | §6.10 |
 
 ## Who this is for
 
@@ -158,7 +158,8 @@ The section of the [SPEC](SPEC.md) to read first is §10, *what DELICTI does not
 - **Testnet only, not independently audited.** Everything runs on Coston2 and forks. Slither, a 300,000-call invariant campaign and an internal adversarial pass have run — the last one found two openings, fixed in v0.10 with regression tests. An independent audit has not.
 - **Consequence is after the fact; prevention is optional.** FDC finality is minutes. The brake refuses a dead or borrowed mandate and the slice that would break the budget — but only in effectors that choose to check.
 - **On XRPL, DELICTI sees XRP, not issued currencies.** The outflow challenge (§6.10) covers every decrease of an account's XRP balance — payments, offers taken by others, escrow, AMM, fees — and ran live on Coston2 (mandate #7). RLUSD and every other IOU stay invisible.
-- **XRPL proofs age out after ~14 days.** The FDC verifier cannot attest older transactions, so a cumulative case over a mandate window longer than that may be unprovable. `JudgeXrpl.fullyEnforceable` says whether a window fits (SPEC §10).
+- **XRPL proofs age out after ~14 days.** The FDC verifier cannot attest older transactions. Since v0.12 an outflow case is a *docket*: each deed is filed once, while it can still be proven, and counted for ever after. Keeping a docket below the budget is unpaid (SPEC §10).
+- **Collusion between a principal and its own agent** can take the challenger's reward from an outsider's deposit, and nothing more. Since v0.12 a deposit compensates whom its depositor names, and an outsider names itself by default (SPEC §8.3).
 - **Small bonds are not watched.** A verdict needs someone to bring it; the reward covers the cost of proving a case only when 10 % of the bond exceeds the attestation fees (20 FLR per request on mainnet).
 - **Proportional up to the bond, not beyond.** Past an overrun equal to the budget, further units are free; only a larger bond moves that ceiling.
 - **Deeds, not minds.** It proves what happened and whether it was permitted. It does not prove intent, alignment or reasoning.

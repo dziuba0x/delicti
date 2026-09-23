@@ -1,6 +1,6 @@
 {
   "name": "delicti",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "private": true,
   "description": "Accountability for AI agents on Flare: mandate before act, FDC as independent second witness, proportional bonded slashing.",
   "keywords": [

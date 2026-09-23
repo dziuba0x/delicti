@@ -7,10 +7,14 @@
 #   mandate's business (AgentRefs.proveExclusive — a payment whose 32-byte memo is
 #   `exclusiveFor(mandateId)`). No receipts are written at all. Then, under a 12 XRP budget:
 #
-#     3 XRP payment · 3 XRP payment · an offer selling 5 XRP, left resting in the book and
-#     CONSUMED BY ANOTHER ACCOUNT'S OfferCreate · 3 XRP payment          = 14 XRP + fees
+#     3 XRP payment · 3 XRP payment  → filed on the docket at once, below the budget (v0.12)
+#     an offer selling 5 XRP, left resting and CONSUMED BY ANOTHER ACCOUNT'S OfferCreate · 3 XRP
+#                                     → the crossing filing, committed: 14 XRP + fees in total
 #
-#   Four FDC `BalanceDecreasingTransaction` proofs — one of them for the taker's transaction, in
+#   Bonded 1 C2FLR by the principal and 1 by an outside insurer; under the surety rule (v0.12) the
+#   insurer's share of the verdict's remainder comes back to the insurer, not to the principal.
+#
+#   FDC `BalanceDecreasingTransaction` proofs — one of them for the taker's transaction, in
 #   which the agent's balance fell by 5 XRP without the agent signing anything — and the sum
 #   convicts. On XRPL nothing but the account's own keys can make its XRP balance fall; the offer
 #   was the agent's own standing order, executed later by someone else.
@@ -80,6 +84,24 @@ PAYMENT_T="(bytes32,bytes32,uint64,uint64,(bytes32,uint256,uint256),(uint64,uint
 BDT_T="(bytes32,bytes32,uint64,uint64,(bytes32,bytes32),(uint64,uint64,bytes32,int256,bytes32))"
 decode() { cast abi-decode "f()($1)" "$2" | sed -E 's/ \[[0-9.e+]+\]//g' | tr -d '\n'; }
 
+# bdt_proofs "<id> <id> …" -> sets PROOFS to the cast-ready array of BDT proofs, in that order
+bdt_proofs() {
+  local reqs=() rounds=() t Q R H M D
+  for t in $1; do
+    read -r Q R <<<"$(request_proof BalanceDecreasingTransaction "{\"transactionId\":\"$t\",\"sourceAddressIndicator\":\"$AGENT_REF\"}")"
+    reqs+=("$Q"); rounds+=("$R"); echo "   requested $t in round $R$([ "$t" = "${TAKEN:-}" ] && echo '   (the counterparty’s transaction)')"
+  done
+  PROOFS="["
+  for k in "${!reqs[@]}"; do
+    read -r H M <<<"$(fetch_proof "${reqs[$k]}" "${rounds[$k]}")"
+    D=$(decode "$BDT_T" "$H"); echo "   proof $k: $(echo "$D" | python3 -c "import sys;s=sys.stdin.read();print('spentAmount', s.split(',')[-2].strip())")"
+    PROOFS="$PROOFS($M,$D),"
+  done
+  PROOFS="${PROOFS%,}]"
+}
+sorted_ids() { python3 -c "import sys;print(' '.join(sorted(('0x'+t.lower().removeprefix('0x') for t in sys.argv[1:]), key=lambda h:int(h,16))))" "$@"; }
+FILE_SIG="fileXrpOutflow(uint256,(bytes32[],$BDT_T)[],bytes32)"
+
 STATE=${STATE:-.run/xrpl-outflow-last.env}
 mkdir -p "$(dirname "$STATE")"
 if [ "${RESUME:-0}" = "1" ]; then
@@ -123,42 +145,42 @@ cast send $REFS "proveExclusive(uint256,(bytes32[],$PAYMENT_T))" $MID "($SM,$(de
 cast call $REFS "exclusive(uint256)(bool)" $MID --rpc-url $RPC | grep -q true || { echo "   !! exclusivity not recorded"; exit 1; }
 echo "   exclusive=true, proven=$(cast call $REFS 'proven(uint256)(bool)' $MID --rpc-url $RPC)"
 
-echo "== 4. bond 1 C2FLR in the Vault"
+echo "== 4. bond: 1 C2FLR from the principal, 1 C2FLR from an outside insurer (v0.12 surety rule)"
 cast send $BOND "post(uint256)" $MID --value 1ether --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
+INS_KEY=$(cast wallet new --json | python3 -c "import sys,json;print(json.load(sys.stdin)[0]['private_key'])")
+INSURER=$(cast wallet address --private-key $INS_KEY)
+cast send $INSURER --value 1.2ether --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
+cast send $BOND "post(uint256)" $MID --value 1ether --private-key $INS_KEY --rpc-url $RPC --json >/dev/null
+echo "   insurer $INSURER — plain post, so its deposit compensates itself: beneficiaryOf = $(cast call $BOND 'beneficiaryOf(uint256,address)(address)' $MID $INSURER --rpc-url $RPC)"
 
 echo "== 5. the deeds — no receipts, nothing anchored"
 P1=$($X pay "$AGENT_SEED" "$CP_ADDR" $PAY "$(cast keccak "outflow $MID/1/$RANDOM")" | txid_of); echo "   payment 3 XRP  $P1"
 P2=$($X pay "$AGENT_SEED" "$CP_ADDR" $PAY "$(cast keccak "outflow $MID/2/$RANDOM")" | txid_of); echo "   payment 3 XRP  $P2"
+echo "== 5b. the docket: the first 6 XRP filed now, below the budget — no commitment, no verdict (v0.12)"
+EARLY=$(sorted_ids $P1 $P2)
+bdt_proofs "$EARLY"
+cast send $JUDGE_XRPL "$FILE_SIG" $MID "$PROOFS" $Z32 --private-key $PRIVATE_KEY --rpc-url $RPC --json \
+  | python3 -c "import sys,json;d=json.load(sys.stdin);print('   docket filing',d['transactionHash'],'status',int(d['status'],16))"
+echo "   docket = $(cast call $JUDGE_XRPL 'docket(uint256)(uint256)' $MID --rpc-url $RPC) drops, slashed = $(cast call $BOND 'slashed(uint256)(bool)' $MID --rpc-url $RPC)"
 $X trust "$AGENT_SEED" "$CP_ADDR" USD 1000 >/dev/null
 OF=$($X offer "$AGENT_SEED" $OFFER 5 USD "$CP_ADDR" | txid_of);                       echo "   offer 5 XRP → 5 USD.cp, resting   $OF"
 TK=$($X take "$CP_SEED" 5 USD $OFFER | txid_of);                                       echo "   TAKEN by the counterparty's tx    $TK   ← the agent signed nothing here"
 P3=$($X pay "$AGENT_SEED" "$CP_ADDR" $PAY "$(cast keccak "outflow $MID/3/$RANDOM")" | txid_of); echo "   payment 3 XRP  $P3"
 
-echo "== 6. commit (kind 7) before a single BDT attestation is requested"
+echo "== 6. commit (kind 7) over the NEW deeds only — the docket carries the first two"
 TAKEN=$(lc $TK)
-SORTED_IDS=$(python3 -c "import sys;print(' '.join(sorted(('0x'+t.lower().removeprefix('0x') for t in sys.argv[1:]), key=lambda h:int(h,16))))" $P1 $P2 $TK $P3)
+SORTED_IDS=$(sorted_ids $TK $P3)
 delicti_commit $BOND 7 $MID "$SORTED_IDS" "${SALT:-}"
-{ echo "MID=$MID"; echo "AGENT_REF=$AGENT_REF"; echo "SORTED_IDS='$SORTED_IDS'"; echo "TAKEN=$(lc $TK)"
+{ echo "MID=$MID"; echo "AGENT_REF=$AGENT_REF"; echo "INSURER=$INSURER"; echo "SORTED_IDS='$SORTED_IDS'"; echo "TAKEN=$(lc $TK)"
   echo "DELICTI_SALT=$DELICTI_SALT"; echo "DELICTI_COMMIT_TS=$DELICTI_COMMIT_TS"; } > "$STATE"
 delicti_wait_lead $BOND $T0 $DUR
 fi
 
-echo "== 7. four FDC BalanceDecreasingTransaction attestations, keyed (tx, agent's account)"
-REQS=(); ROUNDS=()
-for t in $SORTED_IDS; do
-  read -r Q R <<<"$(request_proof BalanceDecreasingTransaction "{\"transactionId\":\"$t\",\"sourceAddressIndicator\":\"$AGENT_REF\"}")"
-  REQS+=("$Q"); ROUNDS+=("$R"); echo "   requested $t in round $R$([ "$t" = "$TAKEN" ] && echo '   (the counterparty’s transaction)')"
-done
-PROOFS="["
-for k in "${!REQS[@]}"; do
-  read -r H M <<<"$(fetch_proof "${REQS[$k]}" "${ROUNDS[$k]}")"
-  D=$(decode "$BDT_T" "$H"); echo "   proof $k: $(echo "$D" | python3 -c "import sys;s=sys.stdin.read();print('spentAmount', s.split(',')[-2].strip())")"
-  PROOFS="$PROOFS($M,$D),"
-done
-PROOFS="${PROOFS%,}]"
+echo "== 7. two FDC BalanceDecreasingTransaction attestations for the new deeds"
+bdt_proofs "$SORTED_IDS"
 
-echo "== 8. reveal: gross outflow past the budget"
-OUT=$(cast send $JUDGE_XRPL "challengeXrpOutflow(uint256,(bytes32[],$BDT_T)[],bytes32)" $MID "$PROOFS" "$DELICTI_SALT" \
+echo "== 8. the crossing filing: docket + new deeds past the budget"
+OUT=$(cast send $JUDGE_XRPL "$FILE_SIG" $MID "$PROOFS" "$DELICTI_SALT" \
   --private-key $PRIVATE_KEY --rpc-url $RPC --json)
 echo "$OUT" | python3 -c "import sys,json;d=json.load(sys.stdin);print('   reveal',d['transactionHash'],'status',int(d['status'],16),'gas',int(d['gasUsed'],16))"
 
@@ -167,3 +189,7 @@ echo -n "   bondOf   "; cast call $BOND "bondOf(uint256)(uint256)" $MID --rpc-ur
 echo -n "   slashed  "; cast call $BOND "slashed(uint256)(bool)" $MID --rpc-url $RPC
 echo -n "   live     "; cast call $REG  "isLive(uint256)(bool)" $MID --rpc-url $RPC
 echo -n "   severity "; cast call $BOND "severityOf(uint256)(uint256)" $MID --rpc-url $RPC
+echo -n "   docket   "; cast call $JUDGE_XRPL "docket(uint256)(uint256)" $MID --rpc-url $RPC
+cast send $BOND "settle(uint256,address)" $MID $INSURER --private-key $PRIVATE_KEY --rpc-url $RPC --json >/dev/null
+echo -n "   owed(principal) "; cast call $BOND "owed(address)(uint256)" $ME --rpc-url $RPC
+echo -n "   owed(insurer)   "; cast call $BOND "owed(address)(uint256)" $INSURER --rpc-url $RPC

@@ -45,8 +45,11 @@ contract Deploy is Script {
         }
         require(address(anchorLog.registry()) == address(reg) && address(meter.registry()) == address(reg), "core mismatch");
 
-        // v0.11: AgentRefs gains `proveExclusive` — a new contract, no funds, no privileges.
-        AgentRefs agentRefs = new AgentRefs(reg, IFdcVerification(address(0)));
+        // AgentRefs holds statements, not money: reuse one (REUSE_REFS) and every exclusivity an
+        // XRPL account already declared stays valid; otherwise deploy one.
+        AgentRefs agentRefs = AgentRefs(vm.envOr("REUSE_REFS", address(0)));
+        if (address(agentRefs) == address(0)) agentRefs = new AgentRefs(reg, IFdcVerification(address(0)));
+        require(address(agentRefs.registry()) == address(reg), "refs mismatch");
 
         // Judges first, each told the address the Vault is about to get; the Vault's constructor
         // then refuses any judge that names another. No setter exists at any point.

@@ -263,6 +263,24 @@ contract Handler is Test {
         } catch {}
     }
 
+    /// v0.12: an outsider naming whom its deposit compensates — another actor, possibly the principal.
+    function postFor(uint256 seed, uint256 whoSeed, uint256 benSeed, uint256 amount) external {
+        if (mandates.length == 0) return;
+        uint256 id = _mandate(seed);
+        amount = bound(amount, 1, 50 ether);
+        vm.prank(_actor(whoSeed));
+        try bond.postFor{value: amount}(id, _actor(benSeed)) {
+            ghostPosted += amount;
+            ghostPostedTo[id] += amount;
+        } catch {}
+    }
+
+    /// v0.12: anyone may credit a deposit's accrued remainder to its beneficiary.
+    function settle(uint256 seed, uint256 whoSeed) external {
+        if (mandates.length == 0) return;
+        bond.settle(_mandate(seed), _actor(whoSeed));
+    }
+
     function withdraw(uint256 seed, uint256 whoSeed) external {
         if (mandates.length == 0) return;
         uint256 id = _mandate(seed);

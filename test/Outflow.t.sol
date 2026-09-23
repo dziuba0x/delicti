@@ -144,7 +144,7 @@ contract OutflowTest is Test {
 
     function _challenge(address who, IBalanceDecreasingTransaction.Proof[] memory pr) internal {
         vm.prank(who);
-        xjudge.challengeXrpOutflow(mandateId, pr, SALT);
+        xjudge.fileXrpOutflow(mandateId, pr, SALT);
     }
 
     // ------------------------------------------------------------------ the verdicts
@@ -213,11 +213,182 @@ contract OutflowTest is Test {
 
     // ------------------------------------------------------------------ refusals
 
-    function test_revert_withinBudget() public {
+    /// Below the budget a filing only records: no commitment needed, no verdict, nothing paid.
+    function test_belowBudgetFilingOnlyRecords() public {
         IBalanceDecreasingTransaction.Proof[] memory pr = _salami(3);
-        _arm(challenger, pr);
-        vm.expectRevert(DelictiErrors.WithinBudget.selector);
+        vm.prank(challenger);
+        xjudge.fileXrpOutflow(mandateId, pr, bytes32(0)); // no commitment made at all
+        assertEq(xjudge.docket(mandateId), 3 * (EACH + FEE));
+        assertTrue(xjudge.filed(mandateId, pr[0].data.requestBody.transactionId));
+        assertFalse(bond.slashed(mandateId));
+        assertEq(bond.owed(challenger), 0);
+    }
+
+    function test_revert_filingNothingNew() public {
+        IBalanceDecreasingTransaction.Proof[] memory pr = _salami(3);
         _challenge(challenger, pr);
+        vm.prank(challenger);
+        vm.expectRevert(DelictiErrors.NothingNew.selector);
+        xjudge.fileXrpOutflow(mandateId, pr, SALT);
+    }
+
+    // ------------------------------------------------------------------ v0.12: the docket outlives the verifier
+
+    /// The case the verifier's ~14-day memory used to kill: most of the budget spent on day 1, the
+    /// overrun on day 20. Day 1's deeds are filed while they can be proven; on day 20 only the new
+    /// deeds need a proof, and the docket carries the rest.
+    function test_docketConvictsAcrossTheVerifiersMemory() public {
+        uint256 id = _longMandate(30 days);
+        IBalanceDecreasingTransaction.Proof[] memory early = _salami(3); // 3 XRP + fees, day 1
+        vm.prank(copier); // anyone may keep the docket; the filer earns nothing below the budget
+        xjudge.fileXrpOutflow(id, early, bytes32(0));
+
+        vm.warp(block.timestamp + 20 days);
+        IBalanceDecreasingTransaction.Proof[] memory late = new IBalanceDecreasingTransaction.Proof[](2);
+        late[0] = _bdt(10, int256(EACH + FEE), uint64(block.timestamp));
+        late[1] = _bdt(11, int256(EACH + FEE), uint64(block.timestamp + 60));
+        _armFor(challenger, id, late);
+        vm.prank(challenger);
+        xjudge.fileXrpOutflow(id, late, SALT);
+        assertTrue(bond.slashed(id));
+        assertEq(bond.severityOf(id), 5 * (EACH + FEE) - BUDGET, "day 1 counted without being proven again");
+        assertGt(bond.owed(challenger), 0, "the crossing filer is paid");
+        assertEq(bond.owed(copier), 0, "the docket keeper below the budget is not");
+    }
+
+    /// A copier front-runs part of an honest crossing filing as a non-crossing filing. The honest
+    /// transaction still lands — the proofs already filed are skipped, the digest is over what it
+    /// supplied — and the conviction and its reward are the honest filer's.
+    function test_frontRunSubsetDoesNotStealTheCase() public {
+        IBalanceDecreasingTransaction.Proof[] memory pr = _salami(5);
+        _arm(challenger, pr);
+        IBalanceDecreasingTransaction.Proof[] memory subset = new IBalanceDecreasingTransaction.Proof[](2);
+        subset[0] = pr[1];
+        subset[1] = pr[3];
+        vm.prank(copier);
+        xjudge.fileXrpOutflow(mandateId, subset, bytes32(0));
+        _challenge(challenger, pr);
+        assertTrue(bond.slashed(mandateId));
+        assertEq(bond.severityOf(mandateId), 5 * (EACH + FEE) - BUDGET);
+        assertGt(bond.owed(challenger), 0);
+        assertEq(bond.owed(copier), 0);
+    }
+
+    /// The copier cannot make the crossing its own without an old enough commitment.
+    function test_revert_crossingWithoutCommitment() public {
+        IBalanceDecreasingTransaction.Proof[] memory pr = _salami(5);
+        vm.prank(copier);
+        vm.expectRevert(DelictiErrors.NoCommitment.selector);
+        xjudge.fileXrpOutflow(mandateId, pr, SALT);
+    }
+
+    function _longMandate(uint64 window) internal returns (uint256 id) {
+        vm.prank(principal);
+        id = reg.commit(
+            agent, keccak256("long"), 0, 0, BUDGET, uint64(block.timestamp), uint64(block.timestamp + window),
+            MandateRegistry.Terms({sourceId: SRC, assetKey: OUTFLOW, agentRef: AGENT_XRPL, bond: address(bond)})
+        );
+        vm.prank(agent);
+        reg.acknowledge(id);
+        agentRefs.proveExclusive(id, _statement(id, agentRefs.exclusiveFor(id)));
+        vm.prank(principal);
+        bond.post{value: 10 ether}(id);
+    }
+
+    function _armFor(address who, uint256 id, IBalanceDecreasingTransaction.Proof[] memory pr) internal {
+        bytes32[] memory ids = new bytes32[](pr.length);
+        for (uint256 i = 0; i < pr.length; i++) ids[i] = pr[i].data.requestBody.transactionId;
+        uint64 t = uint64(block.timestamp);
+        vm.warp(t - COMMIT_LEAD);
+        bond.commitChallenge(bond.commitmentFor(who, id, bond.KIND_XRP_OUTFLOW(), bond.deedsDigest(ids), SALT));
+        vm.warp(t);
+        rounds.setRoundStart(500, t);
+    }
+
+    // ------------------------------------------------------------------ v0.12: the surety rule
+
+    /// An insurer posting with plain `post` insures itself: when principal and agent collude, the
+    /// principal gets only its own deposit's share, and the insurer's share of the remainder comes
+    /// back to the insurer. All the colluders can take from the insurer is the challenger's reward.
+    function test_collusionCannotHarvestAnOutsidersDeposit() public {
+        address insurer = makeAddr("insurer");
+        vm.deal(insurer, 100 ether);
+        vm.prank(insurer);
+        bond.post{value: 30 ether}(mandateId); // 10 principal + 30 insurer
+        assertEq(bond.beneficiaryOf(mandateId, insurer), insurer);
+
+        // the "overrun" — say, paid to the principal's own sock puppet — self-challenged by the principal
+        IBalanceDecreasingTransaction.Proof[] memory pr = _salami(8); // 8 XRP + fees vs 4: 100% overrun
+        _arm(principal, pr);
+        _challenge(principal, pr);
+        uint256 taken = bond.slashedAmount(mandateId);
+        assertEq(taken, 40 ether, "the whole bond");
+        uint256 reward = (taken * 1000) / 10_000; // no fee contract in a unit test: 10% of all
+        // principal side: the reward plus a quarter of the rest (its 10 of 40)
+        assertEq(bond.owed(principal), reward + ((taken - reward) * 10) / 40);
+        bond.settle(mandateId, insurer);
+        assertEq(bond.owed(insurer), ((taken - reward) * 30) / 40, "three quarters of the rest are the insurer's");
+        // the principal lost its own 10 and is owed 13: the colluders' net gain is 3 — the insurer's
+        // share of the challenger's reward, 10% of the insurer's 30. Under v0.11 it was 30.
+        uint256 colluders = bond.owed(principal) - 10 ether;
+        assertEq(colluders, (reward * 30) / 40);
+    }
+
+    function test_postForNamesTheBeneficiary_andItIsFixed() public {
+        address insurer = makeAddr("insurer");
+        address venue = makeAddr("venue");
+        vm.deal(insurer, 100 ether);
+        vm.prank(insurer);
+        bond.postFor{value: 10 ether}(mandateId, venue);
+        vm.prank(insurer);
+        vm.expectRevert(DelictiErrors.BeneficiaryFixed.selector);
+        bond.postFor{value: 1 ether}(mandateId, insurer);
+        vm.prank(insurer);
+        vm.expectRevert(DelictiErrors.BeneficiaryFixed.selector);
+        bond.post{value: 1 ether}(mandateId); // plain post would name the insurer itself
+        vm.prank(insurer);
+        vm.expectRevert(DelictiErrors.NoBeneficiary.selector);
+        bond.postFor{value: 1 ether}(mandateId, address(0));
+
+        IBalanceDecreasingTransaction.Proof[] memory pr = _salami(5);
+        _arm(challenger, pr);
+        _challenge(challenger, pr);
+        uint256 before = bond.unsettled(mandateId);
+        assertGt(before, 0);
+        bond.settle(mandateId, insurer);
+        bond.settle(mandateId, insurer); // idempotent
+        assertGt(bond.owed(venue), 0);
+        assertEq(bond.owed(insurer), 0);
+        assertLe(bond.unsettled(mandateId), 1, "only rounding stays behind");
+    }
+
+    /// An outsider may opt in to compensating the principal; then it is principal-side, credited at once.
+    function test_outsiderMayInsureThePrincipal() public {
+        address insurer = makeAddr("insurer");
+        vm.deal(insurer, 100 ether);
+        vm.prank(insurer);
+        bond.postFor{value: 10 ether}(mandateId, principal);
+        assertEq(bond.principalSide(mandateId), 20 ether);
+        IBalanceDecreasingTransaction.Proof[] memory pr = _salami(5);
+        _arm(challenger, pr);
+        _challenge(challenger, pr);
+        assertEq(bond.unsettled(mandateId), 0);
+    }
+
+    /// Withdrawal settles first: the beneficiary is credited before the deposit leaves.
+    function test_withdrawSettlesTheBeneficiary() public {
+        address insurer = makeAddr("insurer");
+        vm.deal(insurer, 100 ether);
+        vm.prank(insurer);
+        bond.post{value: 10 ether}(mandateId);
+        IBalanceDecreasingTransaction.Proof[] memory pr = _salami(5);
+        _arm(challenger, pr);
+        _challenge(challenger, pr);
+        vm.warp(block.timestamp + 25 hours);
+        vm.prank(insurer);
+        bond.withdraw(mandateId, payable(insurer));
+        assertGt(bond.owed(insurer), 0);
+        assertEq(bond.depositOf(mandateId, insurer), 0);
     }
 
     function test_revert_noExclusivityFromTheXrplKey() public {
@@ -233,7 +404,7 @@ contract OutflowTest is Test {
         reg.declareExclusive(id);
         vm.prank(challenger);
         vm.expectRevert(DelictiErrors.NotExclusiveOnXrpl.selector);
-        xjudge.challengeXrpOutflow(id, _salami(5), SALT);
+        xjudge.fileXrpOutflow(id, _salami(5), SALT);
     }
 
     function test_revert_proofForAnotherAccount() public {
@@ -241,13 +412,13 @@ contract OutflowTest is Test {
         pr[2].data.requestBody.sourceAddressIndicator = keccak256("rSomebodyElse");
         vm.prank(challenger);
         vm.expectRevert(DelictiErrors.NotAgentTx.selector);
-        xjudge.challengeXrpOutflow(mandateId, pr, SALT);
+        xjudge.fileXrpOutflow(mandateId, pr, SALT);
 
         pr = _salami(5);
         pr[2].data.responseBody.sourceAddressHash = keccak256("rSomebodyElse");
         vm.prank(challenger);
         vm.expectRevert(DelictiErrors.NotAgentTx.selector);
-        xjudge.challengeXrpOutflow(mandateId, pr, SALT);
+        xjudge.fileXrpOutflow(mandateId, pr, SALT);
     }
 
     function test_revert_unorderedTxids() public {
@@ -255,13 +426,13 @@ contract OutflowTest is Test {
         (pr[1], pr[2]) = (pr[2], pr[1]);
         vm.prank(challenger);
         vm.expectRevert(DelictiErrors.UnorderedTxs.selector);
-        xjudge.challengeXrpOutflow(mandateId, pr, SALT);
+        xjudge.fileXrpOutflow(mandateId, pr, SALT);
 
         pr = _salami(5);
         pr[3] = pr[2]; // the same transaction twice
         vm.prank(challenger);
         vm.expectRevert(DelictiErrors.UnorderedTxs.selector);
-        xjudge.challengeXrpOutflow(mandateId, pr, SALT);
+        xjudge.fileXrpOutflow(mandateId, pr, SALT);
     }
 
     function test_revert_outsideTheWindow() public {
@@ -269,7 +440,7 @@ contract OutflowTest is Test {
         pr[0].data.responseBody.blockTimestamp = uint64(block.timestamp - 1);
         vm.prank(challenger);
         vm.expectRevert(DelictiErrors.ClaimOutsideProvenRange.selector);
-        xjudge.challengeXrpOutflow(mandateId, pr, SALT);
+        xjudge.fileXrpOutflow(mandateId, pr, SALT);
     }
 
     function test_revert_wrongSourceOrInvalidProof() public {
@@ -277,12 +448,12 @@ contract OutflowTest is Test {
         pr[1].data.sourceId = bytes32("XRP");
         vm.prank(challenger);
         vm.expectRevert(DelictiErrors.WrongSource.selector);
-        xjudge.challengeXrpOutflow(mandateId, pr, SALT);
+        xjudge.fileXrpOutflow(mandateId, pr, SALT);
 
         mock.setVerdict(false);
         vm.prank(challenger);
         vm.expectRevert(DelictiErrors.FdcProofInvalid.selector);
-        xjudge.challengeXrpOutflow(mandateId, _salami(5), SALT);
+        xjudge.fileXrpOutflow(mandateId, _salami(5), SALT);
     }
 
     /// The measure is the mandate's, not the challenger's: a delivered-amount mandate (§6.8) cannot
@@ -296,7 +467,7 @@ contract OutflowTest is Test {
         bond.post{value: 1 ether}(delivered);
         vm.prank(challenger);
         vm.expectRevert(DelictiErrors.WrongAsset.selector);
-        xjudge.challengeXrpOutflow(delivered, _salami(5), SALT);
+        xjudge.fileXrpOutflow(delivered, _salami(5), SALT);
 
         vm.prank(challenger);
         vm.expectRevert(DelictiErrors.WrongAsset.selector);
@@ -318,7 +489,7 @@ contract OutflowTest is Test {
         rounds.setRoundStart(500, t);
         vm.prank(copier);
         vm.expectRevert(DelictiErrors.CommittedTooLate.selector);
-        xjudge.challengeXrpOutflow(mandateId, pr, SALT);
+        xjudge.fileXrpOutflow(mandateId, pr, SALT);
     }
 
     /// A commitment for the §6.8 kind cannot be spent on §6.10, though the deed ids are the same.
@@ -333,7 +504,7 @@ contract OutflowTest is Test {
         rounds.setRoundStart(500, t);
         vm.prank(challenger);
         vm.expectRevert(DelictiErrors.NoCommitment.selector);
-        xjudge.challengeXrpOutflow(mandateId, pr, SALT);
+        xjudge.fileXrpOutflow(mandateId, pr, SALT);
     }
 
     // ------------------------------------------------------------------ the XRPL key's statements

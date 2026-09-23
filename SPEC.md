@@ -1,4 +1,4 @@
-# DELICTI Specification — v0.8 (draft)
+# DELICTI Specification — v0.9 (draft)
 
 *Corpus delicti for autonomous agents: prove the deed happened before anyone is judged.*
 
@@ -213,7 +213,7 @@ The earlier text of this section called the counterparty-taken offer a blind spo
 
 **XRPPayment (`0x08`).** Also verified against the verifier (not yet on-chain by this project): it returns the first memo's bytes whatever their length, and the destination tag, which `Payment` does not — `Payment` reports a reference only for exactly one memo of exactly 32 bytes. FAssets' direct minting consumes `IXRPPayment.Proof`, so this is the type Flare's own XRP rails now use.
 
-### 6.10 Gross XRP outflow (`AgentRefs.proveExclusive`, `JudgeXrpl.challengeXrpOutflow`) (v0.11)
+### 6.10 Gross XRP outflow (`AgentRefs.proveExclusive`, `JudgeXrpl.fileXrpOutflow`) (v0.11; docket v0.12)
 
 The challenge §6.9 called for. It needs no receipt at all, and it reaches a deed the agent did not sign.
 
@@ -236,13 +236,20 @@ It is sticky, permissionless (the proof speaks), and implies `proven` (§6.8). T
 
 **The challenge.** N `BalanceDecreasingTransaction` proofs. Each: `verifyBalanceDecreasingTransaction`; `sourceId` is the mandate's; `requestBody.sourceAddressIndicator == agentRef` **and** `responseBody.sourceAddressHash == agentRef`; `blockTimestamp` inside the window; transaction ids strictly increasing (one account, so one id is one deed). The outflow is the sum of **positive** `spentAmount`s. `outflow > budget` convicts; severity `outflow − budget`, in the budget bucket (§8.1: nested, high-water mark). Commitment kind `7`, deed ids = the transaction ids in that order.
 
+**The docket (v0.12).** The FDC's XRP verifier remembers about 14 days. A case that had to prove every deed at once therefore died with its oldest deed: an agent that spends 90 % of a 30-day budget on day 1 and overruns on day 20 was out of reach. So the case is a file that grows. `fileXrpOutflow(mandateId, proofs, salt)` verifies each proof not yet on the mandate's docket, marks its transaction id as filed, and adds its outflow to `docket[mandateId]`:
+
+- **Below the budget a filing only records.** No commitment is needed, no verdict follows, and nothing is paid. Anyone can keep a docket current while its deeds are still provable.
+- **The filing that takes the docket past the budget is the conviction,** gated exactly like every other challenge: kind `7`, digest over every transaction id it supplies (ascending), the lowest voting round taken over the proofs it newly verified. Severity is `docket − budget`, nested (§8.1), so a later filing that raises the docket takes the difference.
+- **Proofs already on the docket are skipped, not refused.** A copier who sees an honest crossing filing in the mempool can front-run part of it as a non-crossing filing, which needs no commitment. The honest transaction still lands: its digest is over what it supplied, the skipped proofs count through the docket, and the crossing, which is the only thing that pays, happens in its transaction. A filing that adds nothing reverts `NothingNew`.
+- **The crossing filer is reimbursed for the attestations it supplied itself,** then earns 10 % of the rest. Filers below the budget are not paid (§10).
+
 **Why only positive amounts.** A budget of outflow limits what left. XRP that came back does not un-spend what went: selling and buying back is two deeds, and netting would let a round trip hide what it lost to fees and spread.
 
 **Why a conviction for a transaction the agent never signed is sound.** On XRPL nothing but an account's own keys can make its XRP balance fall. Every path by which someone else's transaction moves it — an offer taken, a check cashed, an escrow finished, a delegated transaction (XLS-75) — starts from an object the account created or a permission it granted; clawback exists only for issued currencies. The offer consumed in the counterparty's transaction is the agent's own standing order, executed later.
 
 **What it covers:** Payment, OfferCreate (crossed at once or consumed later), escrow, AMM deposits, checks, AccountDelete, fees. **What it does not:** issued currencies, RLUSD included — BDT measures the XRP balance only. And the verifier's memory (§10).
 
-**Rehearsed** on XRPL testnet on 2026-09-23 with `tools/xrpl_testnet.py` against the verifier's `prepareResponse`: an offer of 5 XRP consumed by the counterparty's `OfferCreate` returns `VALID`, `spentAmount = 5,000,000` for the offer's owner; the owner's own `OfferCreate` returns `10` (the fee). **Executed on Coston2 (v0.11, mandate #7, 2026-09-23):** 3 + 3 + 3 XRP paid and a 5-XRP offer consumed in the counterparty's transaction, against a 12-XRP outflow budget; four BDT proofs; severity 2,000,030 drops, a sixth of the bond taken — docs/DEPLOYMENTS.md.
+**Rehearsed** on XRPL testnet on 2026-09-23 with `tools/xrpl_testnet.py` against the verifier's `prepareResponse`: an offer of 5 XRP consumed by the counterparty's `OfferCreate` returns `VALID`, `spentAmount = 5,000,000` for the offer's owner; the owner's own `OfferCreate` returns `10` (the fee). **Executed on Coston2 (v0.11, mandate #7, 2026-09-23, before the docket):** 3 + 3 + 3 XRP paid and a 5-XRP offer consumed in the counterparty's transaction, against a 12-XRP outflow budget; four BDT proofs; severity 2,000,030 drops, a sixth of the bond taken — docs/DEPLOYMENTS.md.
 
 ## 7. The effector-side brake (optional, recommended)
 
@@ -299,6 +306,22 @@ Until v0.11 one contract held the collateral and verified every kind of evidence
 
 The split changed no rule: every one of the 146 tests of v0.10 passes against it with the same assertions.
 
+### 8.3 The surety rule — a deposit compensates whom its depositor names (v0.12)
+
+Until v0.12 the remainder of every verdict, after the challenger's share, went to the principal, whoever had posted the money. That made a third party's deposit the prize in the one fraud no challenge can see: principal and agent agree, the agent "overruns" by paying an address the principal controls, and the verdict hands the principal the insurer's collateral. With `k = bond / budget ≥ 1`, every unit of fake overrun was worth at least a unit of someone else's money.
+
+The protocol cannot tell a principal from its sock puppet, so it stops pretending to know who was harmed. It asks the party that bears the risk. Each depositor names a **beneficiary** once per mandate, and the name cannot change:
+
+| how | beneficiary |
+|---|---|
+| `post` by the principal or the agent | the principal (as before) |
+| `post` by anyone else | **the depositor itself** |
+| `postFor(mandateId, b)` | `b`: the venue it insures, a merchant, the principal if it means to, a burn address |
+
+A verdict still takes the same fraction of every deposit (§8.1) and still pays the challenger first. What changes is where the rest of each deposit's share goes: to that deposit's beneficiary. Principal-side shares are credited at the verdict, as before. Every other share accrues per unit of deposit (`remainderPerUnit`, scaled 1e36) and is credited by `settle(mandateId, depositor)`, which is permissionless and idempotent; `withdraw` settles first. A verdict therefore costs the same gas however many depositors there are, and `unsettled[mandateId]` holds what has accrued and not been credited yet, a few wei of rounding included.
+
+**What it achieves, exactly.** Colluders can take from an outsider who posted with `post` only that deposit's share of the challenger's reward: the attestation fees they really paid, plus `CHALLENGER_BPS` (10 %) of the rest. Under v0.11 it was all of it. Measured on the test case: a 30-FLR insurer deposit next to a 10-FLR principal deposit, a fake 100 % overrun, self-challenged by the principal. The principal nets **3 FLR** (10 % of the insurer's 30) instead of 30. The insurer can price that as a fixed, known leak. What it does not do: an outsider who names the principal, or a beneficiary the principal controls, has chosen to be exposed.
+
 ## 9. Privacy
 
 Nothing sensitive is on-chain: mandate envelopes and receipts live off-chain; the chain sees hashes, roots, budgets, windows, and addresses. Selective disclosure of envelope fields is by Merkle inclusion against `mandateHash`. Payer identity in flario receipts is a Poseidon commitment (see flario's RECEIPT_SPEC and its honest caveat that EIP-3009 settlement reveals the payer on-chain anyway). Viewing keys and zero-knowledge proofs over the log are explicitly out of scope for v0.1.
@@ -319,8 +342,9 @@ Nothing sensitive is on-chain: mandate envelopes and receipts live off-chain; th
 - Reimbursement is `n × current fee`, not what the challenger paid: a fee change between request and verdict, or proofs bought at a testnet's price, make the two differ. Supplying superfluous proofs moves value from the principal's share to the challenger's only by what those proofs cost to obtain.
 - An accusation freezes withdrawal of a dead mandate's bond for one response window (§6.4). Each costs its accuser a stake, an attestation, and a real unanchored deed to point at, and an answered one forfeits the stake — but for that window the depositors wait.
 - Under a *delivered* XRPL budget (§6.8) transaction fees are not summed, and an agent can burn fees without limit. Under an *outflow* budget (§6.10) they are, and it cannot.
-- **Cumulative XRPL challenges only see ~14 days back.** The FDC's XRP verifier indexes about 15 days and `XRPPayment` declares a 14-day limit. A challenge needs every deed it sums to be provable when it is brought, so over a mandate window longer than that, early deeds age out and an overrun completed late in the window may be unprovable. `JudgeXrpl.fullyEnforceable(mandateId)` says whether a window fits inside `PROOF_HORIZON` (14 days); refusing longer mandates would make them immune, which is worse. The remedy — recording proven outflow progressively, deduplicated in storage, so that a verdict sums what was recorded plus what is new — is a design for v0.12.
-- **A principal colluding with its own agent can drain a third party's deposit** — and under an outflow budget (§6.10) more easily than under any other, since every outflow counts and there is no list of permitted counterparties: the agent "overruns" by paying an address the principal controls, and the verdict's remainder goes to the principal, out of whatever an insurer posted. This is economics, not a bug, and it is open. Until it is designed away, a deposit by anyone other than the principal's own side is exposed to it.
+- **XRPL deeds must be proven within ~14 days of happening.** The FDC's XRP verifier indexes about 15 days. Under an outflow budget the docket (§6.10, v0.12) carries a deed once it is filed, so long windows are enforceable if somebody keeps filing. §6.8's delivered-payment challenge has no docket yet, and over a window longer than `PROOF_HORIZON` a late overrun may be unprovable there (`JudgeXrpl.fullyEnforceable`).
+- **Principal–agent collusion still takes the challenger's reward** from an outsider's deposit (§8.3): 10 % of its share of a verdict plus the fees actually paid, down from all of it before v0.12. An outsider who names the principal, or a beneficiary the principal controls, as its deposit's beneficiary is exposed to the whole of it, by its own choice.
+- Keeping a docket below the budget (§6.10) is unpaid. Filers pay for attestations that are reimbursed only if their filing is the one that crosses. Until a market for corroboration pays for it, a long mandate is only as enforceable as somebody's willingness to file for it inside the verifier's ~14 days.
 - An XRPL account may declare exclusivity for two overlapping mandates. Each is then judged on the same outflow; the account made two promises it cannot both keep, and that is its doing.
 - An effector that is merely late — writing the deed into the tally within `meterGrace` of it (§6.5) — is not convicted of under-reporting, and neither is one colluding with the agent that manages to write inside that window. The grace is two orders of magnitude above the honest write's latency and well below the earliest possible reveal, so the window is real but narrow; making it zero would convict effectors for a slow block.
 - `CorroborationLog` counts each deed once per agent (v0.10), so the same transaction cannot be entered into an agent's record under several mandates. It still counts what somebody chose to prove. It is a floor on corroboration, never the rate: an agent pays for the attestations it wants on its record and not for the others, and nothing obliges anyone to corroborate anything. It also cannot tell a deed from a wash: an agent can pay dust to itself and corroborate it all day, which is why §11 says to weigh by value — and a score should weigh by counterparty as well.

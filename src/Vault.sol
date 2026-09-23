@@ -85,6 +85,48 @@ contract Vault is DelictiErrors {
     mapping(uint256 => mapping(address => uint256)) public depositOf;
     mapping(uint256 => uint256) public totalDeposits;
 
+    // -----------------------------------------------------------------------------------
+    // The surety rule (v0.12, SPEC §8.3): a deposit compensates whom its depositor names.
+    //
+    // Until v0.12 the remainder of every verdict went to the principal, whoever had posted the
+    // money. That made a third party's deposit a prize for the one collusion no challenge can
+    // detect: principal and agent agree, the agent "overruns" by paying an address the principal
+    // controls, and the verdict hands the principal the insurer's collateral. The protocol cannot
+    // tell a principal from its sock puppet, so it stops pretending to know who was harmed and
+    // asks the party that bears the risk. Each depositor names a beneficiary once per mandate:
+    //
+    //   - the principal and the agent, posting with `post`, name the principal (as before);
+    //   - anyone else, posting with `post`, names ITSELF — no third party's money reaches the
+    //     principal unless that third party says so (`postFor(mandateId, principal)`);
+    //   - `postFor` names anyone: the insured venue, a merchant, a burn address.
+    //
+    // A verdict still takes the same fraction of every deposit (pro rata, §8.1) and still pays the
+    // challenger first. What changes is where the REST of each deposit's share goes. Colluders
+    // can then extract from an outsider's deposit only the challenger's reward — bounded by
+    // `CHALLENGER_BPS` of what the verdict took plus the attestation fees they really paid —
+    // instead of all of it.
+    //
+    // Principal-side shares are credited at the verdict, exactly as before. Every other share
+    // accrues per unit of deposit and is credited to its beneficiary by `settle` (anyone may call
+    // it; `withdraw` calls it too), so a verdict costs the same gas whatever the number of depositors.
+    // -----------------------------------------------------------------------------------
+
+    /// @notice mandateId => depositor => who that deposit compensates. Fixed at its first post.
+    mapping(uint256 => mapping(address => address)) public beneficiaryOf;
+    /// @notice mandateId => deposits whose beneficiary is the mandate's principal.
+    mapping(uint256 => uint256) public principalSide;
+    /// @notice mandateId => remainder per unit of non-principal deposit, scaled by `ACC_SCALE`.
+    mapping(uint256 => uint256) public remainderPerUnit;
+    /// @dev 1e36, not 1e18: the per-unit division is followed by a multiplication in `settle`, and at
+    ///      this scale what rounding keeps back is below one wei per 1e18 FLR of deposit. The largest
+    ///      product, deposit × accumulator, stays under 1e66 for any real amount of FLR.
+    uint256 private constant ACC_SCALE = 1e36;
+    /// @notice mandateId => depositor => how much of its accrued remainder was already credited.
+    mapping(uint256 => mapping(address => uint256)) public remainderSettled;
+    /// @notice mandateId => remainder accrued to non-principal deposits and not yet credited.
+    ///         Holds a few wei of rounding for ever; that is what makes the books exact.
+    mapping(uint256 => uint256) public unsettled;
+
     /// @notice How long the bond stays frozen after the mandate's authority died. A challenge needs
     ///         an on-chain FDC request, a finalised round and a DA fetch; without the window the
     ///         principal empties the bond in the transaction that revokes the mandate.
@@ -124,6 +166,8 @@ contract Vault is DelictiErrors {
 
     event BondPosted(uint256 indexed mandateId, address indexed by, uint256 amount, uint256 total);
     event BondWithdrawn(uint256 indexed mandateId, address indexed by, address to, uint256 amount);
+    event BeneficiaryNamed(uint256 indexed mandateId, address indexed depositor, address indexed beneficiary);
+    event RemainderSettled(uint256 indexed mandateId, address indexed depositor, address indexed beneficiary, uint256 amount);
     event Claimed(address indexed who, uint256 amount);
     event ChallengeCommitted(bytes32 indexed commitment, address indexed by, uint64 at);
     event CommitmentConsumed(bytes32 indexed commitment, uint256 indexed mandateId, uint8 kind, uint64 votingRound);
@@ -246,10 +290,21 @@ contract Vault is DelictiErrors {
     // Deposits
     // -----------------------------------------------------------------------------------
 
-    /// @notice Anyone may post bond under a mandate (agent, operator, or an insurer).
+    /// @notice Anyone may post bond under a mandate (agent, operator, or an insurer). The principal
+    ///         and the agent compensate the principal; anyone else compensates itself (§8.3).
     function post(uint256 mandateId) external payable {
-        if (slashed[mandateId]) revert BondSlashed();
         MandateRegistry.Mandate memory m = registry.get(mandateId);
+        _post(mandateId, m, (msg.sender == m.principal || msg.sender == m.agent) ? m.principal : msg.sender);
+    }
+
+    /// @notice Post bond that compensates `beneficiary` — the party this depositor insures.
+    function postFor(uint256 mandateId, address beneficiary) external payable {
+        if (beneficiary == address(0)) revert NoBeneficiary();
+        _post(mandateId, registry.get(mandateId), beneficiary);
+    }
+
+    function _post(uint256 mandateId, MandateRegistry.Mandate memory m, address beneficiary) internal {
+        if (slashed[mandateId]) revert BondSlashed();
         // Only this Vault can revoke the mandate on proof; posted anywhere else, the deposit would
         // merely look like collateral.
         if (m.bond != address(this)) revert NotThisBond();
@@ -257,6 +312,16 @@ contract Vault is DelictiErrors {
         if (!registry.acknowledged(mandateId)) revert NotAcknowledged();
         // ...and the account on the other chain must have said so itself.
         if (m.agentRef != bytes32(0) && !agentRefs.proven(mandateId)) revert AgentRefNotProven();
+        address named = beneficiaryOf[mandateId][msg.sender];
+        if (named == address(0)) {
+            beneficiaryOf[mandateId][msg.sender] = beneficiary;
+            emit BeneficiaryNamed(mandateId, msg.sender, beneficiary);
+        } else if (named != beneficiary) {
+            revert BeneficiaryFixed();
+        }
+        if (beneficiary == m.principal) principalSide[mandateId] += msg.value;
+        // No verdict has happened yet (a slashed mandate takes no deposits), so nothing has accrued
+        // and the new deposit owes nothing to the past.
         bondOf[mandateId] += msg.value;
         depositOf[mandateId][msg.sender] += msg.value;
         totalDeposits[mandateId] += msg.value;
@@ -273,13 +338,31 @@ contract Vault is DelictiErrors {
         uint64 death = registry.deathTime(mandateId);
         if (death == type(uint64).max || block.timestamp < uint256(death) + COOLING_WINDOW) revert CoolingWindow();
         if (openAccusations[mandateId] != 0) revert AccusationOpen();
+        settle(mandateId, msg.sender); // the beneficiary is owed its share before the deposit leaves
         uint256 amt = (dep * bondOf[mandateId]) / totalDeposits[mandateId];
+        if (beneficiaryOf[mandateId][msg.sender] == registry.get(mandateId).principal) principalSide[mandateId] -= dep;
         depositOf[mandateId][msg.sender] = 0;
+        remainderSettled[mandateId][msg.sender] = 0;
         totalDeposits[mandateId] -= dep;
         bondOf[mandateId] -= amt;
         emit BondWithdrawn(mandateId, msg.sender, to, amt);
         (bool ok,) = to.call{value: amt}("");
         if (!ok) revert TransferFailed();
+    }
+
+    /// @notice Credit a non-principal deposit's beneficiary with what verdicts have accrued to it.
+    ///         Permissionless and idempotent; a principal-side deposit has nothing to settle.
+    function settle(uint256 mandateId, address depositor) public {
+        address b = beneficiaryOf[mandateId][depositor];
+        if (b == address(0) || b == registry.get(mandateId).principal) return;
+        uint256 accrued = (depositOf[mandateId][depositor] * remainderPerUnit[mandateId]) / ACC_SCALE;
+        uint256 done = remainderSettled[mandateId][depositor];
+        if (accrued <= done) return;
+        uint256 due = accrued - done;
+        remainderSettled[mandateId][depositor] = accrued;
+        unsettled[mandateId] -= due;
+        owed[b] += due;
+        emit RemainderSettled(mandateId, depositor, b, due);
     }
 
     /// @notice Pull whatever you were credited: a challenger's reward, a principal's remainder, a stake.
@@ -372,11 +455,25 @@ contract Vault is DelictiErrors {
         uint256 reward = cost + ((taken - cost) * CHALLENGER_BPS) / 10_000;
         owed[beneficiary] += reward;
         MandateRegistry.Mandate memory m = registry.get(mandateId);
-        owed[m.principal] += taken - reward;
+        _distribute(mandateId, m.principal, taken - reward);
         verdictsAgainst[m.agent]++;
         takenFrom[m.agent] += taken;
         if (first) registry.revokeByBond(mandateId);
         emit Verdict(mandateId, beneficiary, kind, severity, severityOf[mandateId], budget, taken, reward, slashedAmount[mandateId]);
+    }
+
+    /// @dev The remainder of a verdict, split the way the deposits it came from were: the principal-
+    ///      side fraction to the principal now, the rest accrued per unit for `settle`. Rounding goes
+    ///      to the principal side, and with no principal-side deposits stays in `unsettled`.
+    function _distribute(uint256 mandateId, address principal, uint256 rest) internal {
+        uint256 total = totalDeposits[mandateId];
+        uint256 others = total - principalSide[mandateId];
+        uint256 toOthers = others == 0 ? 0 : (rest * others) / total;
+        owed[principal] += rest - toOthers;
+        if (toOthers != 0) {
+            remainderPerUnit[mandateId] += (toOthers * ACC_SCALE) / others;
+            unsettled[mandateId] += toOthers;
+        }
     }
 
     function _penalty(uint256 base, uint256 budget, uint256 severity) internal pure returns (uint256 p) {

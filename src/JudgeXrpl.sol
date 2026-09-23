@@ -58,8 +58,9 @@ contract JudgeXrpl is DelictiErrors {
         return ContractRegistry.getFdcVerification();
     }
 
-    /// @notice Whether every deed inside the mandate's window can still be proven at the last moment
-    ///         a challenge could need it — i.e. whether the window fits inside the verifier's horizon.
+    /// @notice Whether the mandate's whole window fits inside the verifier's memory. Since v0.12 a
+    ///         longer window is still enforceable through the docket — but only if every deed is
+    ///         filed within `PROOF_HORIZON` of happening. `false` means: somebody has to keep filing.
     function fullyEnforceable(uint256 mandateId) external view returns (bool) {
         MandateRegistry.Mandate memory m = registry.get(mandateId);
         return m.validUntil - m.validFrom <= PROOF_HORIZON;
@@ -144,20 +145,35 @@ contract JudgeXrpl is DelictiErrors {
     // is this mandate's business — and promised it with the XRPL key (`AgentRefs.proveExclusive`).
     // -----------------------------------------------------------------------------------
 
-    /// @notice N `BalanceDecreasingTransaction` proofs for the mandate's XRPL account, inside its
-    ///         window, whose positive `spentAmount`s sum past the budget. Only mandates whose
-    ///         `assetKey` is `Kinds.XRP_OUTFLOW_KEY` and whose account proved exclusivity.
-    /// @dev    - Only POSITIVE amounts are summed. A budget of outflow is a limit on what left, and
-    ///           XRP that came back does not un-spend what went: selling and buying back is still
-    ///           two deeds, and netting would let a round trip hide a loss to fees and spread.
-    ///         - `spentAmount` includes the fee when the account signed the transaction. The budget
-    ///           is gross outflow including fees, so fees count: SPEC §10's "an agent can burn fees
-    ///           without limit" does not hold under this measure.
-    ///         - Transaction ids strictly increasing: dedup without storage. One account, so one
-    ///           transaction id is one deed.
-    /// @param salt the secret from the commitment (`kind = 7`, digest over the transaction ids in
-    ///        this same ascending order)
-    function challengeXrpOutflow(uint256 mandateId, IBalanceDecreasingTransaction.Proof[] calldata fdcProofs, bytes32 salt)
+    /// @notice The docket: gross outflow of each mandate's account proven so far, and which
+    ///         transactions it already counts (v0.12, SPEC §6.10).
+    /// @dev    Why it exists. The FDC's XRP verifier remembers ~14 days, so a cumulative case that
+    ///         had to re-prove every deed at once died with the oldest one: an agent spending 90% of
+    ///         a 30-day budget on day 1 and overrunning on day 20 was out of reach. A docket turns
+    ///         the case into a file that grows — each deed proven once, while it can still be
+    ///         proven, and counted for ever after.
+    mapping(uint256 => uint256) public docket;
+    mapping(uint256 => mapping(bytes32 => bool)) public filed;
+
+    event OutflowFiled(uint256 indexed mandateId, address indexed filer, uint256 added, uint256 docketTotal, uint256 newDeeds);
+
+    /// @notice File BDT proofs of the mandate's account's outflow on its docket. Below the budget
+    ///         this only records, and needs no commitment — anyone can keep a docket current, and
+    ///         nothing is paid for it. The filing that takes the docket PAST the budget is a
+    ///         conviction, and that one must be committed (kind 7, digest over every transaction id
+    ///         it supplies, ascending), exactly like any other challenge.
+    /// @dev    - Proofs already on the docket are skipped, not refused. A copier who sees an honest
+    ///           filing in the mempool can front-run part of it as a non-crossing filing (that
+    ///           needs no commitment), but the honest transaction still lands: its digest is over
+    ///           the ids it supplied, the skipped ones still count through the docket, and the
+    ///           crossing — the only thing that pays — happens in its transaction.
+    ///         - A filing that adds nothing reverts `NothingNew`.
+    ///         - Only POSITIVE `spentAmount`s count: a budget of outflow limits what left; XRP that
+    ///           came back does not un-spend it. Fees count: the agent paid them.
+    ///         - The crossing filer is reimbursed for the attestations IT supplied (new proofs only)
+    ///           and earns 10% of the rest. Filers below the budget are paid nothing — keeping a
+    ///           docket is a public good today, and SPEC §10 says so.
+    function fileXrpOutflow(uint256 mandateId, IBalanceDecreasingTransaction.Proof[] calldata fdcProofs, bytes32 salt)
         external
     {
         if (vault.bondOf(mandateId) == 0) revert NothingToSlash();
@@ -168,26 +184,44 @@ contract JudgeXrpl is DelictiErrors {
         if (m.assetKey != Kinds.XRP_OUTFLOW_KEY) revert WrongAsset();
         if (!agentRefs.exclusive(mandateId)) revert NotExclusiveOnXrpl();
 
-        uint256 outflow;
-        bytes32[] memory ids = new bytes32[](n);
-        uint64 minRound = type(uint64).max;
+        (uint256 added, uint256 fresh, uint64 minRound, bytes32[] memory ids) = _file(mandateId, fdcProofs, m);
+        if (fresh == 0) revert NothingNew();
+        uint256 before = docket[mandateId];
+        uint256 total = before + added;
+        docket[mandateId] = total;
+        emit OutflowFiled(mandateId, msg.sender, added, total, fresh);
+        if (total <= m.budget || total == before) return; // recorded; nothing to judge yet
+
+        vault.consumeCommitment(msg.sender, Kinds.XRP_OUTFLOW, mandateId, keccak256(abi.encode(ids)), salt, minRound);
+        uint256 taken = vault.verdict(
+            Kinds.XRP_OUTFLOW, mandateId, m.budget, total - m.budget, msg.sender, fresh, bytes32("BalanceDecreasingTransaction"), m.sourceId, true
+        );
+        emit XrpOutflowProven(mandateId, total, m.budget, fresh, msg.sender, taken);
+    }
+
+    /// @dev Verifies and dockets every proof not yet filed. Returns what they add, how many were new,
+    ///      the lowest voting round AMONG THE NEW ONES (a skipped proof is not verified here, so its
+    ///      round is not evidence), and every supplied id in order, for the commitment digest.
+    function _file(uint256 mandateId, IBalanceDecreasingTransaction.Proof[] calldata fdcProofs, MandateRegistry.Mandate memory m)
+        internal
+        returns (uint256 added, uint256 fresh, uint64 minRound, bytes32[] memory ids)
+    {
+        uint256 n = fdcProofs.length;
+        ids = new bytes32[](n);
+        minRound = type(uint64).max;
         for (uint256 i = 0; i < n; i++) {
             IBalanceDecreasingTransaction.Proof calldata pr = fdcProofs[i];
             bytes32 txid = pr.data.requestBody.transactionId;
             if (i != 0 && txid <= ids[i - 1]) revert UnorderedTxs();
             ids[i] = txid;
-            if (pr.data.votingRound < minRound) minRound = pr.data.votingRound;
+            if (filed[mandateId][txid]) continue;
             uint256 out = _outflow(pr, m);
-            outflow += out;
+            filed[mandateId][txid] = true;
+            fresh++;
+            added += out;
+            if (pr.data.votingRound < minRound) minRound = pr.data.votingRound;
             emit DeedJudged(mandateId, Kinds.XRP_OUTFLOW, txid, out);
         }
-        vault.consumeCommitment(msg.sender, Kinds.XRP_OUTFLOW, mandateId, keccak256(abi.encode(ids)), salt, minRound);
-        if (outflow <= m.budget) revert WithinBudget();
-
-        uint256 taken = vault.verdict(
-            Kinds.XRP_OUTFLOW, mandateId, m.budget, outflow - m.budget, msg.sender, n, fdcProofs[0].data.attestationType, m.sourceId, true
-        );
-        emit XrpOutflowProven(mandateId, outflow, m.budget, n, msg.sender, taken);
     }
 
     /// @dev One attested balance decrease of the mandate's account inside its window. Returns what

@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.12.0 — 2026-09-23 — the surety rule and the docket
+
+Two open problems from v0.11's §10, both economic, both closed by changing who is owed what rather than by adding a check.
+
+### The surety rule — a deposit compensates whom its depositor names (SPEC §8.3)
+
+Until now the remainder of every verdict went to the principal, whoever had posted the money. Principal and agent could agree on a fake overrun, paid to an address the principal controls, and the verdict handed the principal an insurer's collateral. Under an outflow budget (§6.10), which has no list of counterparties, this was easier than anywhere else. The protocol cannot tell a principal from its sock puppet, so it asks the party that bears the risk:
+
+- `post` by the principal or the agent → the remainder goes to the principal, as before. `post` by **anyone else** → the remainder of its share goes to **itself**. `postFor(mandateId, beneficiary)` names anyone. The name is fixed per depositor per mandate.
+- Principal-side shares are credited at the verdict. Every other share accrues per unit of deposit and is credited by the permissionless `settle`, so verdict gas does not grow with the number of depositors. `withdraw` settles first. `unsettled[mandateId]` keeps the books exact.
+- **What colluders can still take from an outsider's plain deposit is its share of the challenger's reward:** 3 FLR of an insurer's 30 in the test case, where it used to be 30. `test_collusionCannotHarvestAnOutsidersDeposit`.
+- The balance invariant now includes `unsettled`, and the handler posts for other beneficiaries and settles.
+
+### The docket — outflow cases outlive the verifier's memory (SPEC §6.10)
+
+The FDC's XRP verifier remembers about 14 days, so a case that had to prove every deed at once died with its oldest deed. `challengeXrpOutflow` becomes `fileXrpOutflow`:
+
+- Each proven transaction goes on the mandate's docket once (`filed`, `docket`). Below the budget a filing only records: no commitment, no verdict, no pay. The filing that crosses the budget is the conviction, committed like every other challenge (kind 7), and a later one that raises the docket takes the difference.
+- Already-filed proofs are skipped, not refused, so a copier who front-runs part of an honest crossing filing as a plain recording cannot kill it or take its reward (`test_frontRunSubsetDoesNotStealTheCase`). A filing that adds nothing reverts `NothingNew`.
+- `test_docketConvictsAcrossTheVerifiersMemory`: most of the budget spent on day 1, the overrun on day 20, and the conviction needs proofs of day 20's deeds only.
+- Stated, not solved: filing below the budget is unpaid.
+
+### Also
+
+`Deploy.s.sol` can reuse an `AgentRefs` (`REUSE_REFS`) so XRPL statements already made stay valid. Vault 9,385 B. 177 tests.
+
 ## v0.11.0 — 2026-09-23 — the Vault and its judges; the agent convicted for a deed it never signed
 
 ### Executed on Coston2 (2026-09-23)

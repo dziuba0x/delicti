@@ -95,13 +95,13 @@ contract Invariants is Test {
     /// to be pulled, or the stake of an accusation still open. Nothing else, and nothing missing.
     function invariant_bondIsExactlyBackedByItsBooks() public view {
         uint256 books;
-        for (uint256 i = 0; i < h.mandateCount(); i++) books += bond.bondOf(h.mandates(i));
+        for (uint256 i = 0; i < h.mandateCount(); i++) books += bond.bondOf(h.mandates(i)) + bond.unsettled(h.mandates(i));
         for (uint256 i = 0; i < h.actorCount(); i++) books += bond.owed(h.actors(i));
         for (uint256 i = 0; i < h.accusationCount(); i++) {
             (,,,,, bool closed,) = judge.accusations(h.accusationIds(i));
             if (!closed) books += bond.ACCUSATION_STAKE();
         }
-        assertEq(address(bond).balance, books, "balance != bonds + credits + open stakes");
+        assertEq(address(bond).balance, books, "balance != bonds + credits + unsettled remainders + open stakes");
     }
 
     /// What has left can never exceed what came in.

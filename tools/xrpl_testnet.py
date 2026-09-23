@@ -21,6 +21,13 @@ Commands
     offer <seed> <drops> <value> <cur> <issuer>
                                        rest an offer SELLING <drops> of XRP for <value> <cur>.<issuer>;
                                        prints its tx id (the offer's own tx: only the fee leaves here)
+    batch <seed> <dest> <drops>[,<drops>…]
+                                       one XLS-56 Batch (tfAllOrNothing) of Payments; prints the outer id
+                                       and every inner id. Inner transactions are ledger transactions of
+                                       their own (fee 0, meta.ParentBatchID), and the XRP leaves the
+                                       account in THEM, not in the outer Batch (which pays only the fee).
+                                       Verified on devnet 2026-09-23; testnet/mainnet: BatchV1_1 pending.
+                                       ENDPOINT=https://devnet.xrpl-labs.com/ to run it where it is live.
     take <seed> <value> <cur> <drops>  the issuer sells <value> of its OWN <cur> for <drops> of XRP —
                                        crossing a resting offer; prints its tx id. This is the
                                        transaction in which the OFFER OWNER's XRP leaves (SPEC §6.10)
@@ -39,7 +46,8 @@ from xrpl.transaction import submit_and_wait
 from xrpl.wallet import Wallet, generate_faucet_wallet
 
 # 443 only: s.altnet.rippletest.net:51234 is not reachable from every sandbox (claude/11).
-ENDPOINT = "https://testnet.xrpl-labs.com/"
+import os
+ENDPOINT = os.environ.get("ENDPOINT", "https://testnet.xrpl-labs.com/")
 
 
 def client() -> JsonRpcClient:
@@ -101,6 +109,23 @@ def cmd_take(seed: str, value: str, cur: str, drops: str) -> None:
     print(json.dumps({"txid": res["hash"]}))
 
 
+def cmd_batch(seed: str, dest: str, amounts: str) -> None:
+    from xrpl.account import get_next_valid_seq_number
+    from xrpl.models.transactions import Batch, BatchFlag
+    w = Wallet.from_seed(seed)
+    seq = get_next_valid_seq_number(w.classic_address, client())
+    inner = [
+        Payment(account=w.classic_address, destination=dest, amount=str(int(a)), sequence=seq + 1 + i,
+                fee="0", signing_pub_key="", flags=0x40000000)  # tfInnerBatchTxn
+        for i, a in enumerate(amounts.split(","))
+    ]
+    res = _submit(Batch(account=w.classic_address, raw_transactions=inner, flags=BatchFlag.TF_ALL_OR_NOTHING, sequence=seq), w)
+    from xrpl.models.requests import AccountTx
+    txs = client().request(AccountTx(account=w.classic_address, limit=len(inner) + 2)).result["transactions"]
+    kids = [t["hash"] for t in txs if t["meta"].get("ParentBatchID") == res["hash"]]
+    print(json.dumps({"txid": res["hash"], "inner": kids}))
+
+
 def cmd_tx(txid: str) -> None:
     from xrpl.models.requests import Tx
 
@@ -111,7 +136,7 @@ def main() -> None:
     if len(sys.argv) < 2:
         raise SystemExit(__doc__)
     cmd, args = sys.argv[1], sys.argv[2:]
-    {"fund": cmd_fund, "pay": cmd_pay, "tx": cmd_tx, "trust": cmd_trust, "offer": cmd_offer, "take": cmd_take}[cmd](*args)
+    {"fund": cmd_fund, "pay": cmd_pay, "tx": cmd_tx, "trust": cmd_trust, "offer": cmd_offer, "take": cmd_take, "batch": cmd_batch}[cmd](*args)
 
 
 if __name__ == "__main__":

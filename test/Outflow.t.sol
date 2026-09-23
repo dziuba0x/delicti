@@ -283,9 +283,13 @@ contract OutflowTest is Test {
     }
 
     function _longMandate(uint64 window) internal returns (uint256 id) {
+        return _longMandate(window, BUDGET);
+    }
+
+    function _longMandate(uint64 window, uint256 budget) internal returns (uint256 id) {
         vm.prank(principal);
         id = reg.commit(
-            agent, keccak256("long"), 0, 0, BUDGET, uint64(block.timestamp), uint64(block.timestamp + window),
+            agent, keccak256("long"), 0, 0, budget, uint64(block.timestamp), uint64(block.timestamp + window),
             MandateRegistry.Terms({sourceId: SRC, assetKey: OUTFLOW, agentRef: AGENT_XRPL, bond: address(bond)})
         );
         vm.prank(agent);
@@ -303,6 +307,41 @@ contract OutflowTest is Test {
         bond.commitChallenge(bond.commitmentFor(who, id, bond.KIND_XRP_OUTFLOW(), bond.deedsDigest(ids), SALT));
         vm.warp(t);
         rounds.setRoundStart(500, t);
+    }
+
+    /// Property: whatever order and batching the filings come in, and however often the same
+    /// transaction is filed again, the docket is the sum of positive outflow over DISTINCT
+    /// transactions. (Budget set out of reach so no filing crosses; crossing is tested above.)
+    function testFuzz_docketIsTheSumOverDistinctTransactions(uint256 seed) public {
+        uint256 id = _longMandate(1 days, type(uint128).max);
+        uint256[16] memory amountOf;
+        bool[16] memory seen;
+        uint256 expected;
+        for (uint256 round = 0; round < 6; round++) {
+            uint256 k = 1 + (uint256(keccak256(abi.encode(seed, round))) % 4);
+            IBalanceDecreasingTransaction.Proof[] memory pr = new IBalanceDecreasingTransaction.Proof[](k);
+            uint256 base = uint256(keccak256(abi.encode(seed, round, "base"))) % 12; // ids 0..15, overlapping rounds
+            bool fresh;
+            for (uint256 i = 0; i < k; i++) {
+                uint256 t = base + i; // strictly increasing inside a filing
+                if (amountOf[t] == 0) {
+                    amountOf[t] = 1 + uint256(keccak256(abi.encode(seed, t))) % 3_000_000;
+                }
+                // every third transaction is an inflow for the agent
+                int256 spent = t % 3 == 2 ? -int256(amountOf[t]) : int256(amountOf[t]);
+                pr[i] = _bdt(t, spent, uint64(block.timestamp));
+                if (!seen[t]) {
+                    seen[t] = true;
+                    fresh = true;
+                    if (spent > 0) expected += amountOf[t];
+                }
+            }
+            vm.prank(copier);
+            if (!fresh) vm.expectRevert(DelictiErrors.NothingNew.selector);
+            xjudge.fileXrpOutflow(id, pr, bytes32(0));
+            assertEq(xjudge.docket(id), expected);
+        }
+        assertFalse(bond.slashed(id));
     }
 
     // ------------------------------------------------------------------ v0.12: the surety rule

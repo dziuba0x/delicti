@@ -194,6 +194,18 @@ contract XrplTest is Test {
         }
     }
 
+    /// Found by mutation testing (mewt, IF mutant on the kind check): no test pinned that a receipt
+    /// of another kind — here an EVM-transaction receipt — is refused on the XRPL payment path.
+    function test_revert_receiptOfAnotherKind() public {
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _bundle(5);
+        ls[1].kind = Receipts.KIND_EVM_TX;
+        vm.prank(agent);
+        idx[1] = anchorLog.anchor(mandateId, Receipts.hashMem(ls[1]), 1);
+        vm.prank(challenger);
+        vm.expectRevert(DelictiErrors.WrongReceiptKind.selector);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+    }
+
     function test_x402ReceiptsKeyedByTransactionConvict() public {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _x402Bundle();
         _arm(challenger, mandateId, pr);

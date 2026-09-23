@@ -2,6 +2,9 @@
 
 ## Unreleased (after v0.12.0)
 
+- **XLS-56 Batch, measured on devnet:** the XRP leaves in the inner transactions (own hashes, fee 0, unsigned, `ParentBatchID`), not in the outer one. Whether the FDC verifier attests an inner transaction is unknown until the testnet enables `BatchV1_1`. This is a possible §6.10 blind spot, stated in SPEC §10. `tools/xrpl_testnet.py batch` is the probe to rerun.
+- Mutation testing (mewt, Trail of Bits) on the v0.12 code: in the first 24 mutants, 23 were caught. The one that survived was the removal of the receipt-kind check on the XRPL payment path, a test gap rather than a code bug. `test_revert_receiptOfAnotherKind` now kills it, confirmed by re-applying the mutant.
+- `testFuzz_docketIsTheSumOverDistinctTransactions`: however filings are ordered, batched and repeated, the docket equals the positive outflow over distinct transactions (512 runs).
 - **Kind-4 receipts: an XRPL payment named by its transaction id** (SPEC §4, §6.8). x402 on XRPL binds payments with `InvoiceID`, which no FDC type returns, so memo-referenced receipts could never match a real x402-XRPL settlement. `JudgeXrpl.challengeBudgetOverrunPayment` now also accepts kind 4, matched on `requestBody.transactionId`. Three tests. 180 tests.
 - `test/halmos/VaultMath.t.sol`: bounded symbolic checks of the Vault's arithmetic (penalty bounded and monotone; the surety split conserves value). The conservation check does not finish at 600 s over 64-bit inputs; it is recorded, not claimed.
 - **Tooling trap, found by mutation testing:** the npm distribution of `forge` (`@foundry-rs/forge`, a Node shim) exits **0 when tests fail**, setUp failures included. The native binary exits 1. Every result in this repo's history was read from the output, not the exit code. Scripts now judge a run by its summary line (`scripts/lib/green.sh`).

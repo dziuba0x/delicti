@@ -37,16 +37,18 @@ contract Invariants is Test {
         anchorLog = new AnchorLog(reg);
         meter = new SpendMeter(reg);
         rounds = new MockProtocolsV2();
+        IFdcVerification fdc = IFdcVerification(address(new CredulousFdc()));
+        AgentRefs refs = new AgentRefs(reg, fdc);
         (bond, judge, xjudge) = Core.deploy(
             reg,
             anchorLog,
-            IFdcVerification(address(new CredulousFdc())),
+            fdc,
             24 hours,
             1 hours,
             meter,
             10 minutes,
-            ProtocolsV2Interface(address(rounds)), new AgentRefs(reg, IFdcVerification(address(0))), 5 minutes);
-        h = new Handler(reg, anchorLog, bond, judge, meter, rounds);
+            ProtocolsV2Interface(address(rounds)), refs, 5 minutes);
+        h = new Handler(reg, anchorLog, bond, judge, meter, rounds, xjudge, refs);
         targetContract(address(h));
     }
 
@@ -87,6 +89,22 @@ contract Invariants is Test {
         assertEq(h.nWithdrawals(), 1, "withdrawal flow did not withdraw");
         for (uint256 i = 0; i < 4; i++) h.claim(i);
         assertGt(h.nClaims(), 0, "nobody could claim");
+
+        // XRPL, same Vault: a docket kept below the budget by an uncommitted filer, re-filed with
+        // overlap, then crossed by a committed one — and the crossing must take something.
+        h.xrplScenario(0, 1, 3_000_000, 10 ether, 1 days); // mandate 5, budget 3 XRP
+        h.xrplMove(0, 1_000_012, 0);
+        h.xrplMove(0, 1_000_012, 0);
+        h.xrplMove(0, -700_000, 0); // XRP coming in un-spends nothing
+        h.fileOutflow(0, 2, 0, 2, false, keccak256("x1"));
+        assertEq(h.nFilings(), 1, "a recording filing did not land");
+        h.xrplMove(0, 1_500_000, 0);
+        h.fileOutflow(0, 3, 1, 3, false, keccak256("x2")); // would cross uncommitted: refused
+        assertEq(h.nFilings(), 1, "an uncommitted crossing landed");
+        h.fileOutflow(0, 3, 0, 4, true, keccak256("x3")); // overlaps what is filed, crosses committed
+        assertEq(h.nFilings(), 2, "the committed crossing did not land");
+        assertEq(h.nOutflowVerdicts(), 1, "the crossing took nothing");
+        assertEq(h.nSlashes(), 4);
     }
 
     // ---------------------------------------------------------------- value
@@ -189,6 +207,24 @@ contract Invariants is Test {
         }
     }
 
+    // ---------------------------------------------------------------- the docket (§6.10)
+
+    /// The docket is exactly the positive outflow of the distinct transactions it has filed —
+    /// recounted from scratch, whatever order, overlap or repetition the filings came in.
+    function invariant_docketIsTheSumOfWhatItFiled() public view {
+        assertFalse(h.refilingChangedTheDocket(), "a filing added something other than its new outflow");
+        assertFalse(h.docketCountedOutOfWindow(), "the docket filed a move outside the mandate's window");
+        for (uint256 m = 0; m < h.xMandateCount(); m++) {
+            uint256 id = h.xMandates(m);
+            uint256 sum;
+            for (uint256 i = 0; i < h.xrplTxCount(); i++) {
+                (uint256 mid, bytes32 txid, int256 spent,) = h.xtxs(i);
+                if (mid == id && xjudge.filed(id, txid) && spent > 0) sum += uint256(spent);
+            }
+            assertEq(xjudge.docket(id), sum, "docket != sum of positive outflow over filed transactions");
+        }
+    }
+
     /// Not a property: a report. `forge test --match-test invariant_coverageReport -vv` prints how
     /// often the deep states were actually reached in the last run of the campaign.
     function invariant_coverageReport() public view {
@@ -199,6 +235,8 @@ contract Invariants is Test {
         console.log("resolved", h.nResolved());
         console.log("withdrawals", h.nWithdrawals());
         console.log("claims", h.nClaims());
+        console.log("docket filings", h.nFilings());
+        console.log("outflow verdicts", h.nOutflowVerdicts());
     }
 
     // ---------------------------------------------------------------- liveness of the books

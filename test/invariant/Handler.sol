@@ -13,6 +13,10 @@ import {SpendMeter} from "../../src/SpendMeter.sol";
 import {Receipts} from "../../src/Receipts.sol";
 import {IPayment} from "@flarenetwork/flare-periphery-contracts/coston2/IPayment.sol";
 import {IEVMTransaction} from "@flarenetwork/flare-periphery-contracts/coston2/IEVMTransaction.sol";
+import {IBalanceDecreasingTransaction} from
+    "@flarenetwork/flare-periphery-contracts/coston2/IBalanceDecreasingTransaction.sol";
+import {AgentRefs} from "../../src/AgentRefs.sol";
+import {Kinds} from "../../src/Kinds.sol";
 import {IReferencedPaymentNonexistence} from
     "@flarenetwork/flare-periphery-contracts/coston2/IReferencedPaymentNonexistence.sol";
 import {MockProtocolsV2} from "../Rounds.sol";
@@ -30,6 +34,14 @@ contract CredulousFdc {
     }
 
     function verifyReferencedPaymentNonexistence(IReferencedPaymentNonexistence.Proof calldata)
+        external
+        pure
+        returns (bool)
+    {
+        return true;
+    }
+
+    function verifyBalanceDecreasingTransaction(IBalanceDecreasingTransaction.Proof calldata)
         external
         pure
         returns (bool)
@@ -106,7 +118,9 @@ contract Handler is Test {
     Pending[] public pendings;
     uint256[] public accusationIds;
 
-    constructor(MandateRegistry r, AnchorLog l, Vault b, JudgeEvm j, SpendMeter m, MockProtocolsV2 p) {
+    constructor(MandateRegistry r, AnchorLog l, Vault b, JudgeEvm j, SpendMeter m, MockProtocolsV2 p, JudgeXrpl x, AgentRefs refs) {
+        xjudge = x;
+        agentRefs = refs;
         reg = r;
         judge = j;
         anchorLog = l;
@@ -584,5 +598,172 @@ contract Handler is Test {
 
     function accusationCount() external view returns (uint256) {
         return accusationIds.length;
+    }
+
+    // ------------------------------------------------------------------ XRPL: §6.10 on a docket
+    //
+    // v0.12 put two judges behind one Vault. Until now the campaign only ever drove JudgeEvm, so
+    // every value invariant held over a Vault that one judge had touched. This track drives
+    // JudgeXrpl's docket — filings that only record, filings that cross, filings that repeat or
+    // straddle what is already filed — on the SAME Vault, interleaved with everything above.
+
+    JudgeXrpl public xjudge;
+    AgentRefs public agentRefs;
+    bytes32 constant XSRC = bytes32("testXRP");
+
+    struct XTx {
+        uint256 mandateId;
+        bytes32 txid;
+        int256 spent; // negative = XRP came in
+        uint64 ts;
+    }
+
+    XTx[] public xtxs;
+    uint256 xCounter = 0x5000;
+    uint256[] public xMandates;
+
+    uint256 public nFilings; // filings that landed (recording or crossing)
+    uint256 public nOutflowVerdicts; // crossings that took something
+    bool public docketCountedOutOfWindow;
+    bool public refilingChangedTheDocket;
+
+
+    function xrplTxCount() external view returns (uint256) {
+        return xtxs.length;
+    }
+
+    function xMandateCount() external view returns (uint256) {
+        return xMandates.length;
+    }
+
+    function _xref(address agent) internal pure returns (bytes32) {
+        return keccak256(abi.encode("xrpl account of", agent));
+    }
+
+    /// An outflow mandate, acknowledged, made exclusive with the XRPL key, bonded by the principal.
+    function xrplScenario(uint256 pSeed, uint256 aSeed, uint256 budget, uint256 amount, uint64 dur) external {
+        if (mandates.length >= 24) return;
+        address pr = _actor(pSeed);
+        address ag = _actor(aSeed);
+        vm.prank(pr);
+        uint256 id = reg.commit(
+            ag, keccak256("outflow"), 0, 0, bound(budget, 0, 50_000_000), uint64(block.timestamp),
+            uint64(block.timestamp + bound(dur, 1 hours, 30 days)),
+            MandateRegistry.Terms({sourceId: XSRC, assetKey: Kinds.XRP_OUTFLOW_KEY, agentRef: _xref(ag), bond: address(bond)})
+        );
+        mandates.push(id);
+        xMandates.push(id);
+        vm.prank(ag);
+        reg.acknowledge(id);
+        IPayment.Proof memory st;
+        st.data.sourceId = XSRC;
+        st.data.requestBody.transactionId = keccak256(abi.encode("statement", id));
+        st.data.responseBody.sourceAddressHash = _xref(ag);
+        st.data.responseBody.standardPaymentReference = agentRefs.exclusiveFor(id);
+        agentRefs.proveExclusive(id, st);
+        amount = bound(amount, 1, 50 ether);
+        vm.prank(pr);
+        bond.post{value: amount}(id);
+        ghostPosted += amount;
+        ghostPostedTo[id] += amount;
+    }
+
+    /// Something moves the account's balance: a payment, a fee, an offer eaten, or XRP coming in.
+    /// Sometimes a little outside the window, which the docket must never count.
+    function xrplMove(uint256 seed, int256 spent, int32 skew) external {
+        if (xMandates.length == 0 || xtxs.length >= 96) return;
+        uint256 id = xMandates[seed % xMandates.length];
+        spent = bound(spent, -5_000_000, 20_000_000);
+        int256 ts = int256(block.timestamp) + int256(bound(int256(skew), -2 hours, 2 hours));
+        xtxs.push(XTx(id, bytes32(xCounter++), spent, uint64(uint256(ts))));
+    }
+
+    function _bdt(XTx memory t, uint64 round) internal view returns (IBalanceDecreasingTransaction.Proof memory p) {
+        bytes32 ref = reg.get(t.mandateId).agentRef;
+        p.data.attestationType = bytes32("BalanceDecreasingTransaction");
+        p.data.sourceId = XSRC;
+        p.data.votingRound = round;
+        p.data.requestBody.transactionId = t.txid;
+        p.data.requestBody.sourceAddressIndicator = ref;
+        p.data.responseBody.blockTimestamp = t.ts;
+        p.data.responseBody.sourceAddressHash = ref;
+        p.data.responseBody.spentAmount = t.spent;
+    }
+
+    /// @notice File a run of the mandate's moves (ascending, from `startSeed`, `nSeed` of them —
+    ///         overlapping earlier filings is the point). With `committed` the filer commits first
+    ///         and waits out the lead, as an honest crossing filer does; without, only a filing that
+    ///         stays below the budget can land.
+    function fileOutflow(uint256 seed, uint256 whoSeed, uint256 startSeed, uint256 nSeed, bool committed, bytes32 salt)
+        external
+    {
+        if (xMandates.length == 0) return;
+        uint256 id = xMandates[seed % xMandates.length];
+        uint256 total;
+        for (uint256 i = 0; i < xtxs.length; i++) if (xtxs[i].mandateId == id) total++;
+        if (total == 0) return;
+        uint256 start = startSeed % total;
+        uint256 n = bound(nSeed, 1, total - start);
+        XTx[] memory run = new XTx[](n);
+        uint256 k;
+        uint256 j;
+        for (uint256 i = 0; i < xtxs.length && k < n; i++) {
+            if (xtxs[i].mandateId != id) continue;
+            if (j++ >= start) run[k++] = xtxs[i];
+        }
+        address who = _actor(whoSeed);
+        if (committed) {
+            bytes32[] memory ids = new bytes32[](n);
+            for (uint256 i = 0; i < n; i++) ids[i] = run[i].txid;
+            bytes32 c = bond.commitmentFor(who, id, Kinds.XRP_OUTFLOW, keccak256(abi.encode(ids)), salt);
+            _commit(c, who);
+            vm.warp(block.timestamp + bond.commitLead());
+            _sweepLiveness();
+        }
+        uint64 round = uint64(bound(uint256(salt), 1, 1_000_000));
+        rounds.setRoundStart(round, uint64(block.timestamp));
+        IBalanceDecreasingTransaction.Proof[] memory proofs = new IBalanceDecreasingTransaction.Proof[](n);
+        for (uint256 i = 0; i < n; i++) proofs[i] = _bdt(run[i], round);
+
+        uint256 docketBefore = xjudge.docket(id);
+        uint256 expectAdded;
+        for (uint256 i = 0; i < n; i++) {
+            if (!xjudge.filed(id, run[i].txid) && run[i].spent > 0) expectAdded += uint256(run[i].spent);
+        }
+        uint256 bondBefore = bond.bondOf(id);
+        vm.prank(who);
+        try xjudge.fileXrpOutflow(id, proofs, salt) {
+            nFilings++;
+            if (xjudge.docket(id) != docketBefore + expectAdded) refilingChangedTheDocket = true;
+            uint256 slashesBefore = nSlashes;
+            _recordSlash(id, bondBefore);
+            if (nSlashes > slashesBefore) nOutflowVerdicts++;
+            if (committed) {
+                // the committed filing may have been a mere recording; spent or not, the ghost follows the Vault
+                bytes32[] memory ids = new bytes32[](n);
+                for (uint256 i = 0; i < n; i++) ids[i] = run[i].txid;
+                bytes32 c = bond.commitmentFor(who, id, Kinds.XRP_OUTFLOW, keccak256(abi.encode(ids)), salt);
+                if (bond.committedAt(c) == 0 && !ghostConsumed[c]) {
+                    ghostConsumed[c] = true;
+                    ghostConsumeCount[c]++;
+                }
+            }
+        } catch {}
+        _checkWindow(id, run);
+    }
+
+    function _checkWindow(uint256 id, XTx[] memory run) internal {
+        MandateRegistry.Mandate memory m = reg.get(id);
+        for (uint256 i = 0; i < run.length; i++) {
+            if (xjudge.filed(id, run[i].txid) && (run[i].ts < m.validFrom || run[i].ts > m.validUntil)) {
+                docketCountedOutOfWindow = true;
+            }
+        }
+    }
+
+    /// @notice The honest watcher in one call: everything the account did, committed and filed —
+    ///         so crossings happen often enough for the Vault invariants to see XRPL verdicts.
+    function honestOutflow(uint256 seed, uint256 whoSeed, bytes32 salt) external {
+        this.fileOutflow(seed, whoSeed, 0, type(uint256).max, true, salt);
     }
 }

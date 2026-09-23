@@ -135,6 +135,7 @@ TK=$($X take "$CP_SEED" 5 USD $OFFER | txid_of);                                
 P3=$($X pay "$AGENT_SEED" "$CP_ADDR" $PAY "$(cast keccak "outflow $MID/3/$RANDOM")" | txid_of); echo "   payment 3 XRP  $P3"
 
 echo "== 6. commit (kind 7) before a single BDT attestation is requested"
+TAKEN=$(lc $TK)
 SORTED_IDS=$(python3 -c "import sys;print(' '.join(sorted(('0x'+t.lower().removeprefix('0x') for t in sys.argv[1:]), key=lambda h:int(h,16))))" $P1 $P2 $TK $P3)
 delicti_commit $BOND 7 $MID "$SORTED_IDS" "${SALT:-}"
 { echo "MID=$MID"; echo "AGENT_REF=$AGENT_REF"; echo "SORTED_IDS='$SORTED_IDS'"; echo "TAKEN=$(lc $TK)"

@@ -102,12 +102,13 @@ FOUNDRY_INVARIANT_RUNS=1500 FOUNDRY_INVARIANT_DEPTH=200 \
 forge test --fork-url coston2 --match-contract Coston2ForkTest -vv  # live Flare wiring
 ```
 
-Replay a live case against the v0.10 deployment (needs `cast`, `curl`, `python3`; the XRPL run also `pip install xrpl-py`):
+Replay a live case against the v0.11 deployment (needs `cast`, `curl`, `python3`; the XRPL run also `pip install xrpl-py`):
 
 ```bash
-cp .env.example .env             # throwaway key + Flare's public testnet verifier; v0.10 addresses prefilled
+cp .env.example .env             # throwaway key + Flare's public testnet verifier; v0.11 addresses prefilled
 scripts/structuring.sh           # five deeds, commit, FDC proofs, proportional slash, copier refused (~10 min)
 scripts/xrpl-structuring.sh      # the same on XRPL: faucet accounts, AgentRefs proof, five Payment proofs (~15 min)
+scripts/xrpl-outflow.sh          # §6.10: no receipts, an offer eaten by someone else, four BDT proofs (~15 min)
 ```
 
 `xrpl-structuring.sh` writes its state to `.run/` after every step that costs something; `RESUME=1` picks a stalled run up at the attestations and re-commits if the old commitment has aged out.
@@ -116,21 +117,23 @@ Or deploy your own: `forge script script/Deploy.s.sol --rpc-url coston2 --broadc
 
 The scripts in [`scripts/`](scripts) each reproduce one row of the table above: `structuring.sh`, `xrpl-structuring.sh`, `x402-structuring.sh`, `mcp-structuring.sh`, `brake-test.sh`, `spend-meter.sh`, `unanchored-deed.sh`, `contradicted-deed.sh`. Test funds: [Coston2 faucet](https://faucet.flare.network/coston2).
 
-## Contracts (v0.10 on Coston2)
+## Contracts (v0.11 on Coston2)
 
 | Contract | Role | Address |
 |---|---|---|
 | `MandateRegistry` | mandates, delegation tree with monotonic narrowing, acknowledgement, revocation. No deployer, no admin key. | [`0x2c58fb05…263AA3`](https://coston2-explorer.flare.network/address/0x2c58fb0504377fef325DceB66219bC6302263AA3) |
 | `AnchorLog` | per-mandate sequence of Merkle roots over receipts (witness 1), with `leavesURI` | [`0xF2b7A266…Fa40a8`](https://coston2-explorer.flare.network/address/0xF2b7A2668e7430611c9b225ea7c966E489Fa40a8) |
 | `SpendMeter` | the running tally an effector reads before it acts, kept as `(timestamp, total)` checkpoints (SPEC §7.1) | [`0xa5e06ADc…576dE2`](https://coston2-explorer.flare.network/address/0xa5e06ADc76b96cc8c941B98FDA365f10a0576dE2) |
-| `Bond` | collateral, commit–reveal challenges, FDC verification, proportional verdicts, pull payments | [`0x68004002…3cf65B`](https://coston2-explorer.flare.network/address/0x6800400225e03539c4B719f470cC2C8edC3cf65B) |
-| `AgentRefs` | proof that an XRPL account accepted a mandate (payment with a memo) | [`0x73a6d9E4…e33d71`](https://coston2-explorer.flare.network/address/0x73a6d9E41E301dB61b72B31691c910DF26e33d71) |
+| `Vault` | every wei: bonds, proceeds, stakes; the commit–reveal gate; `verdict`, callable only by its judges (SPEC §8.2) | [`0x40A149aC…AbDAAB`](https://coston2-explorer.flare.network/address/0x40A149aCdA2A3D2e299e0FaE4aAA695662AbDAAB) |
+| `JudgeEvm` | §6.1 false payment, §6.2–6.3 overrun, §6.4 unanchored deed, §6.5 under-reported spend. No funds. | [`0xB6bbb261…ea9c6c`](https://coston2-explorer.flare.network/address/0xB6bbb2612d74B2751e8A05C2C5EC3911dBeA9c6c) |
+| `JudgeXrpl` | §6.8 overrun over receipted payments, §6.10 gross XRP outflow. No funds. | [`0xFc4Ae81b…06ABAa`](https://coston2-explorer.flare.network/address/0xFc4Ae81bfD8dA949Af04177FcCF47A91C006ABAa) |
+| `AgentRefs` | an XRPL account accepts a mandate (`prove`) or declares exclusivity (`proveExclusive`) with a memo | [`0x6036B279…E0fca0`](https://coston2-explorer.flare.network/address/0x6036B279d6Fe4aB5DAcbea97162C5394B6E0fca0) |
 | `CorroborationLog` | records deeds whose two witnesses agreed, once per deed per agent — the data a public score needs | [`0xf51c8241…56ed89`](https://coston2-explorer.flare.network/address/0xf51c82410ad01239a1e708aa5c4c68a25c56ed89) |
-| `BondLens` | stateless: what a case would take, before paying for a single attestation | [`0x4D86c02E…40dd76`](https://coston2-explorer.flare.network/address/0x4D86c02E83fD1E3B5Feb8E0f2dBaC77E2c40dd76) |
+| `BondLens` | stateless: what a case would take, before paying for a single attestation | [`0x37Bf9084…2CcD5d`](https://coston2-explorer.flare.network/address/0x37Bf9084b1320336A698D5e72E37A2c87E2CcD5d) |
 
-Testnet timers: `commitLead` 120 s (production 10 min), `responseWindow` 600 s, `anchorGrace` 300 s, `meterGrace` 300 s (production 5 min). The v0.9 deployment and every earlier one are in [docs/DEPLOYMENTS.md](docs/DEPLOYMENTS.md).
+The v0.10 `Bond` [`0x68004002…3cf65B`](https://coston2-explorer.flare.network/address/0x6800400225e03539c4B719f470cC2C8edC3cf65B) stays live for the mandates that name it. Testnet timers: `commitLead` 120 s (production 10 min), `responseWindow` 600 s, `anchorGrace` 300 s, `meterGrace` 300 s (production 5 min). The v0.10 deployment and every earlier one are in [docs/DEPLOYMENTS.md](docs/DEPLOYMENTS.md).
 
-Challenges, each behind a commit–reveal gate so the reward belongs to whoever found the violation, not to whoever copied the calldata. On the v0.10 deployment they live on the `Bond`; **from v0.11 the collateral sits in a `Vault` and the challenges on its judges** — `JudgeEvm` and `JudgeXrpl`, fixed at the Vault's construction, no admin (SPEC §8.2). v0.11 is in the code and tests; it is not yet deployed.
+Challenges, each behind a commit–reveal gate so the reward belongs to whoever found the violation, not to whoever copied the calldata. Since v0.11 the collateral sits in the `Vault` and the challenges on its judges, `JudgeEvm` and `JudgeXrpl`, fixed at the Vault's construction, no admin (SPEC §8.2).
 
 | Challenge | What it proves | FDC attestation | SPEC |
 |---|---|---|---|
@@ -139,7 +142,7 @@ Challenges, each behind a commit–reveal gate so the reward belongs to whoever 
 | `challengeBudgetOverrunPayment` | the same, for XRP payments on XRPL | `Payment` | §6.8 |
 | `challengeUnderReportedSpend` | the effector's tally said less than the world shows | `EVMTransaction` | §6.5 |
 | `accuseUnanchoredDeed` → `answerAccusation` / `resolveAccusation` | an exclusive agent acted and wrote nothing down | `EVMTransaction` | §6.4 |
-| `challengeXrpOutflow` *(v0.11)* | more XRP **left** the agent's account than the mandate allows — any transaction type, fees included, **no receipts**, including an offer consumed in someone else's transaction | `BalanceDecreasingTransaction` | §6.10 |
+| `challengeXrpOutflow` | more XRP **left** the agent's account than the mandate allows — any transaction type, fees included, **no receipts**, including an offer consumed in someone else's transaction | `BalanceDecreasingTransaction` | §6.10 |
 
 ## Who this is for
 
@@ -154,7 +157,7 @@ The section of the [SPEC](SPEC.md) to read first is §10, *what DELICTI does not
 
 - **Testnet only, not independently audited.** Everything runs on Coston2 and forks. Slither, a 300,000-call invariant campaign and an internal adversarial pass have run — the last one found two openings, fixed in v0.10 with regression tests. An independent audit has not.
 - **Consequence is after the fact; prevention is optional.** FDC finality is minutes. The brake refuses a dead or borrowed mandate and the slice that would break the budget — but only in effectors that choose to check.
-- **On XRPL, the live deployment sums XRP `Payment`s only.** v0.11 adds the outflow challenge (§6.10): every decrease of the account's XRP balance, no receipts needed, once the XRPL key has declared exclusivity. It is tested and rehearsed against the verifier, **not yet executed on Coston2**. Issued currencies (RLUSD included) stay invisible to both.
+- **On XRPL, DELICTI sees XRP, not issued currencies.** The outflow challenge (§6.10) covers every decrease of an account's XRP balance — payments, offers taken by others, escrow, AMM, fees — and ran live on Coston2 (mandate #7). RLUSD and every other IOU stay invisible.
 - **XRPL proofs age out after ~14 days.** The FDC verifier cannot attest older transactions, so a cumulative case over a mandate window longer than that may be unprovable. `JudgeXrpl.fullyEnforceable` says whether a window fits (SPEC §10).
 - **Small bonds are not watched.** A verdict needs someone to bring it; the reward covers the cost of proving a case only when 10 % of the bond exceeds the attestation fees (20 FLR per request on mainnet).
 - **Proportional up to the bond, not beyond.** Past an overrun equal to the budget, further units are free; only a larger bond moves that ceiling.
@@ -166,7 +169,7 @@ The section of the [SPEC](SPEC.md) to read first is §10, *what DELICTI does not
 In order. Nothing below is promoted before the item above it is live.
 
 1. ~~**XRPL, live.**~~ Done in v0.10: `AgentRefs.prove` and `challengeBudgetOverrunPayment` executed on Coston2 against real testXRP payments.
-2. **Every XRP outflow, not only payments** — in the code since v0.11 (`JudgeXrpl.challengeXrpOutflow`, `AgentRefs.proveExclusive`, SPEC §6.10), with the Vault/judges split that made room for it. Next: deploy, `scripts/xrpl-outflow.sh` live, then an independent audit.
+2. ~~**Every XRP outflow, not only payments.**~~ Done in v0.11: an agent convicted on Coston2 for 14 XRP out of a 12-XRP budget, 5 of them in a transaction it never signed (docs/DEPLOYMENTS.md). Next: proofs that outlive the verifier's 14-day memory, then an independent audit.
 3. **Public score** — coverage, corroboration and contradiction rates per agent, computed from logs and state alone ([SPEC §11](SPEC.md#11-metrics-this-makes-possible)).
 4. **Verdicts as native XRPL credentials** (XLS-70 / XLS-80), issued and deleted by a Protocol Managed Wallet under Flare Confidential Compute ([SPEC §13](SPEC.md#13-roadmap-delicti-verdicts-as-native-xrpl-credentials-specified-not-implemented), specified, not implemented).
 5. **A risk market** priced on those scores.

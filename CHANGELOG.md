@@ -1,8 +1,10 @@
 # Changelog
 
-## v0.11.0 — unreleased — the Vault and its judges; the agent convicted for a deed it never signed
+## v0.11.0 — 2026-09-23 — the Vault and its judges; the agent convicted for a deed it never signed
 
-**Not deployed yet.** Everything below is in the code and the tests (169, of which 146 are v0.10's, unchanged); the XRPL half of the live run was rehearsed on XRPL testnet against the verifier's free `prepareResponse`. The Coston2 run is `scripts/xrpl-outflow.sh`.
+### Executed on Coston2 (2026-09-23)
+
+Vault, both judges and the new AgentRefs deployed over the v0.10 core (addresses in the README and docs/DEPLOYMENTS.md). `scripts/xrpl-outflow.sh`, mandate #7, budget 12 XRP of outflow: the XRPL key declared exclusivity; 3 + 3 XRP paid; an offer selling 5 XRP left resting and **consumed by the counterparty's own OfferCreate** (`9AF0A89C…3F3325` — the agent signed nothing); 3 XRP paid. Four `BalanceDecreasingTransaction` proofs, one of them for the counterparty's transaction (`spentAmount` 5,000,000, no fee). Reveal [`0xa0c2ab11…20fcfd2`](https://coston2-explorer.flare.network/tx/0xa0c2ab11d362f8eecded2712874ca55dec4842d7d724711ecd98f343f20fcfd2) (424,399 gas): outflow 14,000,030 drops, severity 2,000,030, `bondOf` 1 → **0.8333**. No receipt was ever written. 169 tests.
 
 ### Bond → Vault + judges (SPEC §8.2)
 

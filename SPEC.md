@@ -242,7 +242,7 @@ It is sticky, permissionless (the proof speaks), and implies `proven` (§6.8). T
 
 **What it covers:** Payment, OfferCreate (crossed at once or consumed later), escrow, AMM deposits, checks, AccountDelete, fees. **What it does not:** issued currencies, RLUSD included — BDT measures the XRP balance only. And the verifier's memory (§10).
 
-**Rehearsed** on XRPL testnet on 2026-09-23 with `tools/xrpl_testnet.py` against the verifier's `prepareResponse`: an offer of 5 XRP consumed by the counterparty's `OfferCreate` returns `VALID`, `spentAmount = 5,000,000` for the offer's owner; the owner's own `OfferCreate` returns `10` (the fee). **Not yet executed on Coston2** — `scripts/xrpl-outflow.sh` is the run.
+**Rehearsed** on XRPL testnet on 2026-09-23 with `tools/xrpl_testnet.py` against the verifier's `prepareResponse`: an offer of 5 XRP consumed by the counterparty's `OfferCreate` returns `VALID`, `spentAmount = 5,000,000` for the offer's owner; the owner's own `OfferCreate` returns `10` (the fee). **Executed on Coston2 (v0.11, mandate #7, 2026-09-23):** 3 + 3 + 3 XRP paid and a 5-XRP offer consumed in the counterparty's transaction, against a 12-XRP outflow budget; four BDT proofs; severity 2,000,030 drops, a sixth of the bond taken — docs/DEPLOYMENTS.md.
 
 ## 7. The effector-side brake (optional, recommended)
 

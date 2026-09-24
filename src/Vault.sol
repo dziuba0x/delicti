@@ -335,10 +335,7 @@ contract Vault is DelictiErrors {
     function withdraw(uint256 mandateId, address payable to) external {
         uint256 dep = depositOf[mandateId][msg.sender];
         if (dep == 0) revert NoDeposit();
-        if (registry.isLive(mandateId)) revert MandateStillLive();
-        uint64 death = registry.deathTime(mandateId);
-        if (death == type(uint64).max || block.timestamp < uint256(death) + COOLING_WINDOW) revert CoolingWindow();
-        if (openAccusations[mandateId] != 0) revert AccusationOpen();
+        _requireSettledDeath(mandateId);
         settle(mandateId, msg.sender); // the beneficiary is owed its share before the deposit leaves
         uint256 amt = (dep * bondOf[mandateId]) / totalDeposits[mandateId];
         if (beneficiaryOf[mandateId][msg.sender] == registry.get(mandateId).principal) principalSide[mandateId] -= dep;
@@ -347,6 +344,118 @@ contract Vault is DelictiErrors {
         totalDeposits[mandateId] -= dep;
         bondOf[mandateId] -= amt;
         emit BondWithdrawn(mandateId, msg.sender, to, amt);
+        (bool ok,) = to.call{value: amt}("");
+        if (!ok) revert TransferFailed();
+    }
+
+    /// @dev The mandate's authority died at least `COOLING_WINDOW` ago and no accusation is open:
+    ///      the moment collateral — and, since v0.14, an unspent watch pool — may leave.
+    function _requireSettledDeath(uint256 mandateId) internal view {
+        if (registry.isLive(mandateId)) revert MandateStillLive();
+        uint64 death = registry.deathTime(mandateId);
+        if (death == type(uint64).max || block.timestamp < uint256(death) + COOLING_WINDOW) revert CoolingWindow();
+        if (openAccusations[mandateId] != 0) revert AccusationOpen();
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The watch pool (v0.14, SPEC §8.4): paying for the docket to be kept.
+    //
+    // A crossing bounty alone pays watchers nothing when the agent behaves, which is exactly the
+    // outcome the protocol exists to produce. Lightning's watchtowers ran into this deterrence
+    // paradox, and their reward towers were never shipped (docs/research/watchers.md). Before
+    // v0.14, keeping a docket below the budget was unpaid public work (§10).
+    //
+    // The principal funds the pool, and so may the agent, which is a statement of confidence. Nobody
+    // else can. An outsider's money in a pool whose rate the principal controls would be a prize
+    // for principal–agent collusion: the agent makes real transfers to itself, a sock puppet files
+    // them, and a raised rate hands the pool over. That is the §8.3 problem again, so it gets the
+    // §8.3 answer. An outsider who wants a mandate watched posts bond, which pays the challenger.
+    // The principal sets the terms once:
+    // a stipend per deed, and the least value a deed must move to earn it. Terms may later only
+    // become more generous. A judge pays the stipend to the filer of every NEW deed that moved at
+    // least that value, on any docket (§6.8, §6.10, §6.11), crossing filing or not. What is paid
+    // for is verified work, one proof of one deed filed for the first time. Uptime is never paid.
+    //
+    // Why deeds must MOVE value: anyone can make a token emit `Transfer(agent, x, 0)` by calling
+    // `transferFrom(agent, x, 0)`, and anyone can send XRP TO the agent's account. Both give
+    // provable "deeds" that are not the agent's act. They count nothing toward a budget, and here
+    // they earn nothing either.
+    //
+    // Unspent funds return pro rata to the funders once the mandate is dead past the cooling
+    // window. That is also when the bond can leave, and a docket without a bond stops.
+    // -----------------------------------------------------------------------------------
+
+    mapping(uint256 => uint256) public watchPool;
+    mapping(uint256 => uint256) public stipendPerDeed;
+    mapping(uint256 => uint256) public stipendMinValue;
+    mapping(uint256 => bool) public watchTermsSet;
+    mapping(uint256 => mapping(address => uint256)) public watchFunded;
+    mapping(uint256 => uint256) public watchFundedTotal;
+    mapping(uint256 => bool) public watchClosed;
+    mapping(uint256 => uint256) public watchAtClose;
+
+    event WatchTerms(uint256 indexed mandateId, uint256 perDeed, uint256 minValue);
+    event WatchFunded(uint256 indexed mandateId, address indexed by, uint256 amount, uint256 pool);
+    event StipendPaid(uint256 indexed mandateId, address indexed filer, uint256 deeds, uint256 paid);
+    event WatchRefunded(uint256 indexed mandateId, address indexed funder, address to, uint256 amount);
+
+    /// @notice The principal's offer to watchers. Once set, it can only improve for them: the
+    ///         stipend can rise and the minimum can fall. A principal who could cut the rate would
+    ///         cut it under a watcher that has already paid for attestations.
+    function setWatchTerms(uint256 mandateId, uint256 perDeed, uint256 minValue) external {
+        MandateRegistry.Mandate memory m = registry.get(mandateId);
+        if (msg.sender != m.principal) revert NotPrincipal();
+        if (m.bond != address(this)) revert NotThisBond();
+        if (watchClosed[mandateId]) revert WatchClosed();
+        if (watchTermsSet[mandateId] && (perDeed < stipendPerDeed[mandateId] || minValue > stipendMinValue[mandateId])) {
+            revert WatchTermsOnlyImprove();
+        }
+        watchTermsSet[mandateId] = true;
+        stipendPerDeed[mandateId] = perDeed;
+        stipendMinValue[mandateId] = minValue;
+        emit WatchTerms(mandateId, perDeed, minValue);
+    }
+
+    /// @notice Pay into a mandate's watch pool: the principal or the agent. Each gets its share of
+    ///         what is left back.
+    function fundWatch(uint256 mandateId) external payable {
+        MandateRegistry.Mandate memory m = registry.get(mandateId);
+        if (msg.sender != m.principal && msg.sender != m.agent) revert NotPrincipalOrAgent();
+        if (m.bond != address(this)) revert NotThisBond();
+        if (watchClosed[mandateId]) revert WatchClosed();
+        watchPool[mandateId] += msg.value;
+        watchFunded[mandateId][msg.sender] += msg.value;
+        watchFundedTotal[mandateId] += msg.value;
+        emit WatchFunded(mandateId, msg.sender, msg.value, watchPool[mandateId]);
+    }
+
+    /// @notice A judge filed `deeds` new, value-moving deeds for `filer`: pay their stipends, as far
+    ///         as the pool goes. Never reverts on an empty or closed pool — a filing must not fail
+    ///         because nobody paid for it.
+    function stipend(uint256 mandateId, address filer, uint256 deeds) external onlyJudge returns (uint256 paid) {
+        uint256 rate = stipendPerDeed[mandateId];
+        uint256 pool = watchPool[mandateId];
+        if (deeds == 0 || rate == 0 || pool == 0 || watchClosed[mandateId]) return 0;
+        paid = deeds > pool / rate ? pool : deeds * rate;
+        watchPool[mandateId] = pool - paid;
+        owed[filer] += paid;
+        emit StipendPaid(mandateId, filer, deeds, paid);
+    }
+
+    /// @notice A funder takes back its share of what the pool has left, once the mandate is dead
+    ///         past the cooling window. The first refund closes the pool: no stipend after it.
+    function refundWatch(uint256 mandateId, address payable to) external {
+        uint256 mine = watchFunded[mandateId][msg.sender];
+        if (mine == 0) revert NothingFunded();
+        _requireSettledDeath(mandateId);
+        if (!watchClosed[mandateId]) {
+            watchClosed[mandateId] = true;
+            watchAtClose[mandateId] = watchPool[mandateId];
+        }
+        uint256 amt = (watchAtClose[mandateId] * mine) / watchFundedTotal[mandateId];
+        watchFunded[mandateId][msg.sender] = 0;
+        watchPool[mandateId] -= amt;
+        emit WatchRefunded(mandateId, msg.sender, to, amt);
         (bool ok,) = to.call{value: amt}("");
         if (!ok) revert TransferFailed();
     }

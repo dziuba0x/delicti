@@ -230,6 +230,24 @@ contract XrplTest is Test {
         xjudge.fileBudgetPayments(mandateId, idx, ls, paths, pr, bytes32(0));
     }
 
+    /// Regression (v0.14, found by the §6.8 invariant track). The one-shot path convicted first
+    /// (5 against 4: severity 1). A docket that later reaches the same 5 is past the budget but
+    /// raises nothing, and it must still RECORD, uncommitted, rather than revert the way it did
+    /// until v0.14. The deeds on an XRPL docket have ~14 days to be filed.
+    function test_paymentDocketStillRecordsBelowAnotherPathsVerdict() public {
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _bundle(5);
+        _arm(challenger, mandateId, pr);
+        vm.prank(challenger);
+        xjudge.challengeBudgetOverrunPayment(mandateId, idx, ls, paths, pr, SALT);
+        uint256 taken = bond.slashedAmount(mandateId);
+
+        vm.prank(makeAddr("keeper"));
+        xjudge.fileBudgetPayments(mandateId, idx, ls, paths, pr, bytes32(0)); // no commitment
+        assertEq(xjudge.paymentDocket(mandateId), 5 * EACH, "recorded");
+        assertEq(bond.slashedAmount(mandateId), taken, "and nothing taken twice");
+        assertEq(bond.owed(makeAddr("keeper")), 0);
+    }
+
     function test_revert_paymentDocketNothingNew() public {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _slice(0, 2);
         vm.prank(challenger);

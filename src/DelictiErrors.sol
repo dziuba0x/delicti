@@ -61,4 +61,9 @@ interface DelictiErrors {
     error NoBeneficiary();
     error BeneficiaryFixed();
     error TooFewConfirmations();
+    error NotPrincipal();
+    error WatchTermsOnlyImprove();
+    error WatchClosed();
+    error NothingFunded();
+    error NotPrincipalOrAgent();
 }

@@ -108,6 +108,8 @@ contract Invariants is Test {
 
         // §6.11 on the same Vault: logs filed piecemeal, then a committed crossing.
         h.tokenScenario(0, 1, 5_000_000, 10 ether); // budget 5 USDC
+        h.watchTerms(5, 0.01 ether, 0); // mandates(5) is the token mandate
+        h.fundWatch(5, 0, 1 ether); // whoSeed 0: the principal
         h.tokenMove(0, 1_000_000, 3);
         h.tokenMove(0, 1_000_000, 3);
         h.fileTokens(0, 2, 0, 1, 1, false, keccak256("t1")); // one log of the first tx
@@ -116,6 +118,21 @@ contract Invariants is Test {
         h.tokenMove(0, 1_000_000, 3);
         h.fileTokens(0, 3, 0, 4, 0, true, keccak256("t2"));
         assertEq(h.nTokenVerdicts(), 1, "the token crossing took nothing");
+        assertLt(bond.watchPool(h.mandates(5)), 1 ether, "the watch pool paid no stipend");
+
+        // §6.8: kind-3 and kind-4 receipts, docket below the budget, then the one-shot path takes the
+        // overrun, and a later docket crossing can only take the difference.
+        h.payScenario(0, 1, 3_000_000, 10 ether); // budget 3 XRP
+        h.payDeed(0, 1_000_000, false, true); // kind 3
+        h.payDeed(0, 1_000_000, true, true); // kind 4
+        h.filePayments(0, 2, 0, 2, false, keccak256("p1"));
+        assertEq(h.nPaymentFilings(), 1, "a recording payment filing did not land");
+        h.payDeed(0, 2_000_000, true, true);
+        h.payDeed(0, 500_000, false, false); // never written down: neither path can use it
+        h.oneShotPayments(0, 3, keccak256("p2"));
+        assertEq(h.nOneShotVerdicts(), 1, "the one-shot payment challenge took nothing");
+        h.filePayments(0, 2, 0, 3, true, keccak256("p3")); // the docket crosses too — nested
+        assertEq(h.nPaymentFilings(), 2);
     }
 
     // ---------------------------------------------------------------- value
@@ -124,18 +141,23 @@ contract Invariants is Test {
     /// to be pulled, or the stake of an accusation still open. Nothing else, and nothing missing.
     function invariant_bondIsExactlyBackedByItsBooks() public view {
         uint256 books;
-        for (uint256 i = 0; i < h.mandateCount(); i++) books += bond.bondOf(h.mandates(i)) + bond.unsettled(h.mandates(i));
+        for (uint256 i = 0; i < h.mandateCount(); i++) {
+            books += bond.bondOf(h.mandates(i)) + bond.unsettled(h.mandates(i)) + bond.watchPool(h.mandates(i));
+        }
         for (uint256 i = 0; i < h.actorCount(); i++) books += bond.owed(h.actors(i));
         for (uint256 i = 0; i < h.accusationCount(); i++) {
             (,,,,, bool closed,) = judge.accusations(h.accusationIds(i));
             if (!closed) books += bond.ACCUSATION_STAKE();
         }
-        assertEq(address(bond).balance, books, "balance != bonds + credits + unsettled remainders + open stakes");
+        assertEq(address(bond).balance, books, "balance != bonds + credits + unsettled remainders + open stakes + watch pools");
     }
 
     /// What has left can never exceed what came in.
     function invariant_neverPaysOutMoreThanCameIn() public view {
-        assertLe(h.ghostClaimed() + h.ghostWithdrawn(), h.ghostPosted() + h.ghostStaked());
+        assertLe(
+            h.ghostClaimed() + h.ghostWithdrawn() + h.ghostWatchRefunded(), h.ghostPosted() + h.ghostStaked() + h.ghostWatchFunded()
+        );
+        assertFalse(h.refundExceededFunding(), "a funder got back more than it put into a watch pool");
     }
 
     /// claim() pays exactly what was owed, zeroes it, and cannot be repeated on the same balance.
@@ -250,6 +272,21 @@ contract Invariants is Test {
         }
     }
 
+    /// §6.8 docket: the sum of the receipted payments it filed, each once, with its receipt marked
+    /// used — whatever the one-shot path did to the same mandate meanwhile.
+    function invariant_paymentDocketIsTheSumOfItsFiledPayments() public view {
+        assertFalse(h.paymentDocketDrifted(), "a payment filing added something other than its new payments");
+        for (uint256 m = 0; m < h.pMandateCount(); m++) {
+            uint256 id = h.pMandates(m);
+            uint256 sum;
+            for (uint256 i = 0; i < h.pDeedCount(); i++) {
+                (uint256 mid, bytes32 txid, uint256 amount,,,,) = h.pdeeds(i);
+                if (mid == id && xjudge.paymentFiled(id, txid)) sum += amount;
+            }
+            assertEq(xjudge.paymentDocket(id), sum, "payment docket != sum of filed payments");
+        }
+    }
+
     /// Not a property: a report. `forge test --match-test invariant_coverageReport -vv` prints how
     /// often the deep states were actually reached in the last run of the campaign.
     function invariant_coverageReport() public view {
@@ -264,6 +301,10 @@ contract Invariants is Test {
         console.log("outflow verdicts", h.nOutflowVerdicts());
         console.log("token filings", h.nTokenFilings());
         console.log("token verdicts", h.nTokenVerdicts());
+        console.log("payment filings", h.nPaymentFilings());
+        console.log("payment docket verdicts", h.nPaymentVerdicts());
+        console.log("one-shot payment verdicts", h.nOneShotVerdicts());
+        console.log("watch refunds", h.nRefunds());
     }
 
     // ---------------------------------------------------------------- liveness of the books

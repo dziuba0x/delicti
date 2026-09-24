@@ -149,6 +149,8 @@ contract JudgeXrpl is DelictiErrors {
 
         uint256 added;
         uint256 fresh;
+        uint256 paid; // new deeds that moved at least the watch pool's minimum (§8.4)
+        uint256 minV = vault.stipendMinValue(mandateId);
         uint64 minRound = type(uint64).max;
         bytes32[] memory ids = new bytes32[](n);
         for (uint256 i = 0; i < n; i++) {
@@ -156,8 +158,10 @@ contract JudgeXrpl is DelictiErrors {
             if (i != 0 && txid <= ids[i - 1]) revert UnorderedTxs();
             ids[i] = txid;
             if (paymentFiled[mandateId][txid]) continue; // already counted: skipped, not refused
-            added += _filePayment(mandateId, episodeIndices[i], leaves[i], merkleProofs[i], fdcProofs[i], m);
+            uint256 v = _filePayment(mandateId, episodeIndices[i], leaves[i], merkleProofs[i], fdcProofs[i], m);
+            added += v;
             fresh++;
+            if (v != 0 && v >= minV) paid++;
             if (fdcProofs[i].data.votingRound < minRound) minRound = fdcProofs[i].data.votingRound;
         }
         if (fresh == 0) revert NothingNew();
@@ -165,11 +169,20 @@ contract JudgeXrpl is DelictiErrors {
         uint256 total = before + added;
         paymentDocket[mandateId] = total;
         emit PaymentsFiled(mandateId, msg.sender, added, total, fresh);
+        vault.stipend(mandateId, msg.sender, paid);
         if (total <= m.budget || total == before) return;
+        // Past the budget, but not past what the bucket's verdicts already measured (another path —
+        // the one-shot challenge, a receipted case — may have convicted further): a recording, and
+        // it must stay one. Before v0.14 this reached `verdict`, which refused it `NothingNew`, and
+        // the docket could not record at all until one filing alone outran the high-water mark.
+        // Found by the §6.8 invariant track.
+        if (total - m.budget <= vault.severityIn(mandateId, Kinds.BUDGET_NATIVE)) return;
 
         vault.consumeCommitment(msg.sender, Kinds.BUDGET_PAYMENT, mandateId, keccak256(abi.encode(ids)), salt, minRound);
+        // not strict: a crossing that raises the severity after the bond's base is already all taken
+        // still records; the filer committed to it and is paid what there is, possibly nothing
         uint256 taken = vault.verdict(
-            Kinds.BUDGET_PAYMENT, mandateId, m.budget, total - m.budget, msg.sender, fresh, bytes32("Payment"), m.sourceId, true
+            Kinds.BUDGET_PAYMENT, mandateId, m.budget, total - m.budget, msg.sender, fresh, bytes32("Payment"), m.sourceId, false
         );
         emit BudgetOverrunProven(mandateId, total, m.budget, fresh, msg.sender, taken);
     }
@@ -271,17 +284,24 @@ contract JudgeXrpl is DelictiErrors {
         if (m.assetKey != Kinds.XRP_OUTFLOW_KEY) revert WrongAsset();
         if (!agentRefs.exclusive(mandateId)) revert NotExclusiveOnXrpl();
 
-        (uint256 added, uint256 fresh, uint64 minRound, bytes32[] memory ids) = _file(mandateId, fdcProofs, m);
+        (uint256 added, uint256 fresh, uint256 paid, uint64 minRound, bytes32[] memory ids) = _file(mandateId, fdcProofs, m);
         if (fresh == 0) revert NothingNew();
         uint256 before = docket[mandateId];
         uint256 total = before + added;
         docket[mandateId] = total;
         emit OutflowFiled(mandateId, msg.sender, added, total, fresh);
+        vault.stipend(mandateId, msg.sender, paid);
         if (total <= m.budget || total == before) return; // recorded; nothing to judge yet
+        // Past the budget, but not past what the bucket's verdicts already measured (another path —
+        // the one-shot challenge, a receipted case — may have convicted further): a recording, and
+        // it must stay one. Before v0.14 this reached `verdict`, which refused it `NothingNew`, and
+        // the docket could not record at all until one filing alone outran the high-water mark.
+        // Found by the §6.8 invariant track.
+        if (total - m.budget <= vault.severityIn(mandateId, Kinds.BUDGET_NATIVE)) return;
 
         vault.consumeCommitment(msg.sender, Kinds.XRP_OUTFLOW, mandateId, keccak256(abi.encode(ids)), salt, minRound);
         uint256 taken = vault.verdict(
-            Kinds.XRP_OUTFLOW, mandateId, m.budget, total - m.budget, msg.sender, fresh, bytes32("BalanceDecreasingTransaction"), m.sourceId, true
+            Kinds.XRP_OUTFLOW, mandateId, m.budget, total - m.budget, msg.sender, fresh, bytes32("BalanceDecreasingTransaction"), m.sourceId, false
         );
         emit XrpOutflowProven(mandateId, total, m.budget, fresh, msg.sender, taken);
     }
@@ -291,11 +311,12 @@ contract JudgeXrpl is DelictiErrors {
     ///      round is not evidence), and every supplied id in order, for the commitment digest.
     function _file(uint256 mandateId, IBalanceDecreasingTransaction.Proof[] calldata fdcProofs, MandateRegistry.Mandate memory m)
         internal
-        returns (uint256 added, uint256 fresh, uint64 minRound, bytes32[] memory ids)
+        returns (uint256 added, uint256 fresh, uint256 paid, uint64 minRound, bytes32[] memory ids)
     {
         uint256 n = fdcProofs.length;
         ids = new bytes32[](n);
         minRound = type(uint64).max;
+        uint256 minV = vault.stipendMinValue(mandateId);
         for (uint256 i = 0; i < n; i++) {
             IBalanceDecreasingTransaction.Proof calldata pr = fdcProofs[i];
             bytes32 txid = pr.data.requestBody.transactionId;
@@ -306,6 +327,8 @@ contract JudgeXrpl is DelictiErrors {
             filed[mandateId][txid] = true;
             fresh++;
             added += out;
+            // an inflow (anyone can send the agent XRP) is a provable deed that moved nothing out
+            if (out != 0 && out >= minV) paid++;
             if (pr.data.votingRound < minRound) minRound = pr.data.votingRound;
             emit DeedJudged(mandateId, Kinds.XRP_OUTFLOW, txid, out);
         }

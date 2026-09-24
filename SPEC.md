@@ -1,8 +1,8 @@
-# DELICTI Specification — v0.10 (draft)
+# DELICTI Specification — v1.0 (frozen)
 
 *Corpus delicti for autonomous agents: prove the deed happened before anyone is judged.*
 
-Status: draft, implemented on Flare Coston2 (see README for addresses and live transactions). This document fixes the vocabulary, the trust model, and the invariants. Anything not stated here is not promised.
+Status: **v1.0, frozen on 2026-09-24.** Implemented by the v0.14 contracts on Flare Coston2 (README and docs/DEPLOYMENTS.md list the addresses and live transactions). Not independently audited, and not deployed to any mainnet. This document fixes the vocabulary, the trust model, the encodings and the invariants. Anything not stated here is not promised. §14 says what "frozen" binds and how it may change.
 
 ---
 
@@ -265,11 +265,13 @@ The EVM twin of §6.10, written for the agent the stablecoin market will actuall
 
 **What counts.** Every live `Transfer(agent → anyone, v)` log emitted by the mandate's token, in an `EVMTransaction` proof whose `sourceId` is the mandate's, `status == 1` and `timestamp` inside the window, **whoever sent the transaction**. Burns (`to = 0`) count. FXRP redeemed to XRPL leaves the account by a burn. Inflows, other tokens, other senders' transfers, `Approval`s and logs flagged `removed` are ignored.
 
-**Why a conviction for a transaction the agent never sent is sound.** A standard token lowers `from`'s balance only on a call `from` made or authorised: its own `transfer`, an allowance it granted (`transferFrom`), or a signature (EIP-2612 `permit`, EIP-3009). Every such log is the agent's act. The token is the one the **principal** named in the mandate, so its event log is a witness the principal chose. A token that lies in its logs, or a proxy upgraded to lie, is the principal's mistake (§10).
+**Why a conviction for a transaction the agent never sent is sound.** A standard token lowers `from`'s balance only on a call `from` made or authorised: its own `transfer`, an allowance it granted (`transferFrom`), or a signature (EIP-2612 `permit`, EIP-3009). Every such log that **moves value** is the agent's act. The exception is a zero-value `Transfer(agent → x, 0)`, which anyone can produce with `transferFrom(agent, x, 0)`: an allowance of zero covers an amount of zero. Such a log counts nothing toward the docket and earns no stipend (§8.4). The token is the one the **principal** named in the mandate, so its event log is a witness the principal chose. A token that lies in its logs, or a proxy upgraded to lie, is the principal's mistake (§10).
 
 **Keyed per event, not per transaction.** An `EVMTransaction` request may list a subset of the transaction's logs (`logIndices`, at most 50), including none. A docket keyed by transaction could therefore be buried: file a transaction with no logs listed and its real outflow is marked counted, at zero, for ever. The docket is keyed by `(transactionHash, logIndex)`, since `logIndex` is block-level and a transaction lives in one block. A filing files only the logs it shows. A filing that shows none adds nothing and reverts `NothingNew`. A transaction with more than 50 logs is filed in several proofs.
 
 **The docket and the crossing** work as in §6.10. `fileErc20Outflow(mandateId, proofs, salt)` adds each new matching log to `erc20Docket[mandateId]`. Below the budget it only records, needs no commitment, and pays nothing. The filing that takes the docket past the budget is the conviction: commitment kind `8`, digest over the transaction hashes it supplies (strictly ascending, so a transaction with more than 50 logs is filed across filings), and the lowest voting round among the proofs that added something. Severity is `docket − budget` in the budget bucket, nested (§8.1). A §6.3 receipted case and a §6.11 docket case over the same mandate never add up.
+
+**Past the budget is not always a crossing (v0.14, all three dockets).** Another path can convict a mandate first: the one-shot §6.8 challenge, or a receipted §6.3 case. That sets the bucket's high-water mark `severityIn[mandate][budget]`. A docket filing whose `docket − budget` does not exceed that mark raises nothing. It is a recording: it needs no commitment and pays no reward. The same holds when the bond's base is already taken in full; the Vault is then called non-strictly and pays what there is, possibly nothing. Until v0.14 such a filing reached `verdict`, which refused it `NothingNew`, so the docket could not record at all until one filing alone outran the mark. On XRPL that is a deed lost after 14 days. The §6.8 invariant track found it; `test_paymentDocketStillRecordsBelowAnotherPathsVerdict` fails on the v0.13 judges and passes on v0.14.
 
 **Confirmations.** Flare finalises in one block, and `minConfirmations(FLR / testFLR / SGB …) = 1`. On Ethereum a proof of a block later reorged would convict an agent of an outflow that never happened, so `minConfirmations(ETH / testETH) = 64`, about two epochs. Proofs requested with fewer confirmations are refused (`TooFewConfirmations`).
 
@@ -326,7 +328,7 @@ taken by a verdict = P(S_after) − (already taken)
 Until v0.11 one contract held the collateral and verified every kind of evidence, and it ended 242 bytes under EIP-170: no further challenge type fitted. It is now split once:
 
 - **`Vault`** holds every wei — bonds, credited proceeds, accusation stakes — so the protocol's balance is one invariant in one contract. It keeps the books of §8 and §8.1, the single commit–reveal gate of §6.7, and `verdict(...)`, the only function through which value leaves a bond.
-- **Judges** hold no funds. Each verifies one family of evidence and, when it stands, calls `Vault.verdict` and `Vault.consumeCommitment` (passing its own caller as the challenger). `JudgeEvm`: §6.1, §6.2–6.3, §6.4, §6.5. `JudgeXrpl`: §6.8, §6.10. A judge keeps only the memory its judgement needs (`consumedLeaf`, `accused`, `accusations`).
+- **Judges** hold no funds. Each verifies one family of evidence and, when it stands, calls `Vault.verdict` and `Vault.consumeCommitment` (passing its own caller as the challenger). `JudgeEvm`: §6.1, §6.2–6.3, §6.4, §6.5, §6.11. `JudgeXrpl`: §6.8, §6.10. A judge keeps only the memory its judgement needs (`consumedLeaf`, `accused`, `accusations`).
 - **The set of judges is fixed at the Vault's construction.** No admin, no setter, no upgrade. Judges are deployed first, at the address the Vault is about to have; the Vault's constructor refuses any judge that does not name it. A depositor can read `judges()` before posting and knows every piece of code that can ever take from its deposit — what EigenLayer calls *unique stake* (ELIP-002), here obtained by immutability rather than by allocation.
 - **A new challenge type is a new Vault** over (the existing judges + the new one). Mandates already bonded stay with the Vault they name; new mandates name the new one in `Terms.bond`. Registry, anchor log and meter do not change — which is what `Mandate.bond` was added for in v0.9.
 
@@ -347,6 +349,20 @@ The protocol cannot tell a principal from its sock puppet, so it stops pretendin
 A verdict still takes the same fraction of every deposit (§8.1) and still pays the challenger first. What changes is where the rest of each deposit's share goes: to that deposit's beneficiary. Principal-side shares are credited at the verdict, as before. Every other share accrues per unit of deposit (`remainderPerUnit`, scaled 1e36) and is credited by `settle(mandateId, depositor)`, which is permissionless and idempotent; `withdraw` settles first. A verdict therefore costs the same gas however many depositors there are, and `unsettled[mandateId]` holds what has accrued and not been credited yet, a few wei of rounding included.
 
 **What it achieves, exactly.** Colluders can take from an outsider who posted with `post` only that deposit's share of the challenger's reward: the attestation fees they really paid, plus `CHALLENGER_BPS` (10 %) of the rest. Under v0.11 it was all of it. Measured on the test case: a 30-FLR insurer deposit next to a 10-FLR principal deposit, a fake 100 % overrun, self-challenged by the principal. The principal nets **3 FLR** (10 % of the insurer's 30) instead of 30. The insurer can price that as a fixed, known leak. What it does not do: an outsider who names the principal, or a beneficiary the principal controls, has chosen to be exposed.
+
+### 8.4 The watch pool — paying for the docket to be kept (v0.14)
+
+A reward paid only on conviction pays watchers nothing while the agent behaves, and that is exactly the outcome the protocol exists to produce. Lightning's watchtowers hit this *deterrence paradox*: lnd's reward towers have been "in a subsequent release" since 2019. Before v0.14, keeping a docket below the budget was unpaid. docs/research/watchers.md lays out the history this design draws on.
+
+- **Funding.** `fundWatch(mandateId)` accepts value from the mandate's **principal or agent**, nobody else. An agent funding its own watching is a statement no prose can make. An outsider cannot fund, because an outsider's money in a pool whose rate the principal sets would be a prize for principal–agent collusion: the agent moves real value to itself, a sock puppet files it, the rate goes up. That is §8.3's problem, and it gets §8.3's answer. An outsider who wants a mandate watched posts bond.
+- **Terms.** `setWatchTerms(mandateId, perDeed, minValue)` is the principal's alone. Once set, the terms can only improve for watchers: `perDeed` may rise, `minValue` may fall. A principal who could cut the rate could cut it under a watcher that had already paid for attestations.
+- **Stipend.** Every docket judge (§6.8, §6.10, §6.11) calls `Vault.stipend(mandateId, filer, n)` for the `n` **new** deeds in a filing that moved **positive value of at least `minValue`**. The filer is credited `min(pool, n × perDeed)`. This applies to recordings and crossings alike, so a crossing filer earns its stipends and the challenger's reward. `stipend` never reverts, and an empty or closed pool pays zero, so a filing never fails because nobody paid for it.
+- **Why "moved value".** Anyone can make a standard token emit `Transfer(agent, x, 0)` (§6.11), and anyone can send XRP *to* the agent's account, which is a provable balance change of the wrong sign. Both are provable "deeds" that are not the agent's act. They count nothing toward a budget, and they earn nothing.
+- **Why per new deed.** A deed can be filed once (§6.10, §6.11 per log, §6.8 per payment and receipt), so sybils cannot multiply what the agent actually did. This is Chainlink OCR's "pay per observation that made it into the report", not Truebit's per-challenger jackpot.
+- **Refund.** Once the mandate is dead past `COOLING_WINDOW` with no accusation open (`_requireSettledDeath`, the same moment the bond may leave), `refundWatch` returns to each funder its pro-rata share of what the pool held at that moment. The first refund closes the pool: no stipend is paid after it.
+- **Books.** `watchPool[mandate]` is part of the Vault's single balance invariant (bonds + credits + unsettled remainders + open stakes + watch pools).
+
+**What it does not fix.** Recording is still a race for new deeds. The loser has paid for an attestation that earns nothing: tens of FLR on mainnet, and 1,000 wei on Coston2. The sentinel checks `filed` just before buying attestations, but only an on-chain claim window would remove the race. That is specified here as the next step and not built. An agent can also feed its own sock-puppet watcher with dust just above `minValue`. Each such deed is a real transfer of that value plus an attestation fee, it counts toward the agent's budget, and the principal chose `perDeed` and the size of the pool. The worst case is the pool, spent on deeds that are genuinely on the record.
 
 ## 9. Privacy
 
@@ -373,7 +389,9 @@ Nothing sensitive is on-chain: mandate envelopes and receipts live off-chain; th
 - **XLS-56 Batch may be invisible to the FDC.** Outflow in a Batch happens in unsigned, fee-less inner transactions (§6.10). Whether the verifier attests them is untested, because the amendment is not on the testnet it indexes. If it does not, an agent can move XRP out through Batches without a provable deed.
 - **Stablecoins where the FDC cannot see.** The FDC's `EVMTransaction` indexes Ethereum, Flare and Songbird only. x402 settles mostly on Base today, and an agent paying there is outside every DELICTI challenge. On XRPL, `Payment` and `BalanceDecreasingTransaction` measure XRP only, so a budget in RLUSD or any other issued currency cannot be enforced. These are the FDC's limits, and each one reopens when the FDC adds the source or type.
 - §6.11 trusts the principal's choice of token. A token whose `Transfer` logs lie, including an upgradeable proxy upgraded to lie, convicts or acquits its agent accordingly. Name a token you would trust with the money itself.
-- Keeping a docket below the budget (§6.10, §6.11) is unpaid. Filers pay for attestations that are reimbursed only if their filing is the one that crosses. Until a market for corroboration pays for it, a long mandate is only as enforceable as somebody's willingness to file for it inside the verifier's ~14 days.
+- Keeping a docket below the budget is paid only where somebody funded a watch pool (§8.4, v0.14). Elsewhere filers pay for attestations that are reimbursed only if their filing is the one that crosses. A long XRPL mandate with no pool is only as enforceable as somebody's willingness to file for it inside the verifier's ~14 days.
+- Recording is a race for new deeds, and the loser's attestation fee is spent for nothing (§8.4). The remedy, a short on-chain claim before the attestations are bought, is specified and not built.
+- The reference sentinel (§11.2) finds candidates through an explorer's log index and an XRPL node, and neither is a witness. If both hide a deed, the sentinel misses it. It cannot be made to file a deed that did not happen, because only an FDC proof reaches a judge. On XRPL it reads history through the FDC verifier's own index (§11.2), so what it cannot see there, nobody can prove.
 - An XRPL account may declare exclusivity for two overlapping mandates. Each is then judged on the same outflow; the account made two promises it cannot both keep, and that is its doing.
 - An effector that is merely late — writing the deed into the tally within `meterGrace` of it (§6.5) — is not convicted of under-reporting, and neither is one colluding with the agent that manages to write inside that window. The grace is two orders of magnitude above the honest write's latency and well below the earliest possible reveal, so the window is real but narrow; making it zero would convict effectors for a slow block.
 - `CorroborationLog` counts each deed once per agent (v0.10), so the same transaction cannot be entered into an agent's record under several mandates. It still counts what somebody chose to prove. It is a floor on corroboration, never the rate: an agent pays for the attestations it wants on its record and not for the others, and nothing obliges anyone to corroborate anything. It also cannot tell a deed from a wash: an agent can pay dust to itself and corroborate it all day, which is why §11 says to weigh by value — and a score should weigh by counterparty as well.
@@ -410,6 +428,24 @@ The score is the next floor, and it must be computable from **logs and current s
 | who is exposed | `BondPosted(by)`, `BondWithdrawn(by)`, `depositOf` | |
 
 `CorroborationLog`, `AgentRefs` and `BondLens` hold no funds and have no privileges. They are listed here as part of the surface, but they are *outside* the core on purpose: each could have been deployed a year after it, and a better one still can be.
+
+### 11.2 The sentinel and the public score (v0.14, `sdk/`)
+
+The reference implementation of a watcher, which also computes the score from §11. It holds no privileges and no state the protocol depends on. Kill it and start another anywhere, and it reaches the same conclusions from the same chains. That is the whole of its decentralisation story, and it is enough: security needs one honest watcher, and anyone can be one.
+
+- **Discovery from state, not logs.** `nextId` and `get` enumerate every mandate. A mandate is watchable by a third party when it is acknowledged, has bond left, and is either §6.11 (exclusive, an ERC-20 on this EVM source) or §6.10 (an XRP-outflow mandate with an exclusivity statement from the XRPL key). Receipted cases (§6.2, §6.3, §6.8) need the agent's leaves (`leavesURI`) and are listed, not watched.
+- **Finding the XRPL account.** A mandate names its XRPL account only by hash. The `ExclusiveProven` event carries the statement's XRPL transaction id. The verifier's index says who signed it, and `keccak256(signer)` must equal `agentRef`, or the mandate is not watched.
+- **Reading XRPL history the way the FDC will.** Every transaction that moves an account's XRP modifies its AccountRoot, and records the previous transaction that did (`PreviousTxnID`). An account's balance history is therefore a linked list, anchored at the head `account_info` returns. The sentinel walks it backwards through the FDC verifier's own index of full transactions (about 15 days deep). What it finds is exactly what can still be proven, including offers taken in other accounts' transactions. Nothing provable is missed, because a balance change that is not on the list did not happen. Public XRPL nodes keep far less history: the testnet endpoint used here keeps about 1,300 ledgers.
+- **Pricing before buying.** For each plan it quotes attestation fees and gas against stipends (§8.4) and the reward (`BondLens.penaltyFor`), and its policy decides: `observe`, `profit`, or `altruist`. The protocol's own sentinel is `altruist`: somebody has to be.
+- **The score** is per agent, never one number, because a composite hides its weights and a counterparty should choose its own. Its facets:
+  - `standing`: `breach-unjudged`, `convicted`, `unbonded` or `clean`. `breach-unjudged` is the alarm: the chain shows more outflow than the budget and no verdict exists yet.
+  - verdicts and value taken, across every Vault the agent was bonded in;
+  - bond at stake now;
+  - `worstUseBps`, the highest share of a budget its proven or observed outflow reached;
+  - how many of its mandates are watched by a funded pool, and how many the agent funded itself;
+  - flags for outflow not yet on a docket, and for deeds lost past the verifier's memory.
+
+  Unacknowledged mandates are ignored (§11.1).
 
 ## 12. Compatibility
 
@@ -449,6 +485,34 @@ The score is the next floor, and it must be computable from **logs and current s
 
 **Condition for moving this out of the roadmap:** FCC/PMW generally available on Coston2 with a documented instruction interface, and one credential issued *and deleted* end to end on XRPL testnet from a Flare-side verdict. Until both, this section describes an intention.
 
+## 14. What "v1.0, frozen" binds
+
+Frozen means that a reader, an indexer, a watcher or a counterparty may build against the following, and that none of it will change in place:
+
+1. **The mandate** (§3): the thirteen fields, their order, monotonic narrowing, transitive liveness, sticky acknowledgement and revocation, and the rule that unacknowledged mandates are not the agent's record.
+2. **The leaf** (§4) and its hash, and receipt kinds 1–4 (`KIND_TOOL_CALL`, `KIND_EVM_TX`, `KIND_EXTERNAL_PAYMENT`, `KIND_EXTERNAL_TX`).
+3. **The challenge kinds and their commitment encoding** (§6.7): `keccak256(abi.encode(challenger, mandateId, kind, keccak256(abi.encode(bytes32[] deedIds)), salt))`, deed ids ascending where there are several; `commitLead` measured to the start of the lowest voting round among the proofs the reveal verifies; `COMMIT_TTL` one hour.
+
+   | kind | § | judge | FDC type | deed id | docket |
+   |---|---|---|---|---|---|
+   | 1 false payment | 6.1 | JudgeEvm | ReferencedPaymentNonexistence | leaf hash | — |
+   | 2 budget, native | 6.2 | JudgeEvm | EVMTransaction | tx hash | — |
+   | 3 budget, ERC-20 receipted | 6.3 | JudgeEvm | EVMTransaction | tx hash | — |
+   | 4 unanchored deed | 6.4 | JudgeEvm | EVMTransaction | tx hash | — |
+   | 5 under-reported spend | 6.5 | JudgeEvm | EVMTransaction | tx hash | — |
+   | 6 budget, XRP payments | 6.8 | JudgeXrpl | Payment | tx id | `fileBudgetPayments`, per payment and receipt |
+   | 7 gross XRP outflow | 6.10 | JudgeXrpl | BalanceDecreasingTransaction | tx id | `fileXrpOutflow`, per transaction |
+   | 8 gross ERC-20 outflow | 6.11 | JudgeEvm | EVMTransaction (events) | tx hash | `fileErc20Outflow`, per (tx, logIndex) |
+
+4. **The consequence rules** (§8): proportional penalty with the 10 % floor and the bond cap; nested budget kinds sharing one high-water mark, additive kinds 1 and 4; the challenger's 10 % plus reimbursed attestation fees; the surety rule; the cooling window; the watch pool's funding, terms-only-improve and per-new-value-moving-deed rules.
+5. **The docket semantics**: record below the budget uncommitted, convict on the committed crossing, skip what is filed, and record rather than refuse a filing that raises nothing (§6.11, v0.14).
+
+**How it may change.** Additions only, as numbered amendments (v1.1, v1.2, …): a new kind, a new judge in a new Vault, a new optional contract beside the core. An amendment may not alter the meaning of anything above. A change that would requires v2, a new registry, and a migration that each principal performs by committing new mandates. Nothing is ever changed under a mandate that already exists: its Vault and judges are immutable (§8.2).
+
+**Conformance.** The test suite is the executable half of this document, and each rule above is exercised by named tests. The invariant campaign drives all eight kinds, both judges, the three dockets, the surety rule and the watch pool on one Vault, and keeps its books exact after any sequence of calls. A second implementation is conformant when that suite passes against it unchanged.
+
+**What freezing is not.** It is not an audit, and it is not a statement that the code is free of defects. It is a promise about the *interface*: that people may build against it while the code under it is examined. Defects found in the code are fixed in a new Vault under the same specification, as v0.14 fixed the docket's high-water behaviour. The list of what DELICTI does not claim (§10) is part of what is frozen.
+
 ---
 
-*Changes to this document bump the version. Anything implemented but not specified here is a bug in the document; anything specified but not implemented is marked roadmap.*
+*Since v1.0, changes to this document are numbered amendments (§14). Anything implemented but not specified here is a bug in the document; anything specified but not implemented is marked roadmap.*

@@ -907,4 +907,253 @@ contract Handler is Test {
             }
         } catch {}
     }
+
+    // ------------------------------------------------------------------ XRPL: §6.8 receipted payments
+    //
+    // The last path to the Vault the campaign did not drive. Receipted XRP payments, kind 3 (named
+    // by memo) and kind 4 (named by transaction id), anchored or not, judged two ways over the same
+    // mandate: the one-shot `challengeBudgetOverrunPayment` and the `fileBudgetPayments` docket,
+    // both kind 6, nested. Filings overlap, repeat, and cross committed or not.
+
+    struct PDeed {
+        uint256 mandateId;
+        bytes32 txid;
+        uint256 amount;
+        uint64 ts;
+        bool kind4;
+        bool anchored;
+        uint256 episode;
+    }
+
+    PDeed[] public pdeeds;
+    uint256[] public pMandates;
+    uint256 pCounter = 0xD000;
+    uint256 public nPaymentFilings;
+    uint256 public nPaymentVerdicts;
+    uint256 public nOneShotVerdicts;
+    bool public paymentDocketDrifted;
+
+    function pDeedCount() external view returns (uint256) {
+        return pdeeds.length;
+    }
+
+    function pMandateCount() external view returns (uint256) {
+        return pMandates.length;
+    }
+
+    function payScenario(uint256 pSeed, uint256 aSeed, uint256 budget, uint256 amount) external {
+        if (mandates.length >= 24) return;
+        address pr = _actor(pSeed);
+        address ag = _actor(aSeed);
+        vm.prank(pr);
+        uint256 id = reg.commit(
+            ag, keccak256("xrp payments"), 0, 0, bound(budget, 0, 30_000_000), uint64(block.timestamp), uint64(block.timestamp + 7 days),
+            MandateRegistry.Terms({sourceId: XSRC, assetKey: bytes32(0), agentRef: _xref(ag), bond: address(bond)})
+        );
+        mandates.push(id);
+        pMandates.push(id);
+        vm.prank(ag);
+        reg.acknowledge(id);
+        IPayment.Proof memory st; // the XRPL account accepts the mandate with a memo (§6.8)
+        st.data.sourceId = XSRC;
+        st.data.requestBody.transactionId = keccak256(abi.encode("acceptance", id));
+        st.data.responseBody.sourceAddressHash = _xref(ag);
+        st.data.responseBody.standardPaymentReference = agentRefs.challengeFor(id);
+        agentRefs.prove(id, st);
+        amount = bound(amount, 1, 50 ether);
+        vm.prank(pr);
+        bond.post{value: amount}(id);
+        ghostPosted += amount;
+        ghostPostedTo[id] += amount;
+    }
+
+    function _pleaf(PDeed memory d) internal pure returns (Receipts.Leaf memory) {
+        return Receipts.Leaf({
+            receiptHash: keccak256(abi.encode("xrpl receipt", d.txid)),
+            kind: d.kind4 ? Receipts.KIND_EXTERNAL_TX : Receipts.KIND_EXTERNAL_PAYMENT,
+            sourceId: XSRC,
+            destinationAddressHash: keccak256("rMerchant"),
+            amount: d.amount,
+            // kind 4 names the payment by its transaction id; kind 3 by the memo reference, which
+            // this simulation derives from the id so each receipt names exactly one payment
+            ref: d.kind4 ? d.txid : keccak256(abi.encode("memo", d.txid)),
+            claimedTimestamp: d.ts,
+            mandateId: d.mandateId
+        });
+    }
+
+    /// The agent pays on XRPL and (with `anchorIt`) writes the receipt down.
+    function payDeed(uint256 seed, uint256 amount, bool kind4, bool anchorIt) external {
+        if (pMandates.length == 0 || pdeeds.length >= 80) return;
+        uint256 id = pMandates[seed % pMandates.length];
+        PDeed memory d = PDeed(id, bytes32(pCounter++), bound(amount, 1, 12_000_000), uint64(block.timestamp), kind4, false, 0);
+        if (anchorIt) {
+            vm.prank(reg.get(id).agent);
+            try anchorLog.anchor(id, Receipts.hashMem(_pleaf(d)), 1) returns (uint256 ep) {
+                d.anchored = true;
+                d.episode = ep;
+            } catch {}
+        }
+        pdeeds.push(d);
+    }
+
+    function _payment(PDeed memory d, uint64 round) internal view returns (IPayment.Proof memory p) {
+        p.data.attestationType = bytes32("Payment");
+        p.data.sourceId = XSRC;
+        p.data.votingRound = round;
+        p.data.requestBody.transactionId = d.txid;
+        p.data.responseBody.blockTimestamp = d.ts;
+        p.data.responseBody.sourceAddressHash = reg.get(d.mandateId).agentRef;
+        p.data.responseBody.receivingAddressHash = keccak256("rMerchant");
+        p.data.responseBody.receivedAmount = int256(d.amount);
+        p.data.responseBody.spentAmount = int256(d.amount + 12);
+        p.data.responseBody.standardPaymentReference = d.kind4 ? bytes32(0) : keccak256(abi.encode("memo", d.txid));
+        p.data.responseBody.oneToOne = true;
+    }
+
+    /// Anchored deeds of a mandate, in creation (= ascending id) order, from `start`, `n` of them.
+    function _prun(uint256 id, uint256 start, uint256 n) internal view returns (PDeed[] memory run) {
+        uint256 total;
+        for (uint256 i = 0; i < pdeeds.length; i++) if (pdeeds[i].mandateId == id && pdeeds[i].anchored) total++;
+        if (total == 0) return new PDeed[](0);
+        start = start % total;
+        n = n > total - start ? total - start : n;
+        run = new PDeed[](n);
+        uint256 j;
+        uint256 k;
+        for (uint256 i = 0; i < pdeeds.length && k < n; i++) {
+            if (pdeeds[i].mandateId != id || !pdeeds[i].anchored) continue;
+            if (j++ >= start) run[k++] = pdeeds[i];
+        }
+    }
+
+    function _pArgs(PDeed[] memory run, uint64 round)
+        internal
+        view
+        returns (uint256[] memory eps, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory prs, bytes32[] memory ids)
+    {
+        uint256 n = run.length;
+        eps = new uint256[](n);
+        ls = new Receipts.Leaf[](n);
+        paths = new bytes32[][](n);
+        prs = new IPayment.Proof[](n);
+        ids = new bytes32[](n);
+        for (uint256 i = 0; i < n; i++) {
+            eps[i] = run[i].episode;
+            ls[i] = _pleaf(run[i]);
+            paths[i] = new bytes32[](0);
+            prs[i] = _payment(run[i], round);
+            ids[i] = run[i].txid;
+        }
+    }
+
+    function _pCommit(uint256 id, address who, bytes32[] memory ids, bytes32 salt) internal {
+        _commit(bond.commitmentFor(who, id, Kinds.BUDGET_PAYMENT, keccak256(abi.encode(ids)), salt), who);
+        vm.warp(block.timestamp + bond.commitLead());
+        _sweepLiveness();
+    }
+
+    function _pSpent(uint256 id, address who, bytes32[] memory ids, bytes32 salt) internal {
+        bytes32 c = bond.commitmentFor(who, id, Kinds.BUDGET_PAYMENT, keccak256(abi.encode(ids)), salt);
+        if (bond.committedAt(c) == 0 && ghostFirstCommit[c] != 0 && !ghostConsumed[c]) {
+            ghostConsumed[c] = true;
+            ghostConsumeCount[c]++;
+        }
+    }
+
+    /// The docket path: a run of anchored receipted payments, committed or not.
+    function filePayments(uint256 seed, uint256 whoSeed, uint256 startSeed, uint256 nSeed, bool committed, bytes32 salt) external {
+        if (pMandates.length == 0) return;
+        uint256 id = pMandates[seed % pMandates.length];
+        PDeed[] memory run = _prun(id, startSeed, bound(nSeed, 1, 16));
+        if (run.length == 0) return;
+        uint64 round = uint64(bound(uint256(salt), 1, 1_000_000));
+        (uint256[] memory eps, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory prs, bytes32[] memory ids) =
+            _pArgs(run, round);
+        address who = _actor(whoSeed);
+        if (committed) _pCommit(id, who, ids, salt);
+        rounds.setRoundStart(round, uint64(block.timestamp));
+        uint256 expect = xjudge.paymentDocket(id);
+        for (uint256 i = 0; i < run.length; i++) if (!xjudge.paymentFiled(id, run[i].txid)) expect += run[i].amount;
+        uint256 bondBefore = bond.bondOf(id);
+        vm.prank(who);
+        try xjudge.fileBudgetPayments(id, eps, ls, paths, prs, salt) {
+            nPaymentFilings++;
+            if (xjudge.paymentDocket(id) != expect) paymentDocketDrifted = true;
+            uint256 before = nSlashes;
+            _recordSlash(id, bondBefore);
+            if (nSlashes > before) nPaymentVerdicts++;
+            if (committed) _pSpent(id, who, ids, salt);
+        } catch {}
+    }
+
+    /// The one-shot path over the same deeds: everything anchored, committed, in one challenge.
+    function oneShotPayments(uint256 seed, uint256 whoSeed, bytes32 salt) external {
+        if (pMandates.length == 0) return;
+        uint256 id = pMandates[seed % pMandates.length];
+        PDeed[] memory run = _prun(id, 0, 16);
+        if (run.length == 0) return;
+        uint64 round = uint64(bound(uint256(salt), 1, 1_000_000));
+        (uint256[] memory eps, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory prs, bytes32[] memory ids) =
+            _pArgs(run, round);
+        address who = _actor(whoSeed);
+        _pCommit(id, who, ids, salt);
+        rounds.setRoundStart(round, uint64(block.timestamp));
+        uint256 bondBefore = bond.bondOf(id);
+        vm.prank(who);
+        try xjudge.challengeBudgetOverrunPayment(id, eps, ls, paths, prs, salt) {
+            uint256 before = nSlashes;
+            _recordSlash(id, bondBefore);
+            if (nSlashes > before) nOneShotVerdicts++;
+            _pSpent(id, who, ids, salt);
+        } catch {}
+    }
+
+    /// The honest docket keeper in one call: every anchored payment, committed.
+    function honestPaymentDocket(uint256 seed, uint256 whoSeed, bytes32 salt) external {
+        this.filePayments(seed, whoSeed, 0, 16, true, salt);
+    }
+
+    // ------------------------------------------------------------------ the watch pool (v0.14)
+
+    uint256 public ghostWatchFunded;
+    uint256 public ghostWatchRefunded;
+    bool public refundExceededFunding;
+    uint256 public nRefunds;
+
+    function watchTerms(uint256 seed, uint256 rate, uint256 minV) external {
+        if (mandates.length == 0) return;
+        uint256 id = _mandate(seed);
+        vm.prank(reg.get(id).principal);
+        try bond.setWatchTerms(id, bound(rate, 0, 1 ether), bound(minV, 0, 3_000_000)) {} catch {}
+    }
+
+    function fundWatch(uint256 seed, uint256 whoSeed, uint256 amount) external {
+        if (mandates.length == 0) return;
+        uint256 id = _mandate(seed);
+        amount = bound(amount, 0, 5 ether);
+        // mostly the principal or the agent (the only parties allowed); sometimes an outsider, refused
+        MandateRegistry.Mandate memory m = reg.get(id);
+        address who = whoSeed % 3 == 0 ? m.principal : whoSeed % 3 == 1 ? m.agent : _actor(whoSeed / 3);
+        vm.prank(who);
+        try bond.fundWatch{value: amount}(id) {
+            ghostWatchFunded += amount;
+        } catch {}
+    }
+
+    function refundWatch(uint256 seed, uint256 whoSeed) external {
+        if (mandates.length == 0) return;
+        uint256 id = _mandate(seed);
+        MandateRegistry.Mandate memory m = reg.get(id);
+        address who = whoSeed % 2 == 0 ? m.principal : m.agent;
+        uint256 mine = bond.watchFunded(id, who);
+        uint256 before = who.balance;
+        vm.prank(who);
+        try bond.refundWatch(id, payable(who)) {
+            uint256 got = who.balance - before;
+            ghostWatchRefunded += got;
+            nRefunds++;
+            if (got > mine) refundExceededFunding = true;
+        } catch {}
+    }
 }

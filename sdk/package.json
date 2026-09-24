@@ -1,6 +1,6 @@
 {
   "name": "@delicti-protocol/sdk",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "description": "TypeScript SDK, watchers and sentinel for DELICTI: mandates, bonds, two-witness evidence from Flare's FDC, and the bots that keep dockets and convict. Flare · XRPL · x402 · stablecoins.",
   "keywords": [
     "agent-accountability",

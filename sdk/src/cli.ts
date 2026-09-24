@@ -32,7 +32,7 @@ const rest = cmd === "sentinel" ? argv.slice(1) : argv.slice(2);
 const flag = (f: string) => rest.includes(f);
 const opt = (f: string) => (rest.includes(f) ? rest[rest.indexOf(f) + 1] : undefined);
 if (!cmd || !idArg) {
-  console.error("usage: delicti-watch erc20|xrpl|status <mandateId> [--once] [--interval s] | sentinel [--policy …]");
+  console.error("usage: delicti (or delicti-watch) erc20|xrpl|status <mandateId> [--once] [--interval s] | sentinel [--policy …]");
   process.exit(2);
 }
 

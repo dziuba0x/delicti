@@ -6,3 +6,4 @@ broadcast/
 .run/
 __pycache__/
 sdk/dist/
+*.tgz

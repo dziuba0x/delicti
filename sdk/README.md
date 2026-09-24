@@ -8,6 +8,15 @@ TypeScript for DELICTI, built on [viem](https://viem.sh). It has three parts:
 
 v0.15, Coston2 and XRPL testnet only. Not audited. Whitehat use on testnets.
 
+## Install
+
+```sh
+npm i @delicti/sdk viem          # the library (ESM, Node ≥ 22, types included)
+npx delicti sentinel             # the command line, without installing anything
+```
+
+`delicti` on npm is a thin launcher for this package's CLI. Once `@delicti/sdk` is installed, the same CLI is also available as `delicti-watch`.
+
 ## An agent under a mandate, in a few lines
 
 ```ts
@@ -32,9 +41,9 @@ console.log(await delicti.status(id));       // live, bond, severity, dockets
 ```sh
 export PRIVATE_KEY=0x…        # the watcher's own key: pays attestation fees, earns the reward
 export VERIFIER_URL=… VERIFIER_API_KEY=… DA_URL=…
-npx delicti-watch erc20 12              # every 60 s
-npx delicti-watch erc20 12 --once       # one cycle
-npx delicti-watch status 12
+npx delicti erc20 12              # every 60 s
+npx delicti erc20 12 --once       # one cycle
+npx delicti status 12
 ```
 
 Each cycle goes through these steps:
@@ -54,15 +63,15 @@ A mandate names its XRPL account only by hash (`agentRef`). The watcher finds th
 Reading the account's history takes more care than it seems. `account_tx` over a real window needs a full-history XRPL server; the public testnet endpoint reachable here keeps about 1,300 ledgers, under an hour and a half. But every transaction that moves an account's XRP modifies its AccountRoot, and each modification records the previous transaction that did (`PreviousTxnID`). So the balance history is a linked list, anchored at `account_info`. `XrplHistory.walk` follows it backwards through **the FDC verifier's own index**, about 15 days of full transactions with metadata. It finds exactly what can still be proven, offers taken in other accounts' transactions included, and a balance change that is not on the list did not happen.
 
 ```sh
-npx delicti-watch xrpl 13 --once          # one mandate
+npx delicti xrpl 13 --once          # one mandate
 ```
 
 ## The sentinel
 
 ```sh
-npx delicti-watch sentinel                                   # observe everything, act on nothing, no key needed
-npx delicti-watch sentinel --policy profit --interval 300    # act where stipends + reward cover the cost
-npx delicti-watch sentinel --policy altruist --html report.html --out report.json --state sentinel.json
+npx delicti sentinel                                   # observe everything, act on nothing, no key needed
+npx delicti sentinel --policy profit --interval 300    # act where stipends + reward cover the cost
+npx delicti sentinel --policy altruist --html report.html --out report.json --state sentinel.json
 ```
 
 Each round goes through five steps:

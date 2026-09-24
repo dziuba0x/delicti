@@ -1,22 +1,28 @@
 {
   "name": "@delicti/sdk",
   "version": "0.15.0",
-  "description": "TypeScript SDK and watcher for DELICTI: mandates, bonds, FDC evidence, and the bot that files dockets and convicts.",
+  "description": "TypeScript SDK, watchers and sentinel for DELICTI: mandates, bonds, two-witness evidence from Flare's FDC, and the bots that keep dockets and convict. Flare · XRPL · x402 · stablecoins.",
   "keywords": [
-    "delicti",
-    "ai-agents",
     "agent-accountability",
-    "watcher",
-    "sentinel",
-    "flare",
+    "agent-wallets",
+    "ai-agents",
+    "corpus-delicti",
+    "delicti",
+    "eip-3009",
     "fdc",
-    "xrpl",
-    "x402",
-    "stablecoins",
+    "flare",
+    "ftso",
     "mcp",
-    "viem",
+    "sdk",
+    "sentinel",
+    "spending-limits",
+    "stablecoins",
     "typescript",
-    "sdk"
+    "viem",
+    "watcher",
+    "x402",
+    "xrp-ledger",
+    "xrpl"
   ],
   "type": "module",
   "license": "MIT",
@@ -35,18 +41,30 @@
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
   "bin": {
     "delicti-watch": "dist/cli.js"
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "abi": "node scripts/gen-abi.mjs",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run typecheck && npm test",
     "watch:erc20": "tsx src/cli.ts erc20",
     "sentinel": "tsx src/cli.ts sentinel"
   },
@@ -58,5 +76,8 @@
     "tsx": "^4.20.0",
     "vitest": "^3.2.0",
     "@types/node": "^22.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

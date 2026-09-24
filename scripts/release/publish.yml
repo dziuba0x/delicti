@@ -1,0 +1,25 @@
+# Trusted publishing (OIDC): npm releases from GitHub Actions with provenance and no stored token.
+# To enable after the first manual publish:
+#   1. git mv scripts/release/publish.yml .github/workflows/publish.yml   (workflows are protected: push this one yourself)
+#   2. on npmjs.com, for BOTH @delicti/sdk and delicti: Settings → Trusted publisher → GitHub Actions,
+#      repository dziuba0x/delicti, workflow publish.yml
+#   3. bump the versions, tag vX.Y.Z, push the tag
+name: publish
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: npm install -g npm@latest   # trusted publishing needs npm ≥ 11.5
+      - run: cd sdk && npm ci && npm publish --provenance --access public
+      - run: cd packages/delicti && npm publish --provenance --access public

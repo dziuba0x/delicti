@@ -1,0 +1,343 @@
+<!doctype html>
+<!--
+  DELICTI hero — liquid glass over deep space. Rendered offline, frame by frame (render.mjs).
+
+  Two passes:
+    1. space: a nebula lit by two witnesses (cyan = the effector's receipt, amber = the Flare
+       Data Connector) that meet in a white star behind the wordmark; three layers of stars,
+       a few with JWST-style six-point spikes; the labels, printed on the same plane, so glass
+       passing over them bends them.
+    2. glass: the wordmark and a handful of droplets as one signed distance field, smooth-
+       unioned so drops merge with each other and with the letters the way Liquid Glass shapes
+       morph. Height from a squircle bevel (kube.io's profile, Apple's choice), normals from the
+       height field, Snell refraction per colour channel (dispersion), Fresnel, a rim light
+       that travels as the key light turns, a hairline at the silhouette, contact shadow below.
+  Everything is periodic in uT ∈ [0,1), so the loop is seamless.
+-->
+<html><head><meta charset="utf-8">
+<style>html,body{margin:0;background:transparent}canvas{display:block}</style>
+</head><body>
+<canvas id="gl"></canvas>
+<script>
+const TAU = Math.PI * 2;
+
+const COMMON = `#version 300 es
+precision highp float;
+#define TAU 6.28318530718
+#define PI 3.14159265359
+uniform vec2 uRes; uniform float uSS; uniform vec2 uDesign; uniform float uOY; uniform float uT;
+out vec4 o;
+vec2 designP(){ vec2 f = gl_FragCoord.xy / uSS; return vec2(f.x, uDesign.y - f.y); }
+vec3 lin(vec3 c){ return pow(c, vec3(2.2)); }
+`;
+
+const BG = COMMON + `
+uniform sampler2D uLabels;
+float hash(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
+float vnoise(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.-2.*f);
+  return mix(mix(hash(i),hash(i+vec2(1,0)),u.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),u.x), u.y); }
+float fbm(vec2 p){ float a=.5, s=0.; mat2 m=mat2(1.6,1.2,-1.2,1.6); for(int i=0;i<5;i++){ s+=a*vnoise(p); p=m*p+vec2(1.7,9.2); a*=.5; } return s; }
+
+vec3 starLayer(vec2 q, float cell, float dens, float size, float bright, float tw){
+  vec2 id = floor(q/cell), f = fract(q/cell) - .5;
+  float h = hash(id);
+  if (h > dens) return vec3(0.);
+  vec2 off = (vec2(hash(id+3.1), hash(id+7.7)) - .5) * .7;
+  float r = length(f - off) * cell;
+  float k = floor(1. + 3.*hash(id+1.3));
+  float twk = .65 + .35*sin(TAU*(uT*k + hash(id+9.1)));
+  float b = bright * exp(-r*r/(size*size)) * mix(1., twk, tw) * (.35 + .65*hash(id+2.2));
+  vec3 tint = mix(vec3(.72,.84,1.), vec3(1.,.88,.72), hash(id+5.5));
+  return tint * b;
+}
+float spikes(vec2 d, float len){
+  float s = 0.;
+  for (int k = 0; k < 3; k++){
+    float a = float(k)*PI/3. + PI/2.;
+    vec2 dir = vec2(cos(a), sin(a));
+    float al = dot(d, dir); float pe = length(d - al*dir);
+    s += exp(-pe*pe/.30) * exp(-abs(al)/len);
+  }
+  vec2 hd = vec2(1.,0.); float al = dot(d,hd); float pe = abs(d.y);
+  s += .6 * exp(-pe*pe/.25) * exp(-abs(al)/(len*.55));
+  return s;
+}
+vec3 bigStar(vec2 q, vec2 c, float len, float b, vec3 tint, float ph){
+  vec2 d = q - c;
+  float tw = .8 + .2*sin(TAU*(uT*2. + ph));
+  return tint * b * tw * (exp(-dot(d,d)/1.6) * 2.2 + spikes(d, len) * .55 + exp(-dot(d,d)/60.) * .25);
+}
+
+void main(){
+  vec2 P = designP();
+  vec2 q = P - vec2(0., uOY);
+  vec2 L = vec2(cos(TAU*uT), sin(TAU*uT));
+  vec3 CYAN = lin(vec3(.208,.812,1.));      // #35CFFF
+  vec3 AMBER = lin(vec3(1.,.682,.271));     // #FFAE45
+
+  // deep space
+  vec2 c = vec2(640., 196.);
+  vec3 col = lin(vec3(.012,.014,.026)) + lin(vec3(.03,.035,.06)) * exp(-dot(P-vec2(uDesign.x*.5, uDesign.y*.45), P-vec2(uDesign.x*.5, uDesign.y*.45))/(2.*420.*420.));
+
+  // nebula: domain-warped fbm, lit by the two witnesses
+  vec2 w = vec2(fbm(q*.0042 + .30*L), fbm(q*.0042 + vec2(5.2,1.3) - .30*L.yx));
+  float n = fbm(q*.0048 + 2.3*w + .12*L);
+  float dust = fbm(q*.009 + vec2(3.1,7.7) + .22*L + 1.3*w);
+  float lc = exp(-pow((q.x-380.)/300., 2.) - pow((q.y-205.)/165., 2.));
+  float la = exp(-pow((q.x-900.)/300., 2.) - pow((q.y-205.)/165., 2.));
+  float dens = smoothstep(.28, .95, n);
+  float fil = pow(dens, 1.7);
+  vec3 neb = CYAN * lc * (.04 + 1.6*fil) + AMBER * la * (.04 + 1.6*fil);
+  neb *= .30 + .95*smoothstep(.30, .80, dust);
+  // where the witnesses agree: a white star behind the wordmark
+  float r2 = dot(q-c, q-c);
+  neb += lin(vec3(.92,.90,1.)) * exp(-r2/(2.*70.*70.)) * (.05 + .22*dens);
+  neb += vec3(1.) * exp(-r2/(2.*10.*10.)) * .45;
+  neb += vec3(1.) * exp(-r2/(2.*2.4*2.4)) * 1.2;
+  col += neb;
+  // Apple's rule for clear glass: a dimming layer under it, so the glass reads
+  col *= 1. - .30 * exp(-pow((q.x-640.)/470., 2.) - pow((q.y-192.)/92., 2.));
+
+  // stars
+  vec3 st = starLayer(q, 5., .03, .55, .7, .3)
+          + starLayer(q+31., 17., .15, .75, 1.3, .6)
+          + starLayer(q+77., 57., .35, 1.05, 2.4, 1.);
+  st *= 1. - .55*smoothstep(.2, 1., (lc+la)*fil);   // nebula swallows the faint ones
+  col += st;
+  col += bigStar(q, vec2(158.,132.), 26., 1.1, lin(vec3(.82,.9,1.)), .1);
+  col += bigStar(q, vec2(1152.,318.), 22., .9, lin(vec3(1.,.9,.78)), .6);
+  col += bigStar(q, vec2(1046.,96.), 14., .55, lin(vec3(.9,.95,1.)), .35);
+  col += bigStar(q, vec2(250.,372.), 12., .45, lin(vec3(1.,.95,.9)), .8);
+
+  // labels, printed on the same plane (glass bends them)
+  vec4 lab = texture(uLabels, gl_FragCoord.xy / uRes);
+  col = mix(col, lin(lab.rgb), lab.a);
+
+  o = vec4(col, 1.);
+}`;
+
+const GLASS = COMMON + `
+uniform sampler2D uBg; uniform sampler2D uSdf;
+uniform vec3 uDrops[12]; uniform int uN;
+uniform vec2 uLight; uniform float uRadius;
+
+float sdLetters(vec2 q){
+  vec2 uv = q / vec2(1280., 440.);
+  if (uv.x < 0. || uv.y < 0. || uv.x > 1. || uv.y > 1.) return 1e3;
+  return texture(uSdf, uv).r;
+}
+float smin(float a, float b, float k){ float h = max(k - abs(a-b), 0.)/k; return min(a,b) - h*h*k*.25; }
+float sdDrops(vec2 q){
+  float d = 1e3;
+  for (int i = 0; i < 12; i++){ if (i >= uN) break; vec3 D = uDrops[i]; float di = length(q - D.xy) - D.z; d = (i == 0) ? di : smin(d, di, 26.); }
+  return d;
+}
+float scene(vec2 q){ return smin(sdLetters(q), sdDrops(q), 16.); }
+// squircle bevel; wider for drops so they are true lenses
+float dropW(vec2 q){ return smoothstep(-4., 4., sdLetters(q) - sdDrops(q)); }
+float bevelW(vec2 q){ return mix(14.5, 30., dropW(q)); }
+float height(vec2 q){ float d = scene(q); float B = bevelW(q); float x = clamp(-d/B, 0., 1.); return 16. * pow(1. - pow(1. - x, 4.), .25) + 7. * smoothstep(0., 20., -d) * dropW(q); }
+
+vec2 lensOff(vec3 t, float depth){ vec2 o = t.xy / max(-t.z, .12) * depth; float l = length(o); return o / (1. + l / 38.); }
+vec2 bguv(vec2 q){ vec2 p = q + vec2(0., uOY); return vec2(p.x/uDesign.x, 1. - p.y/uDesign.y); }
+vec3 bg(vec2 q){ return texture(uBg, bguv(q)).rgb; }
+// what thick glass does to what is behind it: a touch softer, a touch brighter
+vec3 bgGlass(vec2 q){ vec2 uv = bguv(q); return mix(texture(uBg, uv).rgb, textureLod(uBg, uv, 1.7).rgb, .65); }
+
+// the plane behind, with the soft shadow the glass throws on it (seen through the glass too)
+vec3 bgs(vec2 q){ float sd = scene(q - vec2(0., 12.)); return bg(q) * (1. - (1. - smoothstep(-14., 42., sd)) * .30); }
+float sdRoundBox(vec2 p, vec2 b, float r){ vec2 d = abs(p) - b + r; return length(max(d, 0.)) + min(max(d.x, d.y), 0.) - r; }
+
+void main(){
+  vec2 P = designP();
+  vec2 q = P - vec2(0., uOY);
+  float d = scene(q);
+  float cov = clamp(.5 - d*uSS, 0., 1.);
+  vec3 col;
+
+  // outside: contact shadow and a soft drop shadow, so the glass stands off the plane
+  vec3 outside = bgs(q) * (1. - exp(-max(d, 0.)/2.5) * .10);
+
+  vec3 glass = vec3(0.);
+  if (d < 2.){
+    float e = .6;
+    float h = height(q);
+    float gx = (height(q + vec2(e,0.)) - height(q - vec2(e,0.))) / (2.*e);
+    float gy = (height(q + vec2(0.,e)) - height(q - vec2(0.,e))) / (2.*e);
+    vec3 n = normalize(vec3(-gx, -gy, 1.));
+    vec3 V = vec3(0., 0., -1.);
+    float depth = h + 46.;
+    vec3 tr = refract(V, n, 1./1.44), tg = refract(V, n, 1./1.50), tb = refract(V, n, 1./1.57);
+    vec2 oR = lensOff(tr, depth), oG = lensOff(tg, depth), oB = lensOff(tb, depth);
+    float sh = 1. - (1. - smoothstep(-14., 42., scene(q + oG - vec2(0., 12.)))) * .30;
+    vec3 refr = vec3(bgGlass(q + oR).r, bgGlass(q + oG).g, bgGlass(q + oB).b) * sh;
+
+    float B = bevelW(q);
+    float edge = 1. - clamp(-d/B, 0., 1.);             // 0 on the flat, 1 at the silhouette
+    vec2 nd = normalize(n.xy + 1e-6);
+    float ld = dot(nd, uLight);
+    float F = .02 + .5 * pow(1. - n.z, 5.);
+
+    glass = refr * (1. - F) * 1.08 + lin(vec3(.035,.04,.05));
+    glass *= 1. - .12 * smoothstep(.75, 1., edge);    // the steep bevel reads as thickness
+    // environment in the reflection: dark space, the key light, the witnesses' colours
+    vec3 key = vec3(1.);
+    vec3 env = lin(vec3(.16,.17,.2)) + key * pow(max(ld, 0.), 6.) * .6
+             + lin(vec3(.208,.812,1.)) * max(-nd.x, 0.) * .12 + lin(vec3(1.,.682,.271)) * max(nd.x, 0.) * .12;
+    glass += env * F;
+    float rimA = pow(edge, 7.) * smoothstep(.35, 1., ld);
+    float rimB = pow(edge, 7.) * smoothstep(.35, 1., -ld);
+    glass += key * rimA * 1.0;
+    glass += mix(key, refr * 3., .45) * rimB * .38;
+    float hair = exp(-pow(max(-d, 0.) * 1.5, 2.));
+    glass += key * hair * (.06 + .80 * pow(max(ld, 0.), 2.) + .35 * pow(max(-ld, 0.), 2.));
+    vec3 L3 = normalize(vec3(uLight * .85, .55));
+    vec3 Hh = normalize(L3 + vec3(0., 0., 1.));
+    glass += key * pow(max(dot(n, Hh), 0.), 120.) * 1.4 + key * pow(max(dot(n, Hh), 0.), 18.) * .10;
+    // light caught inside the glass, a faint glow from within
+    
+  }
+  col = mix(outside, glass, cov);
+
+  // vignette, tone map, encode
+  vec2 vc = (P - uDesign * vec2(.5, .47)) / (uDesign * vec2(.62, .95));
+  col *= mix(1., .45, smoothstep(.35, 1.15, length(vc)));
+  col = 1. - exp(-col * 1.25);
+  col = pow(col, vec3(1./2.2));
+
+  // the card: rounded, with a hairline bezel, as if the glass came out of a screen
+  float rb = sdRoundBox(P - uDesign*.5, uDesign*.5, uRadius);
+  float a = clamp(.5 - rb*uSS, 0., 1.);
+  if (uRadius > 0.) col += vec3(.10) * exp(-pow((rb + .9) * 1.4, 2.));
+  o = vec4(col * a, a);
+}`;
+
+const VERT = `#version 300 es
+in vec2 p; void main(){ gl_Position = vec4(p, 0., 1.); }`;
+
+let gl, progBg, progGlass, fbo, bgTex, labTex, sdfTex, cfg;
+
+function compile(src, type){ const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
+function program(fs){ const p = gl.createProgram(); gl.attachShader(p, compile(VERT, gl.VERTEX_SHADER)); gl.attachShader(p, compile(fs, gl.FRAGMENT_SHADER));
+  gl.bindAttribLocation(p, 0, 'p'); gl.linkProgram(p); if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p)); return p; }
+function u(p, n){ return gl.getUniformLocation(p, n); }
+
+async function labels(W, H, SS, oy){
+  const cv = document.createElement('canvas'); cv.width = W*SS; cv.height = H*SS;
+  const x = cv.getContext('2d'); x.scale(SS, SS); x.translate(0, oy);
+  const mono = (s, px, X, Y, a, align='left', sp=1.6) => { x.font = `500 ${px}px GeistMono`; x.letterSpacing = sp+'px'; x.textAlign = align; x.fillStyle = `rgba(255,255,255,${a})`; x.fillText(s, X, Y); };
+  // top: the two witnesses
+  x.fillStyle = '#35CFFF'; x.beginPath(); x.arc(68, 49, 3, 0, TAU); x.fill();
+  mono('WITNESS 01', 11, 80, 53, .82);
+  mono('EFFECTOR RECEIPT', 11, 64, 72, .42);
+  x.fillStyle = '#FFAE45'; x.beginPath(); x.arc(W-68, 49, 3, 0, TAU); x.fill();
+  mono('WITNESS 02', 11, W-80, 53, .82, 'right');
+  mono('FLARE DATA CONNECTOR', 11, W-64, 72, .42, 'right');
+  // the line under the name
+  x.font = '400 21px Geist'; x.letterSpacing = '0.2px'; x.textAlign = 'center'; x.fillStyle = 'rgba(255,255,255,.82)';
+  x.fillText('Accountability for autonomous AI agents', W/2, 322);
+  // bottom
+  mono('MANDATE · DEED · BOND', 11, 64, 404, .40);
+  mono('AGREEMENT IS EVIDENCE', 11, W/2, 404, .30, 'center');
+  mono('FLARE · XRPL · SPEC 1.0', 11, W-64, 404, .40, 'right');
+  return cv;
+}
+
+// the choreography, in design px of the 1280×440 layout; periodic in t
+function drops(t){
+  // Rules: nothing floats just above or below a letter (it would read as an accent); drops meet each
+  // other, and one meets the wordmark from the side, where a bridge reads as liquid, not as a mark.
+  const c = Math.cos, s = Math.sin, D = [];
+  // left margin: a pair that rises and falls, meets, necks and parts
+  D.push([142 + 9*s(TAU*t), 196 - 50*c(TAU*t), 20]);
+  D.push([150 - 7*s(TAU*t), 262 + 44*c(TAU*t), 13]);
+  // a lens that drifts across the start of the line under the name, magnifying it
+  D.push([372 + 150*(.5 - .5*c(TAU*t)), 334 + 6*s(TAU*t), 26]);
+  // bottom right: a large drop, and a small one orbiting it that is swallowed and let go
+  const bx = 968 + 24*s(TAU*t), by = 360 + 7*c(TAU*t);
+  D.push([bx, by, 27]);
+  const th = TAU*2*t, R = 62 + 24*c(TAU*2*t);
+  D.push([bx + R*c(th), by + .5*R*s(th), 10]);
+  // right: one that reaches the last I from the side, bridges into it, and lets go
+  D.push([1084 + 22*c(TAU*t), 204 + 16*s(TAU*t), 14]);
+  // strays
+  D.push([1150 + 26*s(TAU*t), 128 + 10*s(TAU*(t+.25)), 15]);
+  D.push([1196 + 8*s(TAU*2*t), 262 + 12*c(TAU*t), 7]);
+  D.push([712 + 26*s(TAU*t), 44 + 5*c(TAU*2*t), 5 + 2*(.5+.5*s(TAU*t))]);
+  D.push([610 - 30*s(TAU*t), 392 + 6*c(TAU*t), 8]);
+  return D;
+}
+
+window.init = async (opts) => {
+  cfg = opts;
+  const { W, H, SS, oy } = cfg;
+  const cv = document.getElementById('gl'); cv.width = W*SS; cv.height = H*SS;
+  gl = cv.getContext('webgl2', { premultipliedAlpha: true, preserveDrawingBuffer: true, antialias: false });
+  gl.getExtension('EXT_color_buffer_float'); gl.getExtension('OES_texture_float_linear');
+  for (const [fam, file, w] of [['Geist', 'Geist-Regular', 400], ['GeistMono', 'GeistMono-Medium', 500]]) {
+    const sub = fam === 'Geist' ? 'geist-sans' : 'geist-mono';
+    const f = new FontFace(fam, `url(file://${cfg.fonts}/${sub}/${file}.ttf)`, { weight: String(w) });
+    await f.load(); document.fonts.add(f);
+  }
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  progBg = program(BG); progGlass = program(GLASS);
+
+  // labels
+  labTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, labTex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, await labels(W, H, SS, oy));
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+
+  // wordmark SDF (half floats, row 0 = top)
+  const bin = Uint8Array.from(atob(cfg.sdf), ch => ch.charCodeAt(0));
+  sdfTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, sdfTex);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, 1280, 440, 0, gl.RED, gl.HALF_FLOAT, new Uint16Array(bin.buffer));
+  for (const k of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, k, gl.LINEAR);
+  for (const k of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, k, gl.CLAMP_TO_EDGE);
+
+  // background target
+  bgTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, bgTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, W*SS, H*SS, 0, gl.RGBA, gl.HALF_FLOAT, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  for (const k of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, k, gl.CLAMP_TO_EDGE);
+  fbo = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, bgTex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return 'ok';
+};
+
+function common(p, t){
+  const { W, H, SS, oy } = cfg;
+  gl.uniform2f(u(p, 'uRes'), W*SS, H*SS); gl.uniform1f(u(p, 'uSS'), SS);
+  gl.uniform2f(u(p, 'uDesign'), W, H); gl.uniform1f(u(p, 'uOY'), oy); gl.uniform1f(u(p, 'uT'), t);
+}
+
+window.frame = async (t) => {
+  const { W, H, SS } = cfg;
+  gl.viewport(0, 0, W*SS, H*SS);
+  // pass 1: space
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo); gl.useProgram(progBg); common(progBg, t);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, labTex); gl.uniform1i(u(progBg, 'uLabels'), 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.bindTexture(gl.TEXTURE_2D, bgTex); gl.generateMipmap(gl.TEXTURE_2D);
+  // pass 2: glass
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.useProgram(progGlass); common(progGlass, t);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, bgTex); gl.uniform1i(u(progGlass, 'uBg'), 0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, sdfTex); gl.uniform1i(u(progGlass, 'uSdf'), 1);
+  const D = drops(t);
+  gl.uniform3fv(u(progGlass, 'uDrops'), new Float32Array(D.flat().concat(new Array((12 - D.length) * 3).fill(0))));
+  gl.uniform1i(u(progGlass, 'uN'), D.length);
+  const ang = -2.2 + .35 * Math.sin(TAU * t);         // the key light circles slowly: highlights travel round the letters
+  gl.uniform2f(u(progGlass, 'uLight'), Math.cos(ang), Math.sin(ang));
+  gl.uniform1f(u(progGlass, 'uRadius'), cfg.radius);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.finish();
+  return document.getElementById('gl').toDataURL('image/png');
+};
+</script>
+</body></html>

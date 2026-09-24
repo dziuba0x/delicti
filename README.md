@@ -1,9 +1,6 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
-  <img src="assets/hero-light.svg" width="100%" alt="DELICTI — accountability for autonomous AI agents. Two witnesses to one deed: the effector's receipt and the Flare Data Connector. Agreement is evidence.">
-</picture>
+<img src="assets/hero.webp" width="100%" alt="DELICTI, set in liquid glass over deep space: two nebulae, cyan for the effector's receipt (witness 1) and amber for the Flare Data Connector (witness 2), meet in a white star behind the name. Drops of glass drift, merge and bend what is behind them.">
 
 **Accountability for autonomous AI agents.** The principal commits a mandate before the agent acts. An independent witness confirms each deed. If the agent breaks the mandate, its bond pays for the breach, and no court is involved.
 

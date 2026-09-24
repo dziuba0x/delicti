@@ -5,3 +5,4 @@ broadcast/
 .env
 .run/
 __pycache__/
+sdk/dist/

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (after v0.13.0)
+
+- **`sdk/` — `@delicti/sdk` and the `delicti-watch` bot.** TypeScript on viem. `Delicti` covers commit, acknowledge/declareExclusive, post/postFor, withdraw, claim and status. `Fdc` covers prepare, request (with the fee), the voting-round clock, and DA polling with decoding. `ExplorerLogSource` exists because Flare's RPC serves 30 blocks per `eth_getLogs`. `planErc20` is a pure planner: window, already-filed per log, ascending hashes, 50 logs per request, and record vs convict. `Erc20OutflowWatcher` runs one cycle: look, plan, and either record or commit → wait for the round past `commitLead` → attest → file. ABIs are generated from the Foundry build.
+- **Live, mandate #12:** the watcher recorded three payments, then committed, waited and convicted on the next two by itself (`bondOf` 1 → 0.75). Its books are in docs/DEPLOYMENTS.md: 0.78 C2FLR spent, mostly testnet gas at 650 gwei, against 0.025 earned. A 1-C2FLR bond is not worth watching at testnet prices, which is the "small bonds are not watched" limit, now measured.
+- **Tests (vitest, 17):** the planner (11 cases); the commitment encoding pinned to a value the live Vault computed; a real FDC proof from mandate #11, decoded and, with `DELICTI_ONLINE=1`, sent back to the live judge, which runs `FdcVerification` and every check and answers `NothingNew`.
+
 ## v0.13.0 — 2026-09-24 — stablecoins: the agent that signs and never sends
 
 BlackRock's thesis of the week is that AI agents will drive demand for stablecoins and blockchain payments. The agent that thesis describes pays in USDC or USDT0 by x402. It signs an EIP-3009 authorisation, a facilitator sends it, and it writes no receipt. Until now DELICTI reached that agent only through a staked accusation, one deed at a time (§6.4).

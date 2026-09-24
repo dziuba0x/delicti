@@ -1,0 +1,20 @@
+{
+  "name": "@delicti/sdk",
+  "version": "0.13.0",
+  "description": "TypeScript SDK and watcher for DELICTI: mandates, bonds, FDC evidence, and the bot that files dockets and convicts.",
+  "type": "module",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": { "delicti-watch": "dist/cli.js" },
+  "files": ["dist", "src"],
+  "scripts": {
+    "abi": "node scripts/gen-abi.mjs",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "watch:erc20": "tsx src/cli.ts erc20"
+  },
+  "dependencies": { "viem": "2.56.8" },
+  "devDependencies": { "typescript": "^5.9.0", "tsx": "^4.20.0", "vitest": "^3.2.0", "@types/node": "^22.0.0" }
+}

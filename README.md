@@ -66,6 +66,7 @@ Nothing below is a claim about what the contracts *would* do. Each line is a tra
 
 | What was proven | Transaction |
 |---|---|
+| **The watcher bot convicted an agent on its own.** `delicti-watch` (SDK) found five x402 payments through the explorer. It filed the first three as a recording, then committed before any attestation existed, waited out the lead, proved the last two and filed the conviction. Nobody ran a script against this mandate | [`0x4735cd57…232bff`](https://coston2-explorer.flare.network/tx/0x4735cd5750935eeae918b7e477d0d90d977057132952192d007e628c22232bff) · recording: [`0xf93cd783…d6f077`](https://coston2-explorer.flare.network/tx/0xf93cd783087f95df0c30eb2f015afe527727917805490fdf12c85e72c6d6f077) |
 | **v0.13 — a stablecoin agent convicted from the token's own log.** Five x402 settlements of 1 mUSDT0: the agent only *signed* them (EIP-3009), a facilitator *sent* them, and there are no receipts. FDC `EVMTransaction` proofs of the `Transfer` logs were filed on a docket, three uncommitted and then the committed crossing: 5 against a 4-unit budget took 25 % of the bond (SPEC §6.11) | [`0x75d51613…071dea`](https://coston2-explorer.flare.network/tx/0x75d51613fed7a4d69fc84fce28654cfdc43e91cccfdf557a3a60326506071dea) · docket: [`0x122d1f14…23ca2c`](https://coston2-explorer.flare.network/tx/0x122d1f142a75d9ef15eea39cfbaff77fa68fb678ddb35f3a552e30f72723ca2c) |
 | **v0.10 — structuring on XRPL, live.** Five payments of 1 XRP under a 4-XRP budget, each proven by an FDC `Payment` attestation, each matched to an anchored receipt; the agent's XRPL account confirmed the mandate itself, by a payment carrying the mandate's challenge in its memo. A 25 % overrun took 25 % of the bond | [`0xb6856090…62bcb89`](https://coston2-explorer.flare.network/tx/0xb6856090222fb3083d425bb22126f88fd35e66f14641a8b03c2cd2c4862bcb89) · control: [`0xa5c17d21…63cd8f`](https://coston2-explorer.flare.network/tx/0xa5c17d21eb4c5495ab58282921e98b0360977a729a00bdb31dfdb66f6b63cd8f) |
 | **An XRPL deed that is not a payment, done inside someone else's transaction** — the agent's resting offer was taken by another account; FDC `BalanceDecreasingTransaction` attests that the agent's account lost 9 XRP in *that* transaction, and `FdcVerification` accepts the proof (SPEC §6.9) | request [`0xc5a32b7b…067b47`](https://coston2-explorer.flare.network/tx/0xc5a32b7b53d626a630e84108500878a5f1f850dd67feda46d0d3ce672e067b47) |
@@ -117,6 +118,10 @@ scripts/xrpl-outflow.sh          # §6.10: no receipts, an offer eaten by someon
 Or deploy your own: `forge script script/Deploy.s.sol --rpc-url coston2 --broadcast --private-key $PRIVATE_KEY`, then point `REG` / `LOG` / `METER` / `BOND` in `.env` at it.
 
 The scripts in [`scripts/`](scripts) each reproduce one row of the table above: `structuring.sh`, `xrpl-structuring.sh`, `x402-structuring.sh`, `mcp-structuring.sh`, `brake-test.sh`, `spend-meter.sh`, `unanchored-deed.sh`, `contradicted-deed.sh`, `xrpl-outflow.sh`, `erc20-outflow.sh`. Test funds: [Coston2 faucet](https://faucet.flare.network/coston2).
+
+## SDK and watcher
+
+[`sdk/`](sdk) is a TypeScript package on viem. `Delicti` covers commit, exclusivity, bonds and status in a few calls. `delicti-watch erc20 <mandateId>` is a watcher that keeps a stablecoin mandate's docket current and convicts when it crosses the budget: it commits first, waits out the lead, then proves and files. Its first live run is the first row of the table above. See [sdk/README.md](sdk/README.md).
 
 ## Contracts (v0.13 on Coston2)
 

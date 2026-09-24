@@ -26,6 +26,15 @@ npx -p @delicti-protocol/sdk delicti sentinel             # the command line, wi
 
 Once installed, the CLI is `delicti` (alias `delicti-watch`).
 
+## SUMMA: one dollar budget across chains (amendment v1.1, live on Coston2)
+
+```ts
+import { coston2, judgeSummaAbi, summaMeterAbi, mandateFacilitatorAbi } from "@delicti-protocol/sdk";
+coston2.summa; // { judge, vault, meter, facilitator }
+```
+
+An *umbrella* mandate states the budget in µUSD. Its agent links rail mandates to it: XRP outflow on the XRP Ledger, and USD₮0 or any other mapped ERC-20 on Flare. Every deed is priced at the FTSO anchor value of the round it happened in, and that price is proven on-chain. **SummaMeter** refuses the slice that would cross the budget, whichever chain it is on. **MandateFacilitator** settles x402 (EIP-3009 `receiveWithAuthorization`) only through that brake, and the brake, the settlement and the receipt happen in one transaction. Live runs are in [docs/DEPLOYMENTS.md](https://github.com/dziuba0x/delicti/blob/main/docs/DEPLOYMENTS.md).
+
 ## An agent under a mandate, in a few lines
 
 ```ts

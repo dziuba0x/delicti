@@ -198,3 +198,12 @@ Deployment (v0.2, `Receipts.Leaf.ref`): `MandateRegistry` [`0x52A61f0B9312042c51
 Every rail was within its limit, and the sum was not. This is the structuring attack of §6.2 one level up, and it is now judged across two chains in one unit: FDC for the deeds, FTSO for their prices, with no oracle and no bridge.
 
 **The brake across rails.** `SummaMeter` [`0x6Bc63F3a…4E0f`](https://coston2-explorer.flare.network/address/0x6Bc63F3aBc6Fc3055DB9949bb4e14515321a4E0f) reads the umbrella's tally in µUSD at the FTSO block-latency price, through JudgeSumma's own price map. First live reads (free `eth_call`): 2 XRP = **$3.072024**, 1 mUSDT0 = **$0.999669**. An effector on either chain asks `wouldExceed` before it signs or settles.
+
+**x402 that cannot settle past the umbrella.** `MandateFacilitator` [`0xBC545E26…307B`](https://coston2-explorer.flare.network/address/0xBC545E2610EAf68956684c56Dd308c1988f9307B) (`sdk/scripts/facilitator-live.mjs`).
+- Setup: umbrella #19 ($3, bond 0.5 C2FLR) over rail #18 (MockUSDT0). The facilitator is declared an effector on SummaMeter.
+- The agent signs EIP-3009 `receiveWithAuthorization` to the facilitator, with the seller bound through the nonce.
+- Settled payments, each one transaction covering the brake, the pull, the forward to the seller, `note` and the `Settled` receipt:
+  - [`0xe7105215…`](https://coston2-explorer.flare.network/tx/0xe7105215db308ef0314fa1850cc58a1ffcaaf9b899d1a5d3599d3a1727427a0c): tally $0.999768.
+  - [`0xddc9d63b…`](https://coston2-explorer.flare.network/tx/0xddc9d63b0255dab5ac73e8fd39ddd7cb0e7f874f2237726a528858515a4f15b5): tally $1.999413.
+  - [`0x24167e82…`](https://coston2-explorer.flare.network/tx/0x24167e82202aa803c55a0d646cc94f0a43c4f5a5f3b521f0333379ad1d162075): tally $2.999058.
+- The next $1 slice: **`WouldExceed(999645)`**. It reverted inside the facilitator, before any token moved. Because the agent's signature names the facilitator as payee, the same authorisation cannot be taken to the token directly (`CallerMustBePayee`).

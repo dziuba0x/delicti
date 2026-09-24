@@ -47,6 +47,17 @@ export interface DelictiNetwork {
     judgeXrpl: Address;
     bondLens: Address;
   };
+  /** SUMMA (SPEC amendment v1.1, kind 9): one dollar budget across rails, priced by FTSO. */
+  summa?: {
+    /** JudgeSumma: links rails under an umbrella, files deeds priced per round, convicts. */
+    judge: Address;
+    /** VaultSumma: the v0.15 Vault bytecode with `judges = [judge]`; umbrellas name it in `Terms.bond`. */
+    vault: Address;
+    /** SummaMeter: the brake across rails (block-latency FTSO). */
+    meter: Address;
+    /** MandateFacilitator: x402 on this chain; brake + settlement + receipt in one transaction. */
+    facilitator: Address;
+  };
 }
 
 /** v0.15 on Coston2 (2026-09-24), production timers. docs/DEPLOYMENTS.md. */
@@ -84,6 +95,12 @@ export const coston2: DelictiNetwork = {
     judgeEvm: "0x463042fbFD04c723F430eC299aD4000D4d42cFf2",
     judgeXrpl: "0x9201272ee10B19177A04435195B3b29D9a765940",
     bondLens: "0x960A0e68863B0BABBa05Ae2025E6b7e289D3Bf3D",
+  },
+  summa: {
+    judge: "0x211EB7d798F528B4E66201496bE4Cf7f6A62f644",
+    vault: "0x8Dd62BE6Ee0689e3Eb5960F08a5356a57bD2F354",
+    meter: "0x6Bc63F3aBc6Fc3055DB9949bb4e14515321a4E0f",
+    facilitator: "0xBC545E2610EAf68956684c56Dd308c1988f9307B",
   },
 };
 

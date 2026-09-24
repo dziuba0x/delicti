@@ -175,3 +175,24 @@ Deployment (v0.2, `Receipts.Leaf.ref`): `MandateRegistry` [`0x52A61f0B9312042c51
 - FDC request (`ReferencedPaymentNonexistence`, testXRP, round 1448919): [`0x2fb195a3…60d13e`](https://coston2-explorer.flare.network/tx/0x2fb195a324e9eb4cf518e6cb88a234ec037e03be274ea6ec7d17a5b20460d13e)
 - mandate #1 committed: [`0x8e6bae06…393c92`](https://coston2-explorer.flare.network/tx/0x8e6bae06d25aa959a73080a7902ffc34aa1c0be7284e66168df8295f65393c92); false receipt anchored: [`0x43c8bd62…f95ace`](https://coston2-explorer.flare.network/tx/0x43c8bd629abdb551cfaeee84906546fd21170f0b89b3ba1c4ae352f500f95ace); bond 1 C2FLR: [`0x0bc4f479…62181b`](https://coston2-explorer.flare.network/tx/0x0bc4f479decb87abdac5059c93f6527d2cfe2251030db69845db91140662181b)
 - **challenge with the real FDC proof → slashed, mandate revoked**: [`0x91bb1909…5fdc91`](https://coston2-explorer.flare.network/tx/0x91bb190933e9e0d5abbc8efc2816ba26d475c2fa3cfbfb2636ae656e3c5fdc91) (159,787 gas)
+
+## SUMMA, kind 9 (amendment v1.1): one dollar budget across XRPL and Flare, live 2026-09-25
+
+**Deployment.** `script/DeploySumma.s.sol` runs over the v0.15 registry and AgentRefs.
+- `JudgeSumma` [`0x211EB7d7…f644`](https://coston2-explorer.flare.network/address/0x211EB7d798F528B4E66201496bE4Cf7f6A62f644)
+- `VaultSumma` [`0x8Dd62BE6…F354`](https://coston2-explorer.flare.network/address/0x8Dd62BE6Ee0689e3Eb5960F08a5356a57bD2F354): the v0.15 Vault bytecode, with `judges = [JudgeSumma]` and `commitLead` of 600 s.
+- The price map maps `testXRP`/`XRP/outflow` to `XRP/USD`, and `testFLR`/MockUSDT0 to `USDT/USD`.
+
+**The run** (`sdk/scripts/summa-live.mjs`). One principal (`0x34D9…C9F1`) and one agent: EVM `0x63b0…28F2`, XRPL `raFstyYu5K2yWtJXaZGZNhNrwtCeQsf8D8`.
+
+| mandate | what | budget |
+|---|---|---|
+| #15 | rail A: gross XRP outflow of the agent's XRPL account (§6.10), exclusive by the XRPL key | 10 XRP |
+| #16 | rail B: MockUSDT0 outflow of the agent's EVM address (§6.11), exclusive | 10 mUSDT0 |
+| #17 | **umbrella**: `SUMMA` / `USD/1e6`, both rails linked by the agent, bonded 2 C2FLR in VaultSumma | **$10** |
+
+1. Three 2-XRP payments on rail A. Each was priced by its own round's `XRP/USD` anchor proof (1.53622) and filed as a recording, below the budget and with no commitment: docket **$9.217365** ([tx](https://coston2-explorer.flare.network/tx/0x9cdaec7ddf2bf051c43072e411cf3760a18aef800735b42239991a1f21a7fe12)).
+2. Two 1-mUSDT0 x402 settlements on rail B: the agent signed EIP-3009 and the facilitator sent it. They were committed as kind 9 and attested after `commitLead`, and each was priced at `USDT/USD` = 0.99966.
+3. **Verdict** [`0x6bacd67c…`](https://coston2-explorer.flare.network/tx/0x6bacd67cdf4a44b959c7676ca6aa5e7f57a4a169755f9c8f4e2722dde92976b5): docket **$11.216685** against $10, so severity $1.216685 (12.17 %). **0.243337 of 2 C2FLR taken.** The umbrella was revoked. Both rails stay live, because each was inside its own budget (6 of 10 XRP; 2 of 10 mUSDT0).
+
+Every rail was within its limit, and the sum was not. This is the structuring attack of §6.2 one level up, and it is now judged across two chains in one unit: FDC for the deeds, FTSO for their prices, with no oracle and no bridge.

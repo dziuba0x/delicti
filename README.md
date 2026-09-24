@@ -66,6 +66,7 @@ Nothing below is a claim about what the contracts *would* do. Each line is a tra
 
 | What was proven | Transaction |
 |---|---|
+| **v0.14: the sentinel ran the protocol alone.** It discovered every mandate from state and read the XRPL accounts' histories through the FDC verifier's own index. It found outflows no one had filed, including an exclusivity statement's own fee, and convicted again. It caught an agent that had declared two overlapping exclusive mandates over one token, and was paid from a watch pool for keeping an honest docket, then again for the conviction | [`0x7a83ce5f…9001be`](https://coston2-explorer.flare.network/tx/0x7a83ce5fd73e185d63e95d4f3a432c8dc2528afd05aa4ab61a3580e9609001be) · stipends: [`0x950d5acb…d93583`](https://coston2-explorer.flare.network/tx/0x950d5acb7f8afe6ed8122bdcee2369d7e22f09c047a4ce6ff527bdb05cd93583) · [report](docs/sentinel/coston2-2026-09-24.html) |
 | **The watcher bot convicted an agent on its own.** `delicti-watch` (SDK) found five x402 payments through the explorer. It filed the first three as a recording, then committed before any attestation existed, waited out the lead, proved the last two and filed the conviction. Nobody ran a script against this mandate | [`0x4735cd57…232bff`](https://coston2-explorer.flare.network/tx/0x4735cd5750935eeae918b7e477d0d90d977057132952192d007e628c22232bff) · recording: [`0xf93cd783…d6f077`](https://coston2-explorer.flare.network/tx/0xf93cd783087f95df0c30eb2f015afe527727917805490fdf12c85e72c6d6f077) |
 | **v0.13 — a stablecoin agent convicted from the token's own log.** Five x402 settlements of 1 mUSDT0: the agent only *signed* them (EIP-3009), a facilitator *sent* them, and there are no receipts. FDC `EVMTransaction` proofs of the `Transfer` logs were filed on a docket, three uncommitted and then the committed crossing: 5 against a 4-unit budget took 25 % of the bond (SPEC §6.11) | [`0x75d51613…071dea`](https://coston2-explorer.flare.network/tx/0x75d51613fed7a4d69fc84fce28654cfdc43e91cccfdf557a3a60326506071dea) · docket: [`0x122d1f14…23ca2c`](https://coston2-explorer.flare.network/tx/0x122d1f142a75d9ef15eea39cfbaff77fa68fb678ddb35f3a552e30f72723ca2c) |
 | **v0.10 — structuring on XRPL, live.** Five payments of 1 XRP under a 4-XRP budget, each proven by an FDC `Payment` attestation, each matched to an anchored receipt; the agent's XRPL account confirmed the mandate itself, by a payment carrying the mandate's challenge in its memo. A 25 % overrun took 25 % of the bond | [`0xb6856090…62bcb89`](https://coston2-explorer.flare.network/tx/0xb6856090222fb3083d425bb22126f88fd35e66f14641a8b03c2cd2c4862bcb89) · control: [`0xa5c17d21…63cd8f`](https://coston2-explorer.flare.network/tx/0xa5c17d21eb4c5495ab58282921e98b0360977a729a00bdb31dfdb66f6b63cd8f) |
@@ -119,25 +120,31 @@ Or deploy your own: `forge script script/Deploy.s.sol --rpc-url coston2 --broadc
 
 The scripts in [`scripts/`](scripts) each reproduce one row of the table above: `structuring.sh`, `xrpl-structuring.sh`, `x402-structuring.sh`, `mcp-structuring.sh`, `brake-test.sh`, `spend-meter.sh`, `unanchored-deed.sh`, `contradicted-deed.sh`, `xrpl-outflow.sh`, `erc20-outflow.sh`. Test funds: [Coston2 faucet](https://faucet.flare.network/coston2).
 
-## SDK and watcher
+## SDK, watchers and the sentinel
 
-[`sdk/`](sdk) is a TypeScript package on viem. `Delicti` covers commit, exclusivity, bonds and status in a few calls. `delicti-watch erc20 <mandateId>` is a watcher that keeps a stablecoin mandate's docket current and convicts when it crosses the budget: it commits first, waits out the lead, then proves and files. Its first live run is the first row of the table above. See [sdk/README.md](sdk/README.md).
+[`sdk/`](sdk) is a TypeScript package on viem. `Delicti` covers commit, exclusivity, bonds, the watch pool and status, each in one call. The watchers:
 
-## Contracts (v0.13 on Coston2)
+- `delicti-watch erc20 <id>`: stablecoins on Flare (§6.11).
+- `delicti-watch xrpl <id>`: XRP outflow (§6.10). It reads the account's history the way the FDC will, by walking the AccountRoot's `PreviousTxnID` chain through the FDC verifier's own index.
+- `delicti-watch sentinel`: every mandate at once. It discovers them from state, prices each case, acts according to its policy, and publishes a per-agent **public score** (SPEC §11.2).
+
+Security needs one honest watcher, and anyone can run one. The design behind it is in [docs/research/watchers.md](docs/research/watchers.md): what Lightning watchtowers, Forta, keeper networks, UMA, rollup challengers and liquidation bots learned the hard way. See [sdk/README.md](sdk/README.md).
+
+## Contracts (v0.14 on Coston2)
 
 | Contract | Role | Address |
 |---|---|---|
 | `MandateRegistry` | mandates, delegation tree with monotonic narrowing, acknowledgement, revocation. No deployer, no admin key. | [`0x2c58fb05…263AA3`](https://coston2-explorer.flare.network/address/0x2c58fb0504377fef325DceB66219bC6302263AA3) |
 | `AnchorLog` | per-mandate sequence of Merkle roots over receipts (witness 1), with `leavesURI` | [`0xF2b7A266…Fa40a8`](https://coston2-explorer.flare.network/address/0xF2b7A2668e7430611c9b225ea7c966E489Fa40a8) |
 | `SpendMeter` | the running tally an effector reads before it acts, kept as `(timestamp, total)` checkpoints (SPEC §7.1) | [`0xa5e06ADc…576dE2`](https://coston2-explorer.flare.network/address/0xa5e06ADc76b96cc8c941B98FDA365f10a0576dE2) |
-| `Vault` | every wei: bonds, proceeds, stakes; the commit–reveal gate; `verdict`, callable only by its judges (§8.2); each deposit compensates whom its depositor names (§8.3) | [`0x3e3316D2…5F55EE`](https://coston2-explorer.flare.network/address/0x3e3316D2Dd78d548DFBa2A777171F1E3e05F55EE) |
-| `JudgeEvm` | §6.1 false payment, §6.2–6.3 overrun, §6.4 unanchored deed, §6.5 under-reported spend, §6.11 gross ERC-20 outflow on a docket. No funds. | [`0x175a11C1…a59720`](https://coston2-explorer.flare.network/address/0x175a11C19Fee05DF390D915B2bD7bcF594a59720) |
-| `JudgeXrpl` | §6.8 overrun over receipted payments (kind-3 and kind-4 receipts, one-shot or on a docket), §6.10 gross XRP outflow on a docket that outlives the verifier. No funds. | [`0x16Db5a2b…Dd1D79`](https://coston2-explorer.flare.network/address/0x16Db5a2ba8b6C6B3cBaaCe95b0e9D78fa5Dd1D79) |
+| `Vault` | every wei: bonds, proceeds, stakes; the commit–reveal gate; `verdict`, callable only by its judges (§8.2); each deposit compensates whom its depositor names (§8.3); the watch pool pays whoever keeps a docket (§8.4) | [`0x9bF9e418…72566fE`](https://coston2-explorer.flare.network/address/0x9bF9e4186cFb569Fe5bf528e2859aA7B672566fE) |
+| `JudgeEvm` | §6.1 false payment, §6.2–6.3 overrun, §6.4 unanchored deed, §6.5 under-reported spend, §6.11 gross ERC-20 outflow on a docket. No funds. | [`0x361730A0…d29a2C36`](https://coston2-explorer.flare.network/address/0x361730A0D1e5886DfF3f7Ea4fC38832Ed29a2C36) |
+| `JudgeXrpl` | §6.8 overrun over receipted payments (kind-3 and kind-4 receipts, one-shot or on a docket), §6.10 gross XRP outflow on a docket that outlives the verifier. No funds. | [`0xE9E6eD9E…4a14E688`](https://coston2-explorer.flare.network/address/0xE9E6eD9E3ca7d005a37568E18A80226B4a14E688) |
 | `AgentRefs` | an XRPL account accepts a mandate (`prove`) or declares exclusivity (`proveExclusive`) with a memo | [`0x6036B279…E0fca0`](https://coston2-explorer.flare.network/address/0x6036B279d6Fe4aB5DAcbea97162C5394B6E0fca0) |
 | `CorroborationLog` | records deeds whose two witnesses agreed, once per deed per agent — the data a public score needs | [`0xf51c8241…56ed89`](https://coston2-explorer.flare.network/address/0xf51c82410ad01239a1e708aa5c4c68a25c56ed89) |
-| `BondLens` | stateless: what a case would take, before paying for a single attestation | [`0xf5b44588…a0FAeA`](https://coston2-explorer.flare.network/address/0xf5b44588b81Da8F042F368B9796De14574a0FAeA) |
+| `BondLens` | stateless: what a case would take, before paying for a single attestation | [`0xA73f7403…5500BE1b`](https://coston2-explorer.flare.network/address/0xA73f740302FCFE27880EbDd3be3B77FF5500BE1b) |
 
-The v0.12 Vault [`0xFd09d395…93Ffae`](https://coston2-explorer.flare.network/address/0xFd09d39519F51Ccf12c57bd2D5cF8A71a593Ffae), the v0.11 Vault [`0x40A149aC…AbDAAB`](https://coston2-explorer.flare.network/address/0x40A149aCdA2A3D2e299e0FaE4aAA695662AbDAAB) and the v0.10 `Bond` [`0x68004002…3cf65B`](https://coston2-explorer.flare.network/address/0x6800400225e03539c4B719f470cC2C8edC3cf65B) stay live for the mandates that name them. v0.13 runs with **production timers**: `commitLead` 10 min, `responseWindow` 24 h, `anchorGrace` 1 h, `meterGrace` 5 min (earlier deployments used shortened testnet timers). The v0.10 deployment and every earlier one are in [docs/DEPLOYMENTS.md](docs/DEPLOYMENTS.md).
+The v0.13 Vault [`0x3e3316D2…5F55EE`](https://coston2-explorer.flare.network/address/0x3e3316D2Dd78d548DFBa2A777171F1E3e05F55EE), the v0.12 Vault [`0xFd09d395…93Ffae`](https://coston2-explorer.flare.network/address/0xFd09d39519F51Ccf12c57bd2D5cF8A71a593Ffae), the v0.11 Vault [`0x40A149aC…AbDAAB`](https://coston2-explorer.flare.network/address/0x40A149aCdA2A3D2e299e0FaE4aAA695662AbDAAB) and the v0.10 `Bond` [`0x68004002…3cf65B`](https://coston2-explorer.flare.network/address/0x6800400225e03539c4B719f470cC2C8edC3cf65B) stay live for the mandates that name them. v0.13 and v0.14 run with **production timers**: `commitLead` 10 min, `responseWindow` 24 h, `anchorGrace` 1 h, `meterGrace` 5 min (earlier deployments used shortened testnet timers). The v0.10 deployment and every earlier one are in [docs/DEPLOYMENTS.md](docs/DEPLOYMENTS.md).
 
 Challenges, each behind a commit–reveal gate so the reward belongs to whoever found the violation, not to whoever copied the calldata. Since v0.11 the collateral sits in the `Vault` and the challenges on its judges, `JudgeEvm` and `JudgeXrpl`, fixed at the Vault's construction, no admin (SPEC §8.2).
 
@@ -148,6 +155,7 @@ Challenges, each behind a commit–reveal gate so the reward belongs to whoever 
 | `challengeBudgetOverrunPayment` | the same, for XRP payments on XRPL | `Payment` | §6.8 |
 | `challengeUnderReportedSpend` | the effector's tally said less than the world shows | `EVMTransaction` | §6.5 |
 | `accuseUnanchoredDeed` → `answerAccusation` / `resolveAccusation` | an exclusive agent acted and wrote nothing down | `EVMTransaction` | §6.4 |
+| `fileBudgetPayments` / `fileXrpOutflow` / `fileErc20Outflow` | **dockets**: deeds filed once, while provable, counted for ever; recordings below the budget are paid from the watch pool (§8.4), the committed crossing convicts | as above | §6.8, §6.10, §6.11 |
 | `fileErc20Outflow` | more of the mandate's **stablecoin** (any ERC-20: USDT0, USDC.e, FXRP) **left** the agent's address than the mandate allows — including x402 settlements the agent only **signed** and a facilitator sent, **no receipts** | `EVMTransaction` (events) | §6.11 |
 | `fileXrpOutflow` | more XRP **left** the agent's account than the mandate allows — any transaction type, fees included, **no receipts**, including an offer consumed in someone else's transaction | `BalanceDecreasingTransaction` | §6.10 |
 
@@ -162,6 +170,7 @@ Challenges, each behind a commit–reveal gate so the reward belongs to whoever 
 
 The section of the [SPEC](SPEC.md) to read first is §10, *what DELICTI does not claim*. The ones a reader deciding whether to rely on this should meet here:
 
+- **SPEC v1.0 is frozen; the code is not audited.** Freezing binds the interface: the mandate, the leaf, kinds 1–8 and their encodings, and the consequence rules. It is not a statement that the code is free of defects (SPEC §14).
 - **Testnet only, not independently audited.** Everything runs on Coston2 and forks. Slither, a 300,000-call invariant campaign and an internal adversarial pass have run — the last one found two openings, fixed in v0.10 with regression tests. An independent audit has not.
 - **Consequence is after the fact; prevention is optional.** FDC finality is minutes. The brake refuses a dead or borrowed mandate and the slice that would break the budget — but only in effectors that choose to check.
 - **Stablecoins only where the FDC looks.** §6.11 enforces ERC-20 budgets on Ethereum, Flare and Songbird. Base, where most x402 settles today, is not an FDC source, and nothing there can be proven.

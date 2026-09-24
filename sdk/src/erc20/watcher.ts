@@ -1,8 +1,9 @@
 import { getAddress, type Account, type Address, type Chain, type Hex, type PublicClient, type Transport, type WalletClient } from "viem";
 import { judgeEvmAbi, mandateRegistryAbi, vaultAbi } from "../abi.js";
-import { commitmentFor, deedsDigest, Kind, randomSalt } from "../commit.js";
-import { Fdc, type EvmTransactionProof } from "../fdc.js";
-import type { DelictiNetwork } from "../networks.js";
+import { Kind } from "../commit.js";
+import { Fdc, type FdcProof } from "../fdc.js";
+import { commitAndWait } from "../lead.js";
+import { deploymentOf, type DelictiNetwork, type Deployment } from "../networks.js";
 import type { LogSource, OutflowLog } from "./logs.js";
 import { planErc20, type Plan, type TxFiling } from "./planner.js";
 
@@ -13,6 +14,8 @@ export interface WatcherOptions {
   fdc: Fdc;
   logs: LogSource;
   mandateId: bigint;
+  /** The consequence layer the mandate is bonded in; found from the mandate's `bond` if omitted. */
+  deployment?: Deployment;
   /** First block to scan; found by binary search on the mandate's `validFrom` if omitted. */
   fromBlock?: bigint;
   log?: (msg: string) => void;
@@ -35,8 +38,10 @@ export interface TickResult {
  */
 export class Erc20OutflowWatcher {
   private fromBlock?: bigint;
+  private dep?: Deployment;
   constructor(readonly o: WatcherOptions) {
     this.fromBlock = o.fromBlock;
+    this.dep = o.deployment;
   }
 
   private say(m: string) {
@@ -46,16 +51,17 @@ export class Erc20OutflowWatcher {
   async state() {
     const { publicClient: pc, network: n, mandateId: id } = this.o;
     const m = await pc.readContract({ address: n.contracts.registry, abi: mandateRegistryAbi, functionName: "get", args: [id] });
-    if (getAddress(m.bond) !== getAddress(n.contracts.vault)) {
-      throw new Error(`mandate #${id} names Vault ${m.bond}, this watcher is configured for ${n.contracts.vault}`);
-    }
+    this.dep ??= deploymentOf(n, m.bond);
+    if (!this.dep || getAddress(m.bond) !== getAddress(this.dep.vault)) throw new Error(`mandate #${id} names an unknown Vault ${m.bond}`);
+    if (!this.dep.features.includes("erc20Docket")) throw new Error(`mandate #${id} is bonded in ${this.dep.version}, which has no §6.11 docket`);
+    const d = this.dep;
     if (BigInt(m.assetKey) >> 160n !== 0n || BigInt(m.assetKey) === 0n) throw new Error(`mandate #${id} is not an ERC-20 mandate`);
     const token = getAddress(("0x" + m.assetKey.slice(26)) as Hex);
     const [exclusive, bond, docket, slashed] = await Promise.all([
       pc.readContract({ address: n.contracts.registry, abi: mandateRegistryAbi, functionName: "exclusive", args: [id] }),
-      pc.readContract({ address: n.contracts.vault, abi: vaultAbi, functionName: "bondOf", args: [id] }),
-      pc.readContract({ address: n.contracts.judgeEvm, abi: judgeEvmAbi, functionName: "erc20Docket", args: [id] }),
-      pc.readContract({ address: n.contracts.vault, abi: vaultAbi, functionName: "slashed", args: [id] }),
+      pc.readContract({ address: d.vault, abi: vaultAbi, functionName: "bondOf", args: [id] }),
+      pc.readContract({ address: d.judgeEvm, abi: judgeEvmAbi, functionName: "erc20Docket", args: [id] }),
+      pc.readContract({ address: d.vault, abi: vaultAbi, functionName: "slashed", args: [id] }),
     ]);
     return { m, token, exclusive, bond, docket, slashed };
   }
@@ -75,17 +81,17 @@ export class Erc20OutflowWatcher {
   }
 
   private async filed(logs: OutflowLog[]): Promise<Set<string>> {
-    const { publicClient: pc, network: n, mandateId: id } = this.o;
+    const { publicClient: pc, mandateId: id } = this.o;
     const flags = await Promise.all(
       logs.map((l) =>
-        pc.readContract({ address: n.contracts.judgeEvm, abi: judgeEvmAbi, functionName: "eventFiled", args: [id, l.txHash, l.logIndex] }),
+        pc.readContract({ address: this.dep!.judgeEvm, abi: judgeEvmAbi, functionName: "eventFiled", args: [id, l.txHash, l.logIndex] }),
       ),
     );
     return new Set(logs.filter((_, i) => flags[i]).map((l) => `${l.txHash.toLowerCase()}:${l.logIndex}`));
   }
 
-  /** One cycle: look, plan, act. Safe to call on a timer; idle when there is nothing to do. */
-  async tick(): Promise<TickResult> {
+  /** Look and plan, without acting: what the sentinel and the score read. */
+  async observe() {
     const s = await this.state();
     this.fromBlock ??= await this.blockAt(s.m.validFrom);
     const logs = await this.o.logs.outflows(s.token, s.m.agent, this.fromBlock, "latest");
@@ -98,6 +104,12 @@ export class Erc20OutflowWatcher {
       bond: s.bond,
       exclusive: s.exclusive,
     });
+    return { s, logs, plan };
+  }
+
+  /** One cycle: look, plan, act. Safe to call on a timer; idle when there is nothing to do. */
+  async tick(): Promise<TickResult> {
+    const { s, logs, plan } = await this.observe();
     if (plan.action === "idle") {
       this.say(`idle: ${plan.reason} (docket ${s.docket} / budget ${s.m.budget}, ${logs.length} outflow logs seen)`);
       return { plan, txs: [], docket: s.docket, bond: s.bond, slashed: s.slashed };
@@ -111,29 +123,15 @@ export class Erc20OutflowWatcher {
 
   /** Commit first — before any attestation makes the case public — then wait out the lead. */
   private async convict(filings: TxFiling[]): Promise<Hex[]> {
-    const { publicClient: pc, network: n, wallet, mandateId: id, fdc } = this.o;
-    const salt = randomSalt();
-    const c = commitmentFor(wallet.account.address, id, Kind.ERC20_OUTFLOW, deedsDigest(filings.map((f) => f.txHash)), salt);
-    const commitTx = await wallet.writeContract({ address: n.contracts.vault, abi: vaultAbi, functionName: "commitChallenge", args: [c] });
-    await this.mined(commitTx, "commitChallenge");
-    const [at, lead, clock] = await Promise.all([
-      pc.readContract({ address: n.contracts.vault, abi: vaultAbi, functionName: "committedAt", args: [c] }),
-      pc.readContract({ address: n.contracts.vault, abi: vaultAbi, functionName: "commitLead" }),
-      fdc.clock(),
-    ]);
-    // the first round that starts at or after committedAt + commitLead; requests must land in it or later
-    const r = (BigInt(at) + BigInt(lead) - clock.t0 + clock.duration - 1n) / clock.duration;
-    const target = clock.t0 + r * clock.duration + 10n;
-    this.say(`committed ${c} at ${at}; attestations wait until t=${target} (round ${r})`);
-    for (;;) {
-      const now = (await pc.getBlock()).timestamp;
-      if (now >= target) break;
-      await new Promise((ok) => setTimeout(ok, Math.min(30, Number(target - now)) * 1000));
-    }
+    const { publicClient, wallet, mandateId, fdc } = this.o;
+    const { salt, commitTx } = await commitAndWait({
+      publicClient, wallet, fdc, vault: this.dep!.vault, mandateId, kind: Kind.ERC20_OUTFLOW,
+      ids: filings.map((f) => f.txHash), say: (m) => this.say(m),
+    });
     return [commitTx, await this.file(filings, salt)];
   }
 
-  private async prove(filings: TxFiling[]): Promise<EvmTransactionProof[]> {
+  private async prove(filings: TxFiling[]): Promise<FdcProof[]> {
     const { fdc, wallet } = this.o;
     const reqs: { req: Hex; round: bigint }[] = [];
     for (const f of filings) {
@@ -147,7 +145,7 @@ export class Erc20OutflowWatcher {
   private async file(filings: TxFiling[], salt: Hex): Promise<Hex> {
     const { network: n, wallet, mandateId: id } = this.o;
     const proofs = await this.prove(filings);
-    const hash = await wallet.writeContract({ address: n.contracts.judgeEvm, abi: judgeEvmAbi, functionName: "fileErc20Outflow", args: [id, proofs as any, salt] });
+    const hash = await wallet.writeContract({ address: this.dep!.judgeEvm, abi: judgeEvmAbi, functionName: "fileErc20Outflow", args: [id, proofs as any, salt] });
     await this.mined(hash, "fileErc20Outflow");
     this.say(`filed: ${n.explorerUrl}/tx/${hash}`);
     return hash;

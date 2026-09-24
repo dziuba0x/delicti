@@ -6,6 +6,9 @@ import { coston2 } from "../src/networks.js";
 import { judgeEvmAbi } from "../src/abi.js";
 
 const fx = JSON.parse(readFileSync(new URL("./fixtures/m11-evmtx.json", import.meta.url), "utf8"));
+// #11's bond was emptied by the sentinel on 2026-09-24 (docs/DEPLOYMENTS.md), and a judge refuses an
+// empty bond before it verifies anything; the round trip uses #12's, which still has bond left.
+const fx12 = JSON.parse(readFileSync(new URL("./fixtures/m12-evmtx.json", import.meta.url), "utf8"));
 const online = process.env.DELICTI_ONLINE === "1";
 
 describe("a real FDC proof from mandate #11", () => {
@@ -26,14 +29,15 @@ describe("a real FDC proof from mandate #11", () => {
 
   // Round trip through the live judge: the proof passes FdcVerification and every check, and is
   // refused only because it is already on the docket. `DELICTI_ONLINE=1 npm test` to run.
-  it.skipIf(!online)("the live JudgeEvm accepts it and answers NothingNew (already filed)", async () => {
+  it.skipIf(!online)("the live JudgeEvm verifies a real proof and answers NothingNew (already filed)", async () => {
     const pc = createPublicClient({ transport: http(coston2.rpcUrl) });
     const err = await pc
       .simulateContract({
-        address: coston2.contracts.judgeEvm,
+        // mandate #11 was bonded in the v0.13 Vault; its judge stays its judge (SPEC §8.2)
+        address: coston2.history.find((d) => d.version === "v0.13")!.judgeEvm,
         abi: judgeEvmAbi,
         functionName: "fileErc20Outflow",
-        args: [11n, [{ merkleProof: fx.proof, data }], `0x${"0".repeat(64)}`],
+        args: [12n, [{ merkleProof: fx12.proof, data: decodeEvmTransactionResponse(fx12.response_hex) }], `0x${"0".repeat(64)}`],
       })
       .then(() => undefined, (e) => e);
     expect(err).toBeInstanceOf(BaseError);

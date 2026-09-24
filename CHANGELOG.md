@@ -1,6 +1,51 @@
 # Changelog
 
-## Unreleased (after v0.13.0)
+## v0.14.0 — 2026-09-24 — who watches, and why they would · SPEC v1.0 frozen
+
+Security in DELICTI needs one honest party to bring a case. This release is about that party: who it is, what it is paid, and how it sees. docs/research/watchers.md compares seven earlier watcher layers (Lightning watchtowers, Forta, keeper networks, UMA/Kleros, rollup challengers, liquidation bots, contributor-split oracles) and records what each learned the hard way. Every decision below cites that note.
+
+### The watch pool (`Vault`, SPEC §8.4)
+
+- A crossing bounty pays watchers nothing while the agent behaves: the watchtower *deterrence paradox*. Now the principal, and the agent if it wants to show confidence, can fund a pool, and the principal sets `perDeed` and `minValue`. Every docket judge pays the filer of each **new, value-moving** deed from it, on recordings and crossings alike.
+- **Only principal and agent can fund.** An outsider's money in a pool whose rate the principal sets would be a prize for collusion (agent moves value to itself, sock puppet files, rate goes up). This was found in review before any deploy.
+- **Terms only improve** for watchers once set. **Zero-value deeds earn nothing**: `transferFrom(agent, x, 0)` succeeds for anyone on a standard token, and anyone can send XRP *to* the agent. That also corrected §6.11's soundness text, which had called every `Transfer` out of the agent "the agent's act".
+- Refund is pro rata once the mandate is dead past the cooling window, and the first refund closes the pool. `watchPool` is part of the Vault's balance invariant.
+- 12 unit tests (`test/WatchPool.t.sol`); the invariant handler funds, sets terms and refunds; `refundExceededFunding` ghost.
+
+### A docket that could not record (fixed in all three judges)
+
+- Found by the new §6.8 invariant track. Once another path had convicted a mandate (the one-shot §6.8 challenge, or a receipted §6.3 case), a docket filing that went past the budget but not past that verdict's high-water mark reached `Vault.verdict`, which refused it `NothingNew`. The docket then could not record at all until a single filing outran the mark, and on XRPL a deed not filed within ~14 days is lost for ever.
+- Now such a filing is a recording: no commitment, no reward. The crossing verdict is non-strict, so a crossing after the whole base is taken still records. `test_paymentDocketStillRecordsBelowAnotherPathsVerdict` fails on the v0.13 judges and passes on v0.14.
+
+### The §6.8 path is fuzzed
+
+- The last route to the Vault the campaign did not drive now runs on the same Vault as everything else: receipted XRP payments, kind-3 and kind-4 receipts anchored or not, the one-shot challenge and the payment docket interleaved. New invariant: `invariant_paymentDocketIsTheSumOfItsFiledPayments`.
+- Campaign: 14 invariants × 1,500 runs × depth 200, with all eight kinds, three dockets, the surety rule and the watch pool on one Vault. 0 failures. 219 Solidity tests.
+
+### Deployed: v0.14 on Coston2 (production timers)
+
+`Vault` `0x9bF9e418…72566fE`, `JudgeEvm` `0x361730A0…d29a2C36`, `JudgeXrpl` `0xE9E6eD9E…4a14E688`, `BondLens` `0xA73f7403…5500BE1b`. Core and `AgentRefs` unchanged.
+
+### SDK: the XRPL watcher, the sentinel, the public score
+
+- **`XrplHistory`: reading an account's history the way the FDC will.** Public XRPL nodes keep little history; the testnet endpoint reachable here keeps ~1,300 ledgers. But every change to an account's XRP modifies its AccountRoot, which records the previous transaction that did (`PreviousTxnID`). The history is a linked list. The watcher walks it backwards through the **FDC verifier's own index** (~15 days of full transactions with metadata). What it finds is exactly what is still provable, including offers taken in other accounts' transactions.
+- **`XrplOutflowWatcher` (§6.10).** It finds the XRPL account behind `agentRef` from the `ExclusiveProven` event: statement tx id → signer from the verifier's index → `keccak256(signer) == agentRef`. It then records or commits and convicts.
+- **`Sentinel` + `delicti-watch sentinel`.** Discovers every mandate from state, classifies it (§6.11 / §6.10 watchable, receipted, unwatchable), observes, prices each plan (attestation fees + gas against stipends + `BondLens.penaltyFor`), and acts per policy (`observe`, `profit`, `altruist`). It knows every past Vault a mandate may name (`network.history` with per-version features).
+- **Public score (SPEC §11.2)**, per agent and deliberately not one number. Facets: standing (`breach-unjudged` is the alarm), verdicts and value taken across every Vault, bond at stake, worst budget use, watched and self-watched mandates, and flags for unfiled and lost deeds. JSON plus a self-contained HTML report.
+- `Delicti` gained `proveXrplStatement`, `setWatchTerms`, `fundWatch` and `refundWatch`; `status` shows both exclusivities and the watch pool. `Fdc` handles `EVMTransaction`, `BalanceDecreasingTransaction` and `Payment`, retries the XRP verifier's index lag, and reads fees the way the Vault does.
+- Vitest: 28 offline plus 1 online. The online one sends a real proof from #12 back to its v0.13 judge (#11 no longer has a bond to judge against: the sentinel took it).
+
+### Live (Coston2 + XRPL testnet), all by the sentinel
+
+- **Deeds the humans missed (#8, #9).** Walking the AccountRoot chains, the sentinel found three outflows the 23.09 script never filed: a `TrustSet` fee, an `OfferCreate` fee, and the exclusivity statement payment itself. It convicted both mandates again, nested, taking exactly the quoted difference ([`0x45cb946a…`](https://coston2-explorer.flare.network/tx/0x45cb946affe9d96e91d207454b8437297ff8bf5444aac5e01f7a2a38af79e71e), [`0xcc2bc0ba…`](https://coston2-explorer.flare.network/tx/0xcc2bc0bacec2cbf14ef5bbda6c94872a685745c08a4c042ca18ad45878cade41)).
+- **Two exclusive promises over one token (#11).** #11 and #12 were declared exclusive by the same address over the same token with overlapping windows. The sentinel counted #12's settlements against #11 too, as SPEC §10 says it must, and took the rest of #11's bond ([`0x79bd7b9f…`](https://coston2-explorer.flare.network/tx/0x79bd7b9ffee8520e0f9e794feeb4d0fadd3d6b0f40190040fabc75834c36667d)).
+- **The watch pool, end to end (#13, XRPL).** The sentinel recorded three payments and was paid 0.15 C2FLR in stipends ([`0x950d5acb…`](https://coston2-explorer.flare.network/tx/0x950d5acb7f8afe6ed8122bdcee2369d7e22f09c047a4ce6ff527bdb05cd93583)). After an offer taken by the counterparty and one more payment, it committed and convicted: `bondOf` 1 → 0.5832 ([`0x7a83ce5f…`](https://coston2-explorer.flare.network/tx/0x7a83ce5fd73e185d63e95d4f3a432c8dc2528afd05aa4ab61a3580e9609001be)), with 2 more stipends and the reward. It then claimed 0.2917 C2FLR. docs/DEPLOYMENTS.md has the full run and the sentinel's books.
+
+### SPEC v1.0 — frozen
+
+§14 says what is bound (the mandate, the leaf, kinds 1–8 and the commitment encoding, the consequence rules, the docket semantics) and how it may change: numbered additive amendments only, v2 for anything else, nothing ever changed under an existing mandate. It also says what freezing is not: an audit. New sections: §8.4 (watch pool) and §11.2 (sentinel and score). §6.11's soundness text is corrected, and §10 is updated.
+
+### SDK and the §6.11 watcher (merged after v0.13.0, shipped in 0026)
 
 - **`sdk/` — `@delicti/sdk` and the `delicti-watch` bot.** TypeScript on viem. `Delicti` covers commit, acknowledge/declareExclusive, post/postFor, withdraw, claim and status. `Fdc` covers prepare, request (with the fee), the voting-round clock, and DA polling with decoding. `ExplorerLogSource` exists because Flare's RPC serves 30 blocks per `eth_getLogs`. `planErc20` is a pure planner: window, already-filed per log, ascending hashes, 50 logs per request, and record vs convict. `Erc20OutflowWatcher` runs one cycle: look, plan, and either record or commit → wait for the round past `commitLead` → attest → file. ABIs are generated from the Foundry build.
 - **Live, mandate #12:** the watcher recorded three payments, then committed, waited and convicted on the next two by itself (`bondOf` 1 → 0.75). Its books are in docs/DEPLOYMENTS.md: 0.78 C2FLR spent, mostly testnet gas at 650 gwei, against 0.025 earned. A 1-C2FLR bond is not worth watching at testnet prices, which is the "small bonds are not watched" limit, now measured.

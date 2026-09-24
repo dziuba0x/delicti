@@ -12,11 +12,14 @@ import {
   type Transport,
   type WalletClient,
 } from "viem";
-import { judgeEvmAbi, judgeXrplAbi, mandateRegistryAbi, vaultAbi } from "./abi.js";
-import { pad32 } from "./fdc.js";
+import { agentRefsAbi, judgeEvmAbi, judgeXrplAbi, mandateRegistryAbi, vaultAbi } from "./abi.js";
+import { pad32, type Fdc } from "./fdc.js";
 import type { DelictiNetwork } from "./networks.js";
 
 type Wallet = WalletClient<Transport, Chain, Account>;
+
+/** `bytes32("XRP/outflow")`: a mandate on XRPL whose budget is gross XRP outflow, fees included (§6.10). */
+export const XRP_OUTFLOW_KEY = pad(toHex("XRP/outflow"), { dir: "right", size: 32 });
 
 export interface NewMandate {
   agent: Address;
@@ -27,6 +30,8 @@ export interface NewMandate {
   validUntil: bigint;
   /** An ERC-20 address for a token budget; omit for the chain's native asset. */
   token?: Address;
+  /** Any other asset key, e.g. `XRP_OUTFLOW_KEY` for a §6.10 gross-outflow budget. Wins over `token`. */
+  assetKey?: Hex;
   /** Defaults to the network's FDC source (e.g. `testFLR`). */
   source?: string;
   /** XRPL account hash for XRPL mandates; zero on EVM. */
@@ -64,7 +69,7 @@ export class Delicti {
         n.validUntil,
         {
           sourceId: pad32(n.source ?? this.network.fdcSource),
-          assetKey: n.token ? pad(n.token, { size: 32 }) : zeroHash,
+          assetKey: n.assetKey ?? (n.token ? pad(n.token, { size: 32 }) : zeroHash),
           agentRef: n.agentRef ?? zeroHash,
           bond: this.network.contracts.vault,
         },
@@ -112,15 +117,62 @@ export class Delicti {
     return h;
   }
 
+  /**
+   * The XRPL account speaks for itself: `exclusive` = it promises that everything leaving it in the
+   * window is this mandate's business (§6.10); otherwise it only accepts the mandate (§6.8). The
+   * account makes a payment carrying the reference (`exclusiveFor` / `challengeFor`) in a memo;
+   * this proves that payment through the FDC and records it. Returns the proof's round.
+   */
+  async proveXrplStatement(from: Wallet, fdc: Fdc, id: bigint, statementTxId: Hex, exclusive: boolean): Promise<Hex> {
+    const req = await fdc.preparePayment(statementTxId);
+    const round = await fdc.request(from, req);
+    const proof = await fdc.proof(round, req, "Payment");
+    const h = await from.writeContract({
+      address: this.network.contracts.agentRefs, abi: agentRefsAbi, functionName: exclusive ? "proveExclusive" : "prove", args: [id, proof as any],
+    });
+    await this.mined(h);
+    return h;
+  }
+
+  /** The reference an XRPL statement payment must carry in its memo. */
+  async xrplStatementRef(id: bigint, exclusive: boolean): Promise<Hex> {
+    return this.publicClient.readContract({
+      address: this.network.contracts.agentRefs, abi: agentRefsAbi, functionName: exclusive ? "exclusiveFor" : "challengeFor", args: [id],
+    }) as Promise<Hex>;
+  }
+
+  /** Principal: what watchers are paid per new, value-moving deed they file, and the least value a
+   *  deed must move to earn it (§8.4). Once set, terms can only get better for watchers. */
+  async setWatchTerms(principal: Wallet, id: bigint, perDeed: bigint, minValue: bigint): Promise<Hex> {
+    const h = await principal.writeContract({ address: this.network.contracts.vault, abi: vaultAbi, functionName: "setWatchTerms", args: [id, perDeed, minValue] });
+    await this.mined(h);
+    return h;
+  }
+
+  /** Principal or agent: pay into the mandate's watch pool (§8.4). */
+  async fundWatch(from: Wallet, id: bigint, value: bigint): Promise<Hex> {
+    const h = await from.writeContract({ address: this.network.contracts.vault, abi: vaultAbi, functionName: "fundWatch", args: [id], value });
+    await this.mined(h);
+    return h;
+  }
+
+  /** A funder's share of what the pool has left, once the mandate is dead past the cooling window. */
+  async refundWatch(from: Wallet, id: bigint, to?: Address): Promise<Hex> {
+    const h = await from.writeContract({ address: this.network.contracts.vault, abi: vaultAbi, functionName: "refundWatch", args: [id, to ?? from.account.address] });
+    await this.mined(h);
+    return h;
+  }
+
   /** Where a mandate stands: is it live, how much is bonded, what has been proven against it. */
   async status(id: bigint) {
     const c = this.network.contracts;
     const r = (address: Address, abi: any, functionName: string, args: any[] = [id]) =>
       this.publicClient.readContract({ address, abi, functionName, args }) as Promise<any>;
-    const [m, live, exclusive, acknowledged, bond, slashed, severity, taken, erc20Docket, xrpDocket, paymentDocket] = await Promise.all([
+    const [m, live, exclusive, exclusiveXrpl, acknowledged, bond, slashed, severity, taken, erc20Docket, xrpDocket, paymentDocket, watchPool, perDeed] = await Promise.all([
       r(c.registry, mandateRegistryAbi, "get"),
       r(c.registry, mandateRegistryAbi, "isLive"),
       r(c.registry, mandateRegistryAbi, "exclusive"),
+      r(c.agentRefs, agentRefsAbi, "exclusive"),
       r(c.registry, mandateRegistryAbi, "acknowledged"),
       r(c.vault, vaultAbi, "bondOf"),
       r(c.vault, vaultAbi, "slashed"),
@@ -129,6 +181,8 @@ export class Delicti {
       r(c.judgeEvm, judgeEvmAbi, "erc20Docket"),
       r(c.judgeXrpl, judgeXrplAbi, "docket"),
       r(c.judgeXrpl, judgeXrplAbi, "paymentDocket"),
+      r(c.vault, vaultAbi, "watchPool"),
+      r(c.vault, vaultAbi, "stipendPerDeed"),
     ]);
     return {
       id,
@@ -140,13 +194,15 @@ export class Delicti {
       assetKey: m.assetKey as Hex,
       vault: m.bond as Address,
       live: live as boolean,
-      exclusive: exclusive as boolean,
+      /** The EVM key's promise (§6.4, §6.11) and the XRPL key's (§6.10). */
+      exclusive: { evm: exclusive as boolean, xrpl: exclusiveXrpl as boolean },
       acknowledged: acknowledged as boolean,
       bond: bond as bigint,
       slashed: slashed as boolean,
       severity: severity as bigint,
       taken: taken as bigint,
       dockets: { erc20: erc20Docket as bigint, xrpOutflow: xrpDocket as bigint, xrpPayments: paymentDocket as bigint },
+      watch: { pool: watchPool as bigint, perDeed: perDeed as bigint },
     };
   }
 }

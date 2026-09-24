@@ -1,0 +1,250 @@
+{
+  "network": "coston2",
+  "at": "2026-09-24T05:54:30.005Z",
+  "policy": "observe",
+  "mandates": [
+    {
+      "id": "1",
+      "cls": "receipted",
+      "why": "§6.8 receipted XRP payments",
+      "vault": "0x6800400225e03539c4B719f470cC2C8edC3cf65B",
+      "version": "v0.10",
+      "live": true,
+      "bond": "0",
+      "slashed": false,
+      "budget": "4000000"
+    },
+    {
+      "id": "2",
+      "cls": "receipted",
+      "why": "§6.8 receipted XRP payments",
+      "vault": "0x6800400225e03539c4B719f470cC2C8edC3cf65B",
+      "version": "v0.10",
+      "live": true,
+      "bond": "0",
+      "slashed": false,
+      "budget": "4000000"
+    },
+    {
+      "id": "3",
+      "cls": "receipted",
+      "why": "§6.8 receipted XRP payments",
+      "vault": "0x6800400225e03539c4B719f470cC2C8edC3cf65B",
+      "version": "v0.10",
+      "live": true,
+      "bond": "0",
+      "slashed": false,
+      "budget": "4000000"
+    },
+    {
+      "id": "4",
+      "cls": "receipted",
+      "why": "§6.8 receipted XRP payments",
+      "vault": "0x6800400225e03539c4B719f470cC2C8edC3cf65B",
+      "version": "v0.10",
+      "live": true,
+      "bond": "1000000000000000000",
+      "slashed": false,
+      "budget": "4000000"
+    },
+    {
+      "id": "5",
+      "cls": "receipted",
+      "why": "§6.8 receipted XRP payments",
+      "vault": "0x6800400225e03539c4B719f470cC2C8edC3cf65B",
+      "version": "v0.10",
+      "live": true,
+      "bond": "1000000000000000000",
+      "slashed": false,
+      "budget": "4000000"
+    },
+    {
+      "id": "6",
+      "cls": "receipted",
+      "why": "§6.8 receipted XRP payments",
+      "vault": "0x6800400225e03539c4B719f470cC2C8edC3cf65B",
+      "version": "v0.10",
+      "live": false,
+      "bond": "750000000000000000",
+      "slashed": true,
+      "budget": "4000000"
+    },
+    {
+      "id": "7",
+      "cls": "unwatchable",
+      "why": "v0.11 has no §6.10 docket",
+      "vault": "0x40A149aCdA2A3D2e299e0FaE4aAA695662AbDAAB",
+      "version": "v0.11",
+      "live": false,
+      "bond": "833330833333333334",
+      "slashed": true,
+      "budget": "12000000"
+    },
+    {
+      "id": "8",
+      "cls": "xrp-outflow",
+      "why": "§6.10 gross XRP outflow",
+      "vault": "0xFd09d39519F51Ccf12c57bd2D5cF8A71a593Ffae",
+      "version": "v0.12",
+      "live": false,
+      "bond": "833245000000000000",
+      "slashed": true,
+      "budget": "12000000"
+    },
+    {
+      "id": "9",
+      "cls": "xrp-outflow",
+      "why": "§6.10 gross XRP outflow",
+      "vault": "0xFd09d39519F51Ccf12c57bd2D5cF8A71a593Ffae",
+      "version": "v0.12",
+      "live": false,
+      "bond": "1666490000000000000",
+      "slashed": true,
+      "budget": "12000000"
+    },
+    {
+      "id": "10",
+      "cls": "receipted",
+      "why": "v0.12 has no §6.11 docket: receipts only",
+      "vault": "0xFd09d39519F51Ccf12c57bd2D5cF8A71a593Ffae",
+      "version": "v0.12",
+      "live": true,
+      "bond": "1000000000000000000",
+      "slashed": false,
+      "budget": "4000000"
+    },
+    {
+      "id": "11",
+      "cls": "erc20-outflow",
+      "why": "§6.11 gross ERC-20 outflow",
+      "vault": "0x3e3316D2Dd78d548DFBa2A777171F1E3e05F55EE",
+      "version": "v0.13",
+      "live": false,
+      "bond": "0",
+      "slashed": true,
+      "budget": "4000000"
+    },
+    {
+      "id": "12",
+      "cls": "erc20-outflow",
+      "why": "§6.11 gross ERC-20 outflow",
+      "vault": "0x3e3316D2Dd78d548DFBa2A777171F1E3e05F55EE",
+      "version": "v0.13",
+      "live": false,
+      "bond": "750000000000000000",
+      "slashed": true,
+      "budget": "4000000"
+    },
+    {
+      "id": "13",
+      "cls": "xrp-outflow",
+      "why": "§6.10 gross XRP outflow",
+      "vault": "0x9bF9e4186cFb569Fe5bf528e2859aA7B672566fE",
+      "version": "current",
+      "live": false,
+      "bond": "583244166666666667",
+      "slashed": true,
+      "budget": "12000000"
+    }
+  ],
+  "observations": [
+    {
+      "mandateId": "8",
+      "cls": "xrp-outflow",
+      "account": "rDUi8th4efgZSbJ8kyhxNGvdkDnmsXhzHV",
+      "seen": "14001060",
+      "unfiled": "0",
+      "lost": 0,
+      "docket": "14001060",
+      "budget": "12000000",
+      "plan": "idle",
+      "checkedAt": 1790229256
+    },
+    {
+      "mandateId": "9",
+      "cls": "xrp-outflow",
+      "account": "ra2ALvaMmxbFW177FvHUFkhg2ukfWvJKiz",
+      "seen": "14001060",
+      "unfiled": "0",
+      "lost": 0,
+      "docket": "14001060",
+      "budget": "12000000",
+      "plan": "idle",
+      "checkedAt": 1790229259
+    },
+    {
+      "mandateId": "12",
+      "cls": "erc20-outflow",
+      "seen": "5000000",
+      "unfiled": "0",
+      "lost": 0,
+      "docket": "5000000",
+      "budget": "4000000",
+      "plan": "idle",
+      "checkedAt": 1790229263
+    },
+    {
+      "mandateId": "13",
+      "cls": "xrp-outflow",
+      "account": "rfcw9TH5ofymJEgr1UcFsdK8SnvdXDaurC",
+      "seen": "17001070",
+      "unfiled": "0",
+      "lost": 0,
+      "docket": "17001070",
+      "budget": "12000000",
+      "plan": "idle",
+      "checkedAt": 1790229267
+    }
+  ],
+  "decisions": [
+    {
+      "mandateId": "8",
+      "cls": "xrp-outflow",
+      "plan": "idle",
+      "acted": false,
+      "why": "no new outflow"
+    },
+    {
+      "mandateId": "9",
+      "cls": "xrp-outflow",
+      "plan": "idle",
+      "acted": false,
+      "why": "no new outflow"
+    },
+    {
+      "mandateId": "12",
+      "cls": "erc20-outflow",
+      "plan": "idle",
+      "acted": false,
+      "why": "no new outflow"
+    },
+    {
+      "mandateId": "13",
+      "cls": "xrp-outflow",
+      "plan": "idle",
+      "acted": false,
+      "why": "no new outflow"
+    }
+  ],
+  "agents": [
+    {
+      "agent": "0x34D940fb868dbac296311857903C6dA0cbb7C9F1",
+      "xrplAccounts": [
+        "rDUi8th4efgZSbJ8kyhxNGvdkDnmsXhzHV",
+        "ra2ALvaMmxbFW177FvHUFkhg2ukfWvJKiz",
+        "rfcw9TH5ofymJEgr1UcFsdK8SnvdXDaurC"
+      ],
+      "standing": "convicted",
+      "mandates": 13,
+      "acknowledged": 13,
+      "exclusive": 6,
+      "bonded": "8416310000000000001",
+      "verdicts": 10,
+      "taken": "2583689999999999999",
+      "worstUseBps": 14167,
+      "watched": 1,
+      "selfWatched": 1,
+      "flags": []
+    }
+  ]
+}

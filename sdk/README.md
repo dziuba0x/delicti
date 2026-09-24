@@ -1,11 +1,12 @@
 # @delicti/sdk
 
-TypeScript for DELICTI, built on [viem](https://viem.sh). It has two parts:
+TypeScript for DELICTI, built on [viem](https://viem.sh). It has three parts:
 
 - **`Delicti`**, the calls an integrator makes. A principal commits a mandate and bonds it, an agent accepts it or declares it exclusive, and anyone reads where a mandate stands.
-- **`Erc20OutflowWatcher`** and the `delicti-watch` CLI, the party the protocol's economics were written for. It watches an exclusive stablecoin mandate and keeps its §6.11 docket current. When the agent's outflow crosses the budget, it commits, waits out the lead, proves the deeds through the FDC and files the conviction. It needs no receipts and no cooperation from the agent or the facilitator.
+- **`Erc20OutflowWatcher`** and the `delicti-watch` CLI, the party the protocol's economics were written for. It watches an exclusive stablecoin mandate and keeps its §6.11 docket current. When the agent's outflow crosses the budget, it commits, waits out the lead, proves the deeds through the FDC and files the conviction. It needs no receipts and no cooperation from the agent or the facilitator. `XrplOutflowWatcher` does the same for §6.10 on XRPL.
+- **`Sentinel`** (`delicti-watch sentinel`) runs across the whole protocol. It discovers every mandate, watches every one a third party can (§6.11 stablecoins on Flare, §6.10 XRP outflow on XRPL), prices each piece of work before buying a single attestation, acts according to its policy, and publishes a per-agent public score (SPEC §11.2).
 
-v0.13, Coston2 only. Not audited. Whitehat use on testnets.
+v0.14, Coston2 and XRPL testnet only. Not audited. Whitehat use on testnets.
 
 ## An agent under a mandate, in a few lines
 
@@ -46,14 +47,65 @@ Each cycle goes through these steps:
 
 The planner (`planErc20`) is pure and tested on its own (`test/planner.test.ts`).
 
+## The XRPL watcher: reading history the way the FDC will
+
+A mandate names its XRPL account only by hash (`agentRef`). The watcher finds the account from the mandate's exclusivity statement: the `ExclusiveProven` event holds the statement's XRPL transaction id, the FDC verifier's index says who signed it, and `keccak256(signer)` must equal `agentRef`.
+
+Reading the account's history takes more care than it seems. `account_tx` over a real window needs a full-history XRPL server; the public testnet endpoint reachable here keeps about 1,300 ledgers, under an hour and a half. But every transaction that moves an account's XRP modifies its AccountRoot, and each modification records the previous transaction that did (`PreviousTxnID`). So the balance history is a linked list, anchored at `account_info`. `XrplHistory.walk` follows it backwards through **the FDC verifier's own index**, about 15 days of full transactions with metadata. It finds exactly what can still be proven, offers taken in other accounts' transactions included, and a balance change that is not on the list did not happen.
+
+```sh
+npx delicti-watch xrpl 13 --once          # one mandate
+```
+
+## The sentinel
+
+```sh
+npx delicti-watch sentinel                                   # observe everything, act on nothing, no key needed
+npx delicti-watch sentinel --policy profit --interval 300    # act where stipends + reward cover the cost
+npx delicti-watch sentinel --policy altruist --html report.html --out report.json --state sentinel.json
+```
+
+Each round goes through five steps:
+
+1. **Discover** every mandate from state (`nextId`, `get`), not from logs.
+2. **Classify** each one:
+   - §6.11 and §6.10 are watchable by anyone.
+   - Receipted cases (§6.2, §6.3, §6.8) are listed. Judging them needs the agent's leaves.
+   - Unacknowledged mandates are ignored, as SPEC §11.1 requires.
+   - A mandate bonded in an older Vault is watched by that Vault's judges, as far as they can go (`network.history`).
+3. **Observe** each watchable mandate against its source chain.
+4. **Price** each plan. The cost is attestation fees plus gas. The income is the watch pool's stipends (§8.4, v0.14) plus the reward from `BondLens.penaltyFor`.
+5. **Act** according to the policy:
+   - `observe`: act on nothing.
+   - `profit`: act only where the income covers the cost.
+   - `altruist`: act on everything. Somebody has to, and the protocol's own sentinel is altruist (docs/research/watchers.md).
+
+The score it publishes is per agent and deliberately not a single number. The facets are:
+
+- **standing**, where `breach-unjudged` is the alarm: the chain shows more outflow than the budget, and no verdict exists yet;
+- verdicts and value taken, across every Vault;
+- bond at stake;
+- worst budget use;
+- watched and self-watched mandates;
+- unfiled and lost deeds.
+
+## The watch pool (v0.14)
+
+```ts
+await delicti.setWatchTerms(principal, id, parseEther("0.05"), 100_000n); // per new deed moving ≥ 0.1 XRP
+await delicti.fundWatch(principal, id, parseEther("0.5"));
+await delicti.fundWatch(agent, id, parseEther("0.5")); // an agent paying strangers to catch it
+```
+
 ## Tests
 
 ```sh
-npm test                        # offline: planner, commitment encoding, decoding a real FDC proof
+npm test                        # offline: both planners, the XRPL history reader on a real taken offer,
+                                # the score, commitment encoding, decoding a real FDC proof
 DELICTI_ONLINE=1 npm test       # + a round trip through the live JudgeEvm on Coston2
 ```
 
-The commitment encoding is pinned to a value the v0.13 Vault computed on-chain. The online test sends a real proof from mandate #11 back to the live judge. The judge passes it through `FdcVerification` and every check, then refuses it with `NothingNew` because it is already filed. That round trip is the proof that the SDK's encoding is the contract's.
+The commitment encoding is pinned to a value the v0.13 Vault computed on-chain. The online test sends a real proof from mandate #12 back to its live v0.13 judge. The judge passes it through `FdcVerification` and every check, then refuses it with `NothingNew` because it is already filed. That round trip is the proof that the SDK's encoding is the contract's.
 
 ## Regenerating the ABIs
 

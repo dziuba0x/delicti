@@ -14,7 +14,7 @@ import {SpendMeter} from "../../src/SpendMeter.sol";
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
 import {ProtocolsV2Interface} from "@flarenetwork/flare-periphery-contracts/coston2/ProtocolsV2Interface.sol";
 import {MockProtocolsV2} from "../Rounds.sol";
-import {Handler, CredulousFdc} from "./Handler.sol";
+import {Handler, CredulousFdc, FdcHubStub, FlareRegistryStub} from "./Handler.sol";
 
 /// @title Invariants — properties that must hold after ANY sequence of calls
 /// @notice The unit tests say "this attack, which we thought of, fails". These say "no sequence of
@@ -49,6 +49,10 @@ contract Invariants is Test {
             10 minutes,
             ProtocolsV2Interface(address(rounds)), refs, 5 minutes);
         h = new Handler(reg, anchorLog, bond, judge, meter, rounds, xjudge, refs);
+        // Flare's ContractRegistry, with an FdcHub behind it, where `Vault.requestAttestation` looks
+        address flareRegistry = 0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019;
+        vm.etch(flareRegistry, address(new FlareRegistryStub()).code);
+        vm.store(flareRegistry, bytes32(0), bytes32(uint256(uint160(address(new FdcHubStub())))));
         targetContract(address(h));
     }
 
@@ -112,6 +116,7 @@ contract Invariants is Test {
         h.fundWatch(5, 0, 1 ether); // whoSeed 0: the principal
         h.tokenMove(0, 1_000_000, 3);
         h.tokenMove(0, 1_000_000, 3);
+        h.requestFor(0, 0, 2); // actor 2 pays for the first token move's attestation
         h.fileTokens(0, 2, 0, 1, 1, false, keccak256("t1")); // one log of the first tx
         assertEq(h.nTokenFilings(), 1, "a partial filing did not land");
         h.tokenMove(0, 1_000_000, 3);
@@ -157,7 +162,10 @@ contract Invariants is Test {
         assertLe(
             h.ghostClaimed() + h.ghostWithdrawn() + h.ghostWatchRefunded(), h.ghostPosted() + h.ghostStaked() + h.ghostWatchFunded()
         );
-        assertFalse(h.refundExceededFunding(), "a funder got back more than it put into a watch pool");
+        assertFalse(h.refundExceededFunding(), "a watch pool was funded or refunded by someone other than its principal, or over-refunded");
+        uint256 pools;
+        for (uint256 i = 0; i < h.mandateCount(); i++) pools += bond.watchPool(h.mandates(i));
+        assertGe(h.ghostWatchFunded(), pools + h.ghostWatchRefunded(), "a watch pool holds or returned more than was put in");
     }
 
     /// claim() pays exactly what was owed, zeroes it, and cannot be repeated on the same balance.

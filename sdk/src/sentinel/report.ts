@@ -11,7 +11,7 @@ export function renderHtml(r: RoundReport, explorer: string): string {
     .map(
       (a) => `<tr><td><a href="${explorer}/address/${a.agent}">${short(a.agent)}</a>${a.xrplAccounts.map((x) => `<div class="sub">${esc(x)}</div>`).join("")}</td>
 <td><span class="pill" style="--c:${tone[a.standing]}">${a.standing}</span></td><td>${a.acknowledged}/${a.mandates}</td><td>${a.exclusive}</td>
-<td>${flr(a.bonded)}</td><td>${a.verdicts}</td><td>${flr(a.taken)}</td><td>${(a.worstUseBps / 100).toFixed(1)}%</td><td>${a.watched}${a.selfWatched ? ` <span class="sub">(${a.selfWatched} self)</span>` : ""}</td>
+<td>${flr(a.bonded)}</td><td>${a.verdicts}</td><td>${flr(a.taken)}</td><td>${(a.worstUseBps / 100).toFixed(1)}%</td><td>${a.watched}</td>
 <td class="flags">${a.flags.map(esc).join("<br>")}</td></tr>`,
     )
     .join("");

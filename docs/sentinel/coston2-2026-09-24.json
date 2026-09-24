@@ -1,6 +1,6 @@
 {
   "network": "coston2",
-  "at": "2026-09-24T05:54:30.005Z",
+  "at": "2026-09-24T07:16:12.004Z",
   "policy": "observe",
   "mandates": [
     {
@@ -140,6 +140,17 @@
       "cls": "xrp-outflow",
       "why": "§6.10 gross XRP outflow",
       "vault": "0x9bF9e4186cFb569Fe5bf528e2859aA7B672566fE",
+      "version": "v0.14",
+      "live": false,
+      "bond": "583244166666666667",
+      "slashed": true,
+      "budget": "12000000"
+    },
+    {
+      "id": "14",
+      "cls": "xrp-outflow",
+      "why": "§6.10 gross XRP outflow",
+      "vault": "0xB15f5041F4aA2bc212832dfb0e59CD6c0e9a24aF",
       "version": "current",
       "live": false,
       "bond": "583244166666666667",
@@ -158,7 +169,7 @@
       "docket": "14001060",
       "budget": "12000000",
       "plan": "idle",
-      "checkedAt": 1790229256
+      "checkedAt": 1790234156
     },
     {
       "mandateId": "9",
@@ -170,7 +181,7 @@
       "docket": "14001060",
       "budget": "12000000",
       "plan": "idle",
-      "checkedAt": 1790229259
+      "checkedAt": 1790234159
     },
     {
       "mandateId": "12",
@@ -181,7 +192,7 @@
       "docket": "5000000",
       "budget": "4000000",
       "plan": "idle",
-      "checkedAt": 1790229263
+      "checkedAt": 1790234163
     },
     {
       "mandateId": "13",
@@ -193,7 +204,19 @@
       "docket": "17001070",
       "budget": "12000000",
       "plan": "idle",
-      "checkedAt": 1790229267
+      "checkedAt": 1790234166
+    },
+    {
+      "mandateId": "14",
+      "cls": "xrp-outflow",
+      "account": "rwstfZP7qaE5WyZ1KUiyCkvtknpdLAz2Rg",
+      "seen": "17001070",
+      "unfiled": "0",
+      "lost": 0,
+      "docket": "17001070",
+      "budget": "12000000",
+      "plan": "idle",
+      "checkedAt": 1790234169
     }
   ],
   "decisions": [
@@ -224,6 +247,13 @@
       "plan": "idle",
       "acted": false,
       "why": "no new outflow"
+    },
+    {
+      "mandateId": "14",
+      "cls": "xrp-outflow",
+      "plan": "idle",
+      "acted": false,
+      "why": "no new outflow"
     }
   ],
   "agents": [
@@ -232,18 +262,18 @@
       "xrplAccounts": [
         "rDUi8th4efgZSbJ8kyhxNGvdkDnmsXhzHV",
         "ra2ALvaMmxbFW177FvHUFkhg2ukfWvJKiz",
-        "rfcw9TH5ofymJEgr1UcFsdK8SnvdXDaurC"
+        "rfcw9TH5ofymJEgr1UcFsdK8SnvdXDaurC",
+        "rwstfZP7qaE5WyZ1KUiyCkvtknpdLAz2Rg"
       ],
       "standing": "convicted",
-      "mandates": 13,
-      "acknowledged": 13,
-      "exclusive": 6,
-      "bonded": "8416310000000000001",
-      "verdicts": 10,
-      "taken": "2583689999999999999",
+      "mandates": 14,
+      "acknowledged": 14,
+      "exclusive": 7,
+      "bonded": "8999554166666666668",
+      "verdicts": 11,
+      "taken": "3000445833333333332",
       "worstUseBps": 14167,
-      "watched": 1,
-      "selfWatched": 1,
+      "watched": 2,
       "flags": []
     }
   ]

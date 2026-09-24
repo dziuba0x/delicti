@@ -139,7 +139,7 @@ export class XrplOutflowWatcher {
     const reqs: { req: Hex; round: bigint }[] = [];
     for (const txId of txIds) {
       const req = await fdc.prepareBalanceDecrease(txId, agentRef);
-      reqs.push({ req, round: await fdc.request(wallet, req) });
+      reqs.push({ req, round: await fdc.request(wallet, req, this.dep!.features.includes("paidRequests") ? this.dep!.vault : undefined) });
       this.say(`BalanceDecreasingTransaction requested for ${txId}`);
     }
     const proofs: FdcProof[] = await Promise.all(reqs.map(({ req, round }) => fdc.proof(round, req, "BalanceDecreasingTransaction")));

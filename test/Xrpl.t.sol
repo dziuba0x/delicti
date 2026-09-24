@@ -9,6 +9,7 @@ import {JudgeEvm} from "../src/JudgeEvm.sol";
 import {JudgeXrpl} from "../src/JudgeXrpl.sol";
 import {DelictiErrors} from "../src/DelictiErrors.sol";
 import {Core} from "./Core.sol";
+import {HubStub, RegistryStub} from "./WatchPool.t.sol";
 import {AgentRefs} from "../src/AgentRefs.sol";
 import {SpendMeter} from "../src/SpendMeter.sol";
 import {CorroborationLog} from "../src/CorroborationLog.sol";
@@ -246,6 +247,30 @@ contract XrplTest is Test {
         assertEq(xjudge.paymentDocket(mandateId), 5 * EACH, "recorded");
         assertEq(bond.slashedAmount(mandateId), taken, "and nothing taken twice");
         assertEq(bond.owed(makeAddr("keeper")), 0);
+    }
+
+    /// §8.4 on the §6.8 docket: the stipend goes to whoever paid for each Payment attestation
+    /// through the Vault, not to whoever files.
+    function test_paymentDocketPaysTheRequester() public {
+        address flareRegistry = 0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019;
+        vm.etch(flareRegistry, address(new RegistryStub()).code);
+        vm.store(flareRegistry, bytes32(0), bytes32(uint256(uint160(address(new HubStub())))));
+        vm.startPrank(principal);
+        bond.setWatchTerms(mandateId, 0.01 ether, 0);
+        bond.fundWatch{value: 1 ether}(mandateId);
+        vm.stopPrank();
+        (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _slice(0, 3);
+        address keeper = makeAddr("keeper");
+        vm.deal(keeper, 1 ether);
+        for (uint256 i = 0; i < 2; i++) { // the keeper pays for two of the three
+            vm.prank(keeper);
+            bond.requestAttestation{value: 1}(abi.encodePacked(bytes32("Payment"), pr[i].data.sourceId, bytes32(0), abi.encode(pr[i].data.requestBody)));
+        }
+        for (uint256 i = 0; i < 3; i++) pr[i].data.attestationType = bytes32("Payment");
+        vm.prank(challenger);
+        xjudge.fileBudgetPayments(mandateId, idx, ls, paths, pr, bytes32(0));
+        assertEq(bond.owed(keeper), 0.02 ether);
+        assertEq(bond.owed(challenger), 0);
     }
 
     function test_revert_paymentDocketNothingNew() public {

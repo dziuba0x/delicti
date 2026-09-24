@@ -11,7 +11,7 @@ import {
   type Transport,
   type WalletClient,
 } from "viem";
-import { agentRefsAbi, judgeEvmAbi, judgeXrplAbi } from "./abi.js";
+import { agentRefsAbi, judgeEvmAbi, judgeXrplAbi, vaultAbi } from "./abi.js";
 import type { DelictiNetwork } from "./networks.js";
 
 /** Where the FDC's off-chain halves live. Both are Flare's services; both need an API key. */
@@ -144,11 +144,18 @@ export class Fdc {
     }, tries);
   }
 
-  /** Pay the fee and submit the request to FdcHub. Returns the voting round it landed in. */
-  async request(wallet: WalletClient<Transport, Chain, Account>, abiEncodedRequest: Hex): Promise<bigint> {
+  /**
+   * Pay the fee and submit the request to FdcHub. Returns the voting round it landed in.
+   * With `viaVault` (v0.15+), the request goes through `Vault.requestAttestation`, which forwards the
+   * fee to FdcHub and records the payer as the one any watch-pool stipend for this deed is paid to
+   * (SPEC §8.4) — whoever later files the proof.
+   */
+  async request(wallet: WalletClient<Transport, Chain, Account>, abiEncodedRequest: Hex, viaVault?: Address): Promise<bigint> {
     const [hub, feeCfg, clock] = await Promise.all([this.named("FdcHub"), this.named("FdcRequestFeeConfigurations"), this.clock()]);
     const fee = await this.publicClient.readContract({ address: feeCfg, abi: feeConfigAbi, functionName: "getRequestFee", args: [abiEncodedRequest] });
-    const hash = await wallet.writeContract({ address: hub, abi: fdcHubAbi, functionName: "requestAttestation", args: [abiEncodedRequest], value: fee });
+    const hash = viaVault
+      ? await wallet.writeContract({ address: viaVault, abi: vaultAbi, functionName: "requestAttestation", args: [abiEncodedRequest], value: fee })
+      : await wallet.writeContract({ address: hub, abi: fdcHubAbi, functionName: "requestAttestation", args: [abiEncodedRequest], value: fee });
     const rc = await this.publicClient.waitForTransactionReceipt({ hash });
     if (rc.status !== "success") throw new Error(`requestAttestation reverted: ${hash}`);
     const block = await this.publicClient.getBlock({ blockNumber: rc.blockNumber });

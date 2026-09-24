@@ -23,10 +23,10 @@ describe("the public score", () => {
     expect(s.flags[0]).toMatch(/2000000 of outflow not yet on the docket/);
   });
 
-  it("clean within the budget; watched and self-watched counted from the watch pool", async () => {
-    const [s] = await scoreAgents(pc, coston2, [m(1n, { watchPool: 1n, stipendPerDeed: 1n, agentFundedWatch: 1n })], new Map([["1", ob("1", 3_000_000n, 3_000_000n)]]));
+  it("clean within the budget; a funded pool with terms counts as watched", async () => {
+    const [s] = await scoreAgents(pc, coston2, [m(1n, { watchPool: 1n, stipendPerDeed: 1n })], new Map([["1", ob("1", 3_000_000n, 3_000_000n)]]));
     expect(s.standing).toBe("clean");
-    expect([s.watched, s.selfWatched]).toEqual([1, 1]);
+    expect(s.watched).toBe(1);
   });
 
   it("ignores what the agent never acknowledged (SPEC §11.1)", async () => {

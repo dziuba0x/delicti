@@ -65,5 +65,5 @@ interface DelictiErrors {
     error WatchTermsOnlyImprove();
     error WatchClosed();
     error NothingFunded();
-    error NotPrincipalOrAgent();
+    error BadRequest();
 }

@@ -12,6 +12,11 @@ import {DelictiErrors} from "./DelictiErrors.sol";
 import {Kinds} from "./Kinds.sol";
 
 /// @notice What a Vault asks of each contract it lets pass verdicts.
+/// @dev The one FdcHub function the Vault forwards to.
+interface IFdcHubLike {
+    function requestAttestation(bytes calldata data) external payable;
+}
+
 interface IJudge {
     function vault() external view returns (address);
 }
@@ -132,6 +137,9 @@ contract Vault is DelictiErrors {
     ///         an on-chain FDC request, a finalised round and a DA fetch; without the window the
     ///         principal empties the bond in the transaction that revokes the mandate.
     uint64 public constant COOLING_WINDOW = 24 hours;
+
+    /// @dev Flare's ContractRegistry, the same address on every Flare network.
+    address internal constant FLARE_REGISTRY = 0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019;
 
     /// @notice Stake an accuser puts up (SPEC §6.4). Held here, not by the judge that took it, so that
     ///         every wei the protocol holds is in one contract under one invariant.
@@ -358,46 +366,61 @@ contract Vault is DelictiErrors {
     }
 
     // -----------------------------------------------------------------------------------
-    // The watch pool (v0.14, SPEC §8.4): paying for the docket to be kept.
+    // The watch pool (v0.14, reworked in v0.15; SPEC §8.4): paying for the docket to be kept.
     //
     // A crossing bounty alone pays watchers nothing when the agent behaves, which is exactly the
     // outcome the protocol exists to produce. Lightning's watchtowers ran into this deterrence
-    // paradox, and their reward towers were never shipped (docs/research/watchers.md). Before
-    // v0.14, keeping a docket below the budget was unpaid public work (§10).
+    // paradox, and their reward towers were never shipped (docs/research/watchers.md).
     //
-    // The principal funds the pool, and so may the agent, which is a statement of confidence. Nobody
-    // else can. An outsider's money in a pool whose rate the principal controls would be a prize
-    // for principal–agent collusion: the agent makes real transfers to itself, a sock puppet files
-    // them, and a raised rate hands the pool over. That is the §8.3 problem again, so it gets the
-    // §8.3 answer. An outsider who wants a mandate watched posts bond, which pays the challenger.
-    // The principal sets the terms once:
-    // a stipend per deed, and the least value a deed must move to earn it. Terms may later only
-    // become more generous. A judge pays the stipend to the filer of every NEW deed that moved at
-    // least that value, on any docket (§6.8, §6.10, §6.11), crossing filing or not. What is paid
-    // for is verified work, one proof of one deed filed for the first time. Uptime is never paid.
+    // WHO FUNDS: the principal, nobody else. The principal sets the terms, so any other funder's
+    // money would sit behind a rate the principal can raise: outsiders (v0.14 review) and, as the
+    // v0.14 adversarial review showed with a working exploit, the agent too — agent funds, principal
+    // raises `perDeed` to the whole pool, a sock puppet files one ordinary deed. The §8.3 answer
+    // again: a party that wants a mandate watched and is not its principal posts bond.
     //
-    // Why deeds must MOVE value: anyone can make a token emit `Transfer(agent, x, 0)` by calling
-    // `transferFrom(agent, x, 0)`, and anyone can send XRP TO the agent's account. Both give
-    // provable "deeds" that are not the agent's act. They count nothing toward a budget, and here
-    // they earn nothing either.
+    // WHO IS PAID: whoever PAID FOR THE ATTESTATION, not whoever files it. Recordings below the
+    // budget need no commitment, and an FDC proof works for whoever submits it, so in v0.14 a
+    // copier could lift a watcher's proofs from the mempool (or from the public DA layer, using the
+    // request the watcher paid FdcHub for), file first, and take every stipend while the watcher's
+    // own filing reverted `NothingNew`. Since v0.15 attestations for stipend-paying deeds are
+    // requested THROUGH this Vault (`requestAttestation`), which forwards the fee to FdcHub and
+    // records the first payer of each request under a key the judge can rebuild from the proof:
     //
-    // Unspent funds return pro rata to the funders once the mandate is dead past the cooling
-    // window. That is also when the bond can leave, and a docket without a bond stops.
+    //   deedKey = keccak256(abi.encode(attestationType, sourceId, keccak256(requestBody bytes)))
+    //
+    // (a request is attestationType ‖ sourceId ‖ messageIntegrityCode ‖ abi.encode(requestBody)
+    // — measured against the verifier on 2026-09-24, test/FdcKey.t.sol). Filing becomes a public
+    // service: a copier pays the gas to deliver someone else's stipend. And the key is claimed the
+    // moment a watcher pays for it, so a second watcher can read `requesterOf` before buying the
+    // same attestation — the race §10 described, closed without a separate claim step.
+    //
+    // WHAT IS PAID: `perDeed` for every NEW deed that moved positive value of at least `minValue`,
+    // on any docket (§6.8, §6.10, §6.11), crossing or not. Anyone can make a token emit
+    // `Transfer(agent, x, 0)` and anyone can send XRP TO the agent: provable, not the agent's act,
+    // worth nothing here. Splitting one act into many deeds (an XRPL offer consumed in many fills,
+    // each ≥ `minValue`) is bounded by `perDeed / minValue` per unit of value — the principal's
+    // chosen price of watching — and each piece costs its requester a real attestation fee.
+    //
+    // WHEN IT CLOSES: the principal takes back what is left once no bond remains (nothing more can
+    // be filed) or `WATCH_TAIL` after the cooling window — long enough for the deeds at the end of a
+    // window to be proven on XRPL (~14 days).
     // -----------------------------------------------------------------------------------
+
+    uint64 public constant WATCH_TAIL = 14 days;
 
     mapping(uint256 => uint256) public watchPool;
     mapping(uint256 => uint256) public stipendPerDeed;
     mapping(uint256 => uint256) public stipendMinValue;
     mapping(uint256 => bool) public watchTermsSet;
-    mapping(uint256 => mapping(address => uint256)) public watchFunded;
-    mapping(uint256 => uint256) public watchFundedTotal;
     mapping(uint256 => bool) public watchClosed;
-    mapping(uint256 => uint256) public watchAtClose;
+    /// @notice deedKey => the first address that paid FdcHub for that attestation through this Vault
+    mapping(bytes32 => address) public requesterOf;
 
     event WatchTerms(uint256 indexed mandateId, uint256 perDeed, uint256 minValue);
-    event WatchFunded(uint256 indexed mandateId, address indexed by, uint256 amount, uint256 pool);
-    event StipendPaid(uint256 indexed mandateId, address indexed filer, uint256 deeds, uint256 paid);
-    event WatchRefunded(uint256 indexed mandateId, address indexed funder, address to, uint256 amount);
+    event WatchFunded(uint256 indexed mandateId, uint256 amount, uint256 pool);
+    event AttestationRequested(bytes32 indexed deedKey, address indexed requester, bytes32 attestationType, uint256 fee);
+    event StipendPaid(uint256 indexed mandateId, bytes32 indexed deedKey, address indexed requester, uint256 paid);
+    event WatchRefunded(uint256 indexed mandateId, address to, uint256 amount);
 
     /// @notice The principal's offer to watchers. Once set, it can only improve for them: the
     ///         stipend can rise and the minimum can fall. A principal who could cut the rate would
@@ -416,48 +439,92 @@ contract Vault is DelictiErrors {
         emit WatchTerms(mandateId, perDeed, minValue);
     }
 
-    /// @notice Pay into a mandate's watch pool: the principal or the agent. Each gets its share of
-    ///         what is left back.
+    /// @notice Pay into a mandate's watch pool. The principal only.
     function fundWatch(uint256 mandateId) external payable {
         MandateRegistry.Mandate memory m = registry.get(mandateId);
-        if (msg.sender != m.principal && msg.sender != m.agent) revert NotPrincipalOrAgent();
+        if (msg.sender != m.principal) revert NotPrincipal();
         if (m.bond != address(this)) revert NotThisBond();
         if (watchClosed[mandateId]) revert WatchClosed();
         watchPool[mandateId] += msg.value;
-        watchFunded[mandateId][msg.sender] += msg.value;
-        watchFundedTotal[mandateId] += msg.value;
-        emit WatchFunded(mandateId, msg.sender, msg.value, watchPool[mandateId]);
+        emit WatchFunded(mandateId, msg.value, watchPool[mandateId]);
     }
 
-    /// @notice A judge filed `deeds` new, value-moving deeds for `filer`: pay their stipends, as far
-    ///         as the pool goes. Never reverts on an empty or closed pool — a filing must not fail
-    ///         because nobody paid for it.
-    function stipend(uint256 mandateId, address filer, uint256 deeds) external onlyJudge returns (uint256 paid) {
+    /// @notice The key a judge rebuilds from a proof: type, source, and the hash of the request body.
+    function deedKey(bytes32 attestationType, bytes32 sourceId, bytes32 requestBodyHash) public pure returns (bytes32) {
+        return keccak256(abi.encode(attestationType, sourceId, requestBodyHash));
+    }
+
+    /// @notice Request an FDC attestation through the Vault: the fee (`msg.value`) is forwarded to
+    ///         FdcHub unchanged, and the first payer of this request is recorded as the one a
+    ///         stipend for the deed it proves will be paid to. Holds nothing.
+    function requestAttestation(bytes calldata request) external payable returns (bytes32 key) {
+        if (request.length < 128) revert BadRequest();
+        key = deedKey(bytes32(request[0:32]), bytes32(request[32:64]), keccak256(request[96:]));
+        if (requesterOf[key] == address(0)) requesterOf[key] = msg.sender;
+        (bool ok, bytes memory r) = FLARE_REGISTRY.staticcall(
+            abi.encodeCall(IFlareContractRegistry.getContractAddressByName, ("FdcHub"))
+        );
+        if (!ok || r.length != 32) revert BadRequest();
+        IFdcHubLike(address(uint160(uint256(bytes32(r))))).requestAttestation{value: msg.value}(request);
+        emit AttestationRequested(key, msg.sender, bytes32(request[0:32]), msg.value);
+    }
+
+    /// @notice A judge filed new, value-moving deeds, one per key: pay each deed's stipend to the
+    ///         address that paid for its attestation here, as far as the pool goes. A deed nobody
+    ///         requested through the Vault earns nothing. Never reverts on an empty or closed pool
+    ///         — a filing must not fail because nobody paid for it.
+    function stipend(uint256 mandateId, bytes32[] calldata keys) external onlyJudge returns (uint256 total) {
         uint256 rate = stipendPerDeed[mandateId];
         uint256 pool = watchPool[mandateId];
-        if (deeds == 0 || rate == 0 || pool == 0 || watchClosed[mandateId]) return 0;
-        paid = deeds > pool / rate ? pool : deeds * rate;
-        watchPool[mandateId] = pool - paid;
-        owed[filer] += paid;
-        emit StipendPaid(mandateId, filer, deeds, paid);
+        if (rate == 0 || pool == 0 || watchClosed[mandateId]) return 0;
+        for (uint256 i = 0; i < keys.length && pool != 0; i++) {
+            address to = requesterOf[keys[i]];
+            if (to == address(0)) continue;
+            uint256 paid = rate > pool ? pool : rate;
+            pool -= paid;
+            total += paid;
+            owed[to] += paid;
+            emit StipendPaid(mandateId, keys[i], to, paid);
+        }
+        watchPool[mandateId] = pool;
     }
 
-    /// @notice A funder takes back its share of what the pool has left, once the mandate is dead
-    ///         past the cooling window. The first refund closes the pool: no stipend after it.
+    /// @notice The principal takes back what the pool has left, once nothing more can be filed (no
+    ///         bond left) or `WATCH_TAIL` past the cooling window. Closes the pool for good.
     function refundWatch(uint256 mandateId, address payable to) external {
-        uint256 mine = watchFunded[mandateId][msg.sender];
-        if (mine == 0) revert NothingFunded();
-        _requireSettledDeath(mandateId);
-        if (!watchClosed[mandateId]) {
-            watchClosed[mandateId] = true;
-            watchAtClose[mandateId] = watchPool[mandateId];
+        MandateRegistry.Mandate memory m = registry.get(mandateId);
+        if (msg.sender != m.principal) revert NotPrincipal();
+        if (registry.isLive(mandateId)) revert MandateStillLive();
+        uint64 death = registry.deathTime(mandateId);
+        if (bondOf[mandateId] != 0 && (death == type(uint64).max || block.timestamp < uint256(death) + COOLING_WINDOW + WATCH_TAIL)) {
+            revert CoolingWindow();
         }
-        uint256 amt = (watchAtClose[mandateId] * mine) / watchFundedTotal[mandateId];
-        watchFunded[mandateId][msg.sender] = 0;
-        watchPool[mandateId] -= amt;
-        emit WatchRefunded(mandateId, msg.sender, to, amt);
+        uint256 amt = watchPool[mandateId];
+        if (amt == 0) revert NothingFunded();
+        watchClosed[mandateId] = true;
+        watchPool[mandateId] = 0;
+        emit WatchRefunded(mandateId, to, amt);
         (bool ok,) = to.call{value: amt}("");
         if (!ok) revert TransferFailed();
+    }
+
+    /// @notice What a verdict of this kind and severity would take right now — the same arithmetic
+    ///         as `verdict`, read-only. Docket judges ask before spending a commitment: a crossing
+    ///         that would take nothing (the severity is already covered, or a proportional increase
+    ///         still under the 10 % floor already taken) is a recording, not a conviction.
+    function wouldTake(uint8 kind, uint256 mandateId, uint256 budget, uint256 severity) public view returns (uint256 t) {
+        uint256 prev = severityIn[mandateId][Kinds.bucket(kind)];
+        uint256 add = Kinds.additive(kind) ? severity : (severity > prev ? severity - prev : 0);
+        if (add == 0) return 0;
+        uint256 total = severityOf[mandateId];
+        unchecked {
+            total = total + add < total ? type(uint256).max : total + add;
+        }
+        uint256 base = slashed[mandateId] ? slashBase[mandateId] : bondOf[mandateId];
+        uint256 target = _penalty(base, budget, total);
+        uint256 done = slashedAmount[mandateId];
+        t = target > done ? target - done : 0;
+        if (t > bondOf[mandateId]) t = bondOf[mandateId];
     }
 
     /// @notice Credit a non-principal deposit's beneficiary with what verdicts have accrued to it.
@@ -513,8 +580,7 @@ contract Vault is DelictiErrors {
     ///         never revert, and a high-level call to an address without code reverts before any
     ///         try/catch can see it.
     function fdcCost(bytes32 attestationType, bytes32 sourceId, uint256 n) public view returns (uint256) {
-        address flareRegistry = 0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019; // ContractRegistry's constant
-        (bool ok, bytes memory r) = flareRegistry.staticcall(
+        (bool ok, bytes memory r) = FLARE_REGISTRY.staticcall(
             abi.encodeCall(IFlareContractRegistry.getContractAddressByName, ("FdcRequestFeeConfigurations"))
         );
         if (!ok || r.length != 32) return 0;

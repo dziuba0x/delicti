@@ -89,13 +89,17 @@ The score it publishes is per agent and deliberately not a single number. The fa
 - watched and self-watched mandates;
 - unfiled and lost deeds.
 
-## The watch pool (v0.14)
+## The watch pool (v0.14, reworked in v0.15)
 
 ```ts
 await delicti.setWatchTerms(principal, id, parseEther("0.05"), 100_000n); // per new deed moving ≥ 0.1 XRP
-await delicti.fundWatch(principal, id, parseEther("0.5"));
-await delicti.fundWatch(agent, id, parseEther("0.5")); // an agent paying strangers to catch it
+await delicti.fundWatch(principal, id, parseEther("0.5"));                // the principal only
 ```
+
+A stipend is paid to whoever **paid for the deed's attestation through the Vault**
+(`Vault.requestAttestation`, which forwards the fee to FdcHub), not to whoever files it. The
+watchers do this automatically on v0.15+ deployments. A copier who files someone else's proofs
+only pays the gas to deliver their stipends.
 
 ## Tests
 

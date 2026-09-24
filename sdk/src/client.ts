@@ -149,14 +149,14 @@ export class Delicti {
     return h;
   }
 
-  /** Principal or agent: pay into the mandate's watch pool (§8.4). */
+  /** Principal: pay into the mandate's watch pool (§8.4). Nobody else can (v0.15). */
   async fundWatch(from: Wallet, id: bigint, value: bigint): Promise<Hex> {
     const h = await from.writeContract({ address: this.network.contracts.vault, abi: vaultAbi, functionName: "fundWatch", args: [id], value });
     await this.mined(h);
     return h;
   }
 
-  /** A funder's share of what the pool has left, once the mandate is dead past the cooling window. */
+  /** Principal: what the pool has left, once no bond remains or `WATCH_TAIL` after the cooling window. */
   async refundWatch(from: Wallet, id: bigint, to?: Address): Promise<Hex> {
     const h = await from.writeContract({ address: this.network.contracts.vault, abi: vaultAbi, functionName: "refundWatch", args: [id, to ?? from.account.address] });
     await this.mined(h);

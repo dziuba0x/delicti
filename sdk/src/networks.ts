@@ -1,7 +1,7 @@
 import type { Address } from "viem";
 
 /** What a consequence layer can do; older Vaults' judges lack the later dockets. */
-export type Feature = "erc20Docket" | "xrpDocket" | "paymentDocket" | "watchPool";
+export type Feature = "erc20Docket" | "xrpDocket" | "paymentDocket" | "watchPool" | "paidRequests";
 
 export interface Deployment {
   version: string;
@@ -49,7 +49,7 @@ export interface DelictiNetwork {
   };
 }
 
-/** v0.14 on Coston2 (2026-09-24), production timers. docs/DEPLOYMENTS.md. */
+/** v0.15 on Coston2 (2026-09-24), production timers. docs/DEPLOYMENTS.md. */
 export const coston2: DelictiNetwork = {
   name: "coston2",
   chainId: 114,
@@ -65,8 +65,10 @@ export const coston2: DelictiNetwork = {
     fdcSource: "testXRP",
     verifierChain: "xrp",
   },
-  features: ["erc20Docket", "xrpDocket", "paymentDocket", "watchPool"],
+  features: ["erc20Docket", "xrpDocket", "paymentDocket", "watchPool", "paidRequests"],
   history: [
+    // v0.14: stipends paid to the filer — superseded the same night (SPEC §8.4); kept for #13
+    { version: "v0.14", vault: "0x9bF9e4186cFb569Fe5bf528e2859aA7B672566fE", judgeEvm: "0x361730A0D1e5886DfF3f7Ea4fC38832Ed29a2C36", judgeXrpl: "0xE9E6eD9E3ca7d005a37568E18A80226B4a14E688", features: ["erc20Docket", "xrpDocket", "paymentDocket", "watchPool"] },
     { version: "v0.13", vault: "0x3e3316D2Dd78d548DFBa2A777171F1E3e05F55EE", judgeEvm: "0x175a11C19Fee05DF390D915B2bD7bcF594a59720", judgeXrpl: "0x16Db5a2ba8b6C6B3cBaaCe95b0e9D78fa5Dd1D79", features: ["erc20Docket", "xrpDocket", "paymentDocket"] },
     { version: "v0.12", vault: "0xFd09d39519F51Ccf12c57bd2D5cF8A71a593Ffae", judgeEvm: "0xb3565787D1d61BF95fA5ACAa394dEAA7deF783aB", judgeXrpl: "0xcf08E6acCbe9042394625350d1DA1888DBcAca63", features: ["xrpDocket"] },
     { version: "v0.11", vault: "0x40A149aCdA2A3D2e299e0FaE4aAA695662AbDAAB", judgeEvm: "0xB6bbb2612d74B2751e8A05C2C5EC3911dBeA9c6c", judgeXrpl: "0xFc4Ae81bfD8dA949Af04177FcCF47A91C006ABAa", features: [] },
@@ -78,10 +80,10 @@ export const coston2: DelictiNetwork = {
     anchorLog: "0xF2b7A2668e7430611c9b225ea7c966E489Fa40a8",
     meter: "0xa5e06ADc76b96cc8c941B98FDA365f10a0576dE2",
     agentRefs: "0x6036B279d6Fe4aB5DAcbea97162C5394B6E0fca0",
-    vault: "0x9bF9e4186cFb569Fe5bf528e2859aA7B672566fE",
-    judgeEvm: "0x361730A0D1e5886DfF3f7Ea4fC38832Ed29a2C36",
-    judgeXrpl: "0xE9E6eD9E3ca7d005a37568E18A80226B4a14E688",
-    bondLens: "0xA73f740302FCFE27880EbDd3be3B77FF5500BE1b",
+    vault: "0xB15f5041F4aA2bc212832dfb0e59CD6c0e9a24aF",
+    judgeEvm: "0x463042fbFD04c723F430eC299aD4000D4d42cFf2",
+    judgeXrpl: "0x9201272ee10B19177A04435195B3b29D9a765940",
+    bondLens: "0x960A0e68863B0BABBa05Ae2025E6b7e289D3Bf3D",
   },
 };
 

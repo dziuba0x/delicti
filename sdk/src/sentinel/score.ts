@@ -36,9 +36,8 @@ export interface AgentScore {
   taken: string;
   /** The highest share of a budget its proven or observed outflow reached, in basis points. */
   worstUseBps: number;
-  /** Mandates whose watching is paid for (a watch pool with terms), and those the agent funded itself. */
+  /** Mandates whose watching is paid for: a watch pool with terms (SPEC §8.4). */
   watched: number;
-  selfWatched: number;
   flags: string[];
 }
 
@@ -50,8 +49,8 @@ export interface AgentScore {
  * - `standing` is the headline. "breach-unjudged" is the alarm: the chain shows more outflow than
  *   the budget, and no verdict yet. It exists because the watcher counts what the docket does not.
  * - `worstUseBps` is headroom: how close the agent has come to a budget, proven or not.
- * - `selfWatched` counts mandates whose watch pool the agent funded itself (v0.14): an agent
- *   paying strangers to catch it is a statement no prose can make.
+ * - `watched` counts mandates whose principal pays strangers to keep the docket (§8.4): an
+ *   agent that accepts such a mandate accepts being watched for money, not only for a reward.
  */
 export async function scoreAgents(pc: PublicClient, n: DelictiNetwork, mandates: MandateInfo[], obs: Map<string, Observation>): Promise<AgentScore[]> {
   const byAgent = new Map<string, MandateInfo[]>();
@@ -91,13 +90,12 @@ export async function scoreAgents(pc: PublicClient, n: DelictiNetwork, mandates:
     }
     const bonded = acks.reduce((s, m) => s + m.bond, 0n);
     const watched = acks.filter((m) => (m.stipendPerDeed ?? 0n) > 0n && (m.watchPool ?? 0n) > 0n).length;
-    const selfWatched = acks.filter((m) => (m.agentFundedWatch ?? 0n) > 0n).length;
     const standing: Standing =
       verdicts > 0 ? "convicted" : breach ? "breach-unjudged" : acks.length === 0 ? "unobserved" : bonded === 0n ? "unbonded" : "clean";
     out.push({
       agent, xrplAccounts: [...accounts], standing, mandates: ms.length, acknowledged: acks.length,
       exclusive: acks.filter((m) => m.exclusive).length, bonded: bonded.toString(), verdicts, taken: taken.toString(),
-      worstUseBps: worst, watched, selfWatched, flags,
+      worstUseBps: worst, watched, flags,
     });
   }
   const rank: Record<Standing, number> = { "breach-unjudged": 0, convicted: 1, unbonded: 2, clean: 3, unobserved: 4 };

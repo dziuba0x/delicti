@@ -24,7 +24,7 @@ DELICTI's security needs one honest party to bring a case. Every system below ne
 - Keep3r v1 paid by gas used, so competing keepers burned gas on reverted calls, and one keeper did most of a job. ([Keep3r experiment](https://macarse.medium.com/the-keep3r-network-experiment-bb1c5182bda3))
 - Chainlink Keepers rotated upkeeps between nodes turn by turn ("keepers do not compete"). Automation 2.x reaches OCR3 consensus over a permissioned node set.
 
-**For DELICTI.** Recording is upkeep, not a hunt. The cost of a lost race here is an FDC attestation fee, which is tens of FLR on mainnet, not gas. The v0.14 stipend is therefore paid per *new* deed only, so a duplicate earns nothing. The sentinel checks `filed` before paying for an attestation and backs off with jitter. A cheap on-chain claim window would remove the race entirely; it is specified as future work, not built.
+**For DELICTI.** Recording is upkeep, not a hunt. The cost of a lost race here is an FDC attestation fee, which is tens of FLR on mainnet, not gas. Since v0.15 the claim *is* the payment: `Vault.requestAttestation` records the first payer of each request, and a second watcher reads `requesterOf` before buying.
 
 ## 4. UMA and Kleros: open participation concentrates
 
@@ -57,10 +57,11 @@ DELICTI's security needs one honest party to bring a case. Every system below ne
 
 ## What DELICTI took from this
 
-1. **A watch pool (v0.14, SPEC §8.4).** The party that wants a mandate watched funds a pool and sets a stipend per deed. The first filer of each new deed is paid from it. The pool is paid for verified deeds, not uptime, and its size is capped by what the funder chose. Honest agents now produce income for watchers. This removes the deterrence paradox for any mandate someone cares enough to fund.
-2. **Self-recording is harmless.** An agent filing its own deeds collects stipends from a pool that pays for exactly that work, and its record gets updated. Draining the pool with dust costs the agent a real transfer and an attestation per deed, and a stipend near the attestation fee makes that roughly break-even. The funder sets the rate and the cap.
-3. **A reference sentinel, open-sourced and run by us.** It discovers every mandate from events, ranks them by what watching them pays, and treats our own instance as one honest watcher among any number.
-4. **Watch the watchers.** The public score reports filing lag per mandate: how long a deed sat before it was on a docket. Proof of watching is a docket entry, never a heartbeat.
-5. **No subjective adjudication, ever.** Every paid action rests on an FDC proof.
+1. **A watch pool (v0.14, reworked in v0.15, SPEC §8.4).** The principal funds a pool and sets a stipend per deed. Each new, value-moving deed pays that stipend to **whoever paid for its attestation** through the Vault, and the payer need not be the one who files it. The pool pays for verified work, not uptime, and its size is capped by what the principal chose. Honest agents now produce income for watchers, which removes the deterrence paradox for any mandate a principal cares enough to fund.
+2. **Paying the attester, not the filer.** v0.14 paid the filer, and an adversarial review showed a copier lifting a watcher's proofs and taking the stipends. This is Truebit's verifier's dilemma in miniature: whoever does the work must be the one paid. Since v0.15 the first payer of an attestation holds the deed, and anyone can see who that is before buying it. That removes the duplicate-fee race.
+3. **Self-recording is harmless.** An agent that pays for its own deeds' attestations collects stipends from a pool that pays for exactly that work, and its record gets updated. Draining the pool with dust costs a real transfer and an attestation per deed. With a stipend near the attestation fee, that is roughly break-even. The principal sets the rate and the cap.
+4. **A reference sentinel, open-sourced and run by us.** It discovers every mandate from state, prices each case before buying anything, and acts according to a stated policy (`observe`, `profit` or `altruist`). Our own instance is one honest watcher among any number.
+5. **Watch the watchers.** The public score flags provable outflow that is not yet on a docket, and deeds that aged past the verifier's memory without being filed. Proof of watching is a docket entry, never a heartbeat.
+6. **No subjective adjudication, ever.** Every paid action rests on an FDC proof.
 
 Where the evidence was thin: Forta's scan-node wind-down, Kleros juror concentration, and independent challenger counts on BoLD and OP. No primary data was found for any of them.

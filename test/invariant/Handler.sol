@@ -50,6 +50,20 @@ contract CredulousFdc {
     }
 }
 
+/// @dev FdcHub stand-in: takes the fee, keeps it. Etched with `FlareRegistryStub` at Flare's
+///      ContractRegistry address so `Vault.requestAttestation` has somewhere to forward to.
+contract FdcHubStub {
+    function requestAttestation(bytes calldata) external payable {}
+}
+
+contract FlareRegistryStub {
+    address public hub; // storage slot 0, set by the test with vm.store
+
+    function getContractAddressByName(string calldata name) external view returns (address) {
+        return keccak256(bytes(name)) == keccak256("FdcHub") ? hub : address(0);
+    }
+}
+
 /// @title Handler — the only caller the invariant fuzzer is allowed to drive
 /// @notice Every public function is one thing a participant can do. Inputs are seeds, bounded onto
 ///         the actors, mandates and deeds that exist; calls are allowed to revert (a refused call is
@@ -680,7 +694,7 @@ contract Handler is Test {
 
     function _bdt(XTx memory t, uint64 round) internal view returns (IBalanceDecreasingTransaction.Proof memory p) {
         bytes32 ref = reg.get(t.mandateId).agentRef;
-        p.data.attestationType = bytes32("BalanceDecreasingTransaction");
+        p.data.attestationType = bytes32("BalanceDecreasingTransaction"); // the stipend key needs it
         p.data.sourceId = XSRC;
         p.data.votingRound = round;
         p.data.requestBody.transactionId = t.txid;
@@ -851,6 +865,7 @@ contract Handler is Test {
         }
         IEVMTransaction.Event[] memory evs = new IEVMTransaction.Event[](n);
         for (uint256 i = 0; i < n; i++) evs[i] = tmp[i];
+        p.data.attestationType = bytes32("EVMTransaction");
         p.data.sourceId = SRC;
         p.data.votingRound = round;
         p.data.requestBody.transactionHash = txh;
@@ -1114,12 +1129,13 @@ contract Handler is Test {
         this.filePayments(seed, whoSeed, 0, 16, true, salt);
     }
 
-    // ------------------------------------------------------------------ the watch pool (v0.14)
+    // ------------------------------------------------------------------ the watch pool (v0.14/v0.15)
 
     uint256 public ghostWatchFunded;
     uint256 public ghostWatchRefunded;
     bool public refundExceededFunding;
     uint256 public nRefunds;
+    mapping(uint256 => uint256) public ghostFundedTo;
 
     function watchTerms(uint256 seed, uint256 rate, uint256 minV) external {
         if (mandates.length == 0) return;
@@ -1128,16 +1144,18 @@ contract Handler is Test {
         try bond.setWatchTerms(id, bound(rate, 0, 1 ether), bound(minV, 0, 3_000_000)) {} catch {}
     }
 
+    /// The principal funds (allowed); the agent or an outsider tries (refused since v0.15).
     function fundWatch(uint256 seed, uint256 whoSeed, uint256 amount) external {
         if (mandates.length == 0) return;
         uint256 id = _mandate(seed);
         amount = bound(amount, 0, 5 ether);
-        // mostly the principal or the agent (the only parties allowed); sometimes an outsider, refused
         MandateRegistry.Mandate memory m = reg.get(id);
         address who = whoSeed % 3 == 0 ? m.principal : whoSeed % 3 == 1 ? m.agent : _actor(whoSeed / 3);
         vm.prank(who);
         try bond.fundWatch{value: amount}(id) {
             ghostWatchFunded += amount;
+            ghostFundedTo[id] += amount;
+            if (who != m.principal) refundExceededFunding = true; // nobody else may fund
         } catch {}
     }
 
@@ -1146,14 +1164,95 @@ contract Handler is Test {
         uint256 id = _mandate(seed);
         MandateRegistry.Mandate memory m = reg.get(id);
         address who = whoSeed % 2 == 0 ? m.principal : m.agent;
-        uint256 mine = bond.watchFunded(id, who);
         uint256 before = who.balance;
         vm.prank(who);
         try bond.refundWatch(id, payable(who)) {
             uint256 got = who.balance - before;
             ghostWatchRefunded += got;
             nRefunds++;
-            if (got > mine) refundExceededFunding = true;
+            if (got > ghostFundedTo[id] || who != m.principal) refundExceededFunding = true;
         } catch {}
+    }
+
+    // ------------------------------------------------------------------ paying for attestations (v0.15)
+    //
+    // Stipends go to whoever paid for a deed's attestation through `Vault.requestAttestation`, keyed
+    // by (type, source, request body). These build the exact request bytes the verifier would, so
+    // the key the Vault records is the key the judge rebuilds from the handler's proofs.
+
+    mapping(bytes32 => address) public ghostRequester;
+
+    function _request(bytes32 aType, bytes32 source, bytes memory body, address who) internal {
+        bytes memory req = abi.encodePacked(aType, source, bytes32(uint256(0xC0DE)), body);
+        vm.deal(who, who.balance + 1);
+        vm.prank(who);
+        bytes32 key = bond.requestAttestation{value: 1}(req);
+        if (ghostRequester[key] == address(0)) ghostRequester[key] = who;
+    }
+
+    /// Someone pays for the attestation of a token move, an XRPL move, or an XRPL payment.
+    function requestFor(uint256 which, uint256 seed, uint256 whoSeed) external {
+        address who = _actor(whoSeed);
+        uint256 k = which % 3;
+        if (k == 0 && tevs.length != 0) {
+            TEv memory t = tevs[seed % tevs.length];
+            IEVMTransaction.RequestBody memory b;
+            b.transactionHash = t.txh;
+            b.requiredConfirmations = 1;
+            b.listEvents = true;
+            _request(bytes32("EVMTransaction"), SRC, abi.encode(b), who);
+        } else if (k == 1 && xtxs.length != 0) {
+            XTx memory t = xtxs[seed % xtxs.length];
+            IBalanceDecreasingTransaction.RequestBody memory b =
+                IBalanceDecreasingTransaction.RequestBody({transactionId: t.txid, sourceAddressIndicator: reg.get(t.mandateId).agentRef});
+            _request(bytes32("BalanceDecreasingTransaction"), XSRC, abi.encode(b), who);
+        } else if (k == 2 && pdeeds.length != 0) {
+            PDeed memory d = pdeeds[seed % pdeeds.length];
+            IPayment.RequestBody memory b = IPayment.RequestBody({transactionId: d.txid, inUtxo: 0, utxo: 0});
+            _request(bytes32("Payment"), XSRC, abi.encode(b), who);
+        }
+    }
+
+    /// The paid watcher in one call: the principal offers terms and funds a pool, a watcher pays for
+    /// every attestation of a mandate's moves through the Vault, and files them all.
+    function paidWatch(uint256 seed, uint256 whoSeed, bool xrpl, bytes32 salt) external {
+        uint256 id;
+        if (xrpl) {
+            if (xMandates.length == 0) return;
+            id = xMandates[seed % xMandates.length];
+        } else {
+            if (tMandates.length == 0) return;
+            id = tMandates[seed % tMandates.length];
+        }
+        MandateRegistry.Mandate memory m = reg.get(id);
+        vm.startPrank(m.principal);
+        try bond.setWatchTerms(id, 0.01 ether, 0) {} catch {}
+        try bond.fundWatch{value: 1 ether}(id) {
+            ghostWatchFunded += 1 ether;
+            ghostFundedTo[id] += 1 ether;
+        } catch {}
+        vm.stopPrank();
+        address who = _actor(whoSeed);
+        if (xrpl) {
+            for (uint256 i = 0; i < xtxs.length; i++) {
+                if (xtxs[i].mandateId != id) continue;
+                IBalanceDecreasingTransaction.RequestBody memory b =
+                    IBalanceDecreasingTransaction.RequestBody({transactionId: xtxs[i].txid, sourceAddressIndicator: m.agentRef});
+                _request(bytes32("BalanceDecreasingTransaction"), XSRC, abi.encode(b), who);
+            }
+            this.fileOutflow(seed, whoSeed, 0, type(uint256).max, true, salt);
+        } else {
+            bytes32 last;
+            for (uint256 i = 0; i < tevs.length; i++) {
+                if (tevs[i].mandateId != id || tevs[i].txh == last) continue;
+                last = tevs[i].txh;
+                IEVMTransaction.RequestBody memory b;
+                b.transactionHash = tevs[i].txh;
+                b.requiredConfirmations = 1;
+                b.listEvents = true;
+                _request(bytes32("EVMTransaction"), SRC, abi.encode(b), who);
+            }
+            this.fileTokens(seed, whoSeed, 0, type(uint256).max, 7, true, salt);
+        }
     }
 }

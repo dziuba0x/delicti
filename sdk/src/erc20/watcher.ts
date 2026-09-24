@@ -136,7 +136,7 @@ export class Erc20OutflowWatcher {
     const reqs: { req: Hex; round: bigint }[] = [];
     for (const f of filings) {
       const req = await fdc.prepareEvmTransaction(f.txHash, f.logIndices);
-      reqs.push({ req, round: await fdc.request(wallet, req) });
+      reqs.push({ req, round: await fdc.request(wallet, req, this.dep!.features.includes("paidRequests") ? this.dep!.vault : undefined) });
       this.say(`attestation requested for ${f.txHash} (logs ${f.logIndices.join(",")})`);
     }
     return Promise.all(reqs.map(({ req, round }) => fdc.proof(round, req)));

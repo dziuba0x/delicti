@@ -2,7 +2,7 @@
 
 *Corpus delicti for autonomous agents: prove the deed happened before anyone is judged.*
 
-Status: **v1.0, frozen on 2026-09-24.** Implemented by the v0.14 contracts on Flare Coston2 (README and docs/DEPLOYMENTS.md list the addresses and live transactions). Not independently audited, and not deployed to any mainnet. This document fixes the vocabulary, the trust model, the encodings and the invariants. Anything not stated here is not promised. §14 says what "frozen" binds and how it may change.
+Status: **v1.0, frozen on 2026-09-24.** Implemented by the v0.15 contracts on Flare Coston2 (README and docs/DEPLOYMENTS.md list the addresses and live transactions). Not independently audited, and not deployed to any mainnet. This document fixes the vocabulary, the trust model, the encodings and the invariants. Anything not stated here is not promised. §14 says what "frozen" binds and how it may change.
 
 ---
 
@@ -245,7 +245,7 @@ It is sticky, permissionless (the proof speaks), and implies `proven` (§6.8). T
 - **Below the budget a filing only records.** No commitment is needed, no verdict follows, and nothing is paid. Anyone can keep a docket current while its deeds are still provable.
 - **The filing that takes the docket past the budget is the conviction,** gated exactly like every other challenge: kind `7`, digest over every transaction id it supplies (ascending), the lowest voting round taken over the proofs it newly verified. Severity is `docket − budget`, nested (§8.1), so a later filing that raises the docket takes the difference.
 - **Proofs already on the docket are skipped, not refused.** A copier who sees an honest crossing filing in the mempool can front-run part of it as a non-crossing filing, which needs no commitment. The honest transaction still lands: its digest is over what it supplied, the skipped proofs count through the docket, and the crossing, which is the only thing that pays, happens in its transaction. A filing that adds nothing reverts `NothingNew`.
-- **The crossing filer is reimbursed for the attestations it supplied itself,** then earns 10 % of the rest. Filers below the budget are not paid (§10).
+- **The crossing filer is reimbursed for the attestations it supplied itself,** then earns 10 % of the rest. Since v0.14, recordings below the budget are paid from the watch pool where the principal funded one (§8.4).
 
 **Why only positive amounts.** A budget of outflow limits what left. XRP that came back does not un-spend what went: selling and buying back is two deeds, and netting would let a round trip hide what it lost to fees and spread.
 
@@ -350,19 +350,34 @@ A verdict still takes the same fraction of every deposit (§8.1) and still pays 
 
 **What it achieves, exactly.** Colluders can take from an outsider who posted with `post` only that deposit's share of the challenger's reward: the attestation fees they really paid, plus `CHALLENGER_BPS` (10 %) of the rest. Under v0.11 it was all of it. Measured on the test case: a 30-FLR insurer deposit next to a 10-FLR principal deposit, a fake 100 % overrun, self-challenged by the principal. The principal nets **3 FLR** (10 % of the insurer's 30) instead of 30. The insurer can price that as a fixed, known leak. What it does not do: an outsider who names the principal, or a beneficiary the principal controls, has chosen to be exposed.
 
-### 8.4 The watch pool — paying for the docket to be kept (v0.14)
+### 8.4 The watch pool — paying for the docket to be kept (v0.14; reworked in v0.15)
 
 A reward paid only on conviction pays watchers nothing while the agent behaves, and that is exactly the outcome the protocol exists to produce. Lightning's watchtowers hit this *deterrence paradox*: lnd's reward towers have been "in a subsequent release" since 2019. Before v0.14, keeping a docket below the budget was unpaid. docs/research/watchers.md lays out the history this design draws on.
 
-- **Funding.** `fundWatch(mandateId)` accepts value from the mandate's **principal or agent**, nobody else. An agent funding its own watching is a statement no prose can make. An outsider cannot fund, because an outsider's money in a pool whose rate the principal sets would be a prize for principal–agent collusion: the agent moves real value to itself, a sock puppet files it, the rate goes up. That is §8.3's problem, and it gets §8.3's answer. An outsider who wants a mandate watched posts bond.
-- **Terms.** `setWatchTerms(mandateId, perDeed, minValue)` is the principal's alone. Once set, the terms can only improve for watchers: `perDeed` may rise, `minValue` may fall. A principal who could cut the rate could cut it under a watcher that had already paid for attestations.
-- **Stipend.** Every docket judge (§6.8, §6.10, §6.11) calls `Vault.stipend(mandateId, filer, n)` for the `n` **new** deeds in a filing that moved **positive value of at least `minValue`**. The filer is credited `min(pool, n × perDeed)`. This applies to recordings and crossings alike, so a crossing filer earns its stipends and the challenger's reward. `stipend` never reverts, and an empty or closed pool pays zero, so a filing never fails because nobody paid for it.
-- **Why "moved value".** Anyone can make a standard token emit `Transfer(agent, x, 0)` (§6.11), and anyone can send XRP *to* the agent's account, which is a provable balance change of the wrong sign. Both are provable "deeds" that are not the agent's act. They count nothing toward a budget, and they earn nothing.
-- **Why per new deed.** A deed can be filed once (§6.10, §6.11 per log, §6.8 per payment and receipt), so sybils cannot multiply what the agent actually did. This is Chainlink OCR's "pay per observation that made it into the report", not Truebit's per-challenger jackpot.
-- **Refund.** Once the mandate is dead past `COOLING_WINDOW` with no accusation open (`_requireSettledDeath`, the same moment the bond may leave), `refundWatch` returns to each funder its pro-rata share of what the pool held at that moment. The first refund closes the pool: no stipend is paid after it.
-- **Books.** `watchPool[mandate]` is part of the Vault's single balance invariant (bonds + credits + unsettled remainders + open stakes + watch pools).
+- **Funding: the principal only.** `fundWatch(mandateId)` accepts value from the mandate's principal and nobody else. The principal sets the terms, so any other funder's money would sit behind a rate the principal can raise. That is §8.3's problem, and it gets §8.3's answer.
 
-**What it does not fix.** Recording is still a race for new deeds. The loser has paid for an attestation that earns nothing: tens of FLR on mainnet, and 1,000 wei on Coston2. The sentinel checks `filed` just before buying attestations, but only an on-chain claim window would remove the race. That is specified here as the next step and not built. An agent can also feed its own sock-puppet watcher with dust just above `minValue`. Each such deed is a real transfer of that value plus an attestation fee, it counts toward the agent's budget, and the principal chose `perDeed` and the size of the pool. The worst case is the pool, spent on deeds that are genuinely on the record.
+  v0.14 excluded outsiders but let the agent fund. The v0.14 adversarial review drained an agent's funding with a working exploit: the agent funds, the principal raises `perDeed` to the whole pool, and a sock puppet files one ordinary deed.
+
+  A party that wants a mandate watched and is not its principal posts bond.
+- **Terms.** `setWatchTerms(mandateId, perDeed, minValue)` is the principal's alone. Once set, the terms can only improve for watchers: `perDeed` may rise, and `minValue` may fall. A principal who could cut the rate could cut it under a watcher that had already paid for attestations.
+- **The stipend goes to whoever paid for the attestation, not to whoever files it (v0.15).** Recordings below the budget need no commitment, and an FDC proof works for whoever submits it. So in v0.14 a copier could take a watcher's proofs, from the mempool or from the public DA layer using the request the watcher paid FdcHub for, file first, and collect every stipend. The watcher's own filing then reverted `NothingNew`.
+
+  Since v0.15, `Vault.requestAttestation(request)` forwards the fee to FdcHub unchanged and records the **first payer** of each request under a key the judge can rebuild from the proof:
+
+  ```
+  deedKey = keccak256(abi.encode(attestationType, sourceId, keccak256(abi.encode(requestBody))))
+  ```
+
+  A verifier's request is `attestationType ‖ sourceId ‖ messageIntegrityCode ‖ abi.encode(requestBody)`. That layout was measured against Flare's testnet verifier, and `test/FdcKey.t.sol` pins the two keys together on real `EVMTransaction` and `BalanceDecreasingTransaction` requests and proofs.
+
+  Filing becomes a public service: a copier pays the gas to deliver someone else's stipends. The key is claimed the moment it is paid for, so a second watcher can read `requesterOf` before buying the same attestation. That closes the race §10 used to describe, without a separate claim step. An attestation bought directly from FdcHub earns no stipend.
+- **What earns a stipend: `perDeed` for every NEW deed that moved positive value of at least `minValue`**, on any docket (§6.8, §6.10, §6.11), recording or crossing. `stipend` never reverts, and an empty or closed pool pays zero, so a filing never fails because nobody paid for it.
+- **Why "moved value".** Anyone can make a standard token emit `Transfer(agent, x, 0)` (§6.11), and anyone can send XRP *to* the agent's account. Both are provable "deeds" that are not the agent's act. They count nothing toward a budget, and they earn nothing.
+- **Why per new deed, and where that stops.** A deed can be filed once, so re-filing earns nothing. One act can still become several deeds: an XRPL offer consumed in many fills, or one transaction's logs proven in several requests. The principal's terms bound this, at most `perDeed / minValue` per unit of value moved. Each piece also costs its requester a real attestation fee. Set `perDeed` near the attestation fee plus a margin, and `minValue` well above dust, and splitting does not pay.
+- **Closing.** `refundWatch` returns what is left to the principal once nothing more can be filed (no bond left), or `WATCH_TAIL` (14 days) after the cooling window, so that the last deeds of a window can still be proven on XRPL. The refund closes the pool for good.
+- **Books.** `watchPool[mandate]` is part of the Vault's single balance invariant: bonds + credits + unsettled remainders + open stakes + watch pools.
+
+**Docket crossings ask the Vault first (v0.15).** A docket filing past the budget calls `Vault.wouldTake(kind, mandate, budget, severity)`, the same arithmetic as `verdict`, read-only. When it returns zero, the filing is a recording: no commitment is spent, and no verdict is called. Zero means the severity is already covered by another path, or the increase is still under the 10 % floor already taken. v0.14's high-water check covered the first case. The v0.14 adversarial review found the second, where a committed crossing took nothing and spent its filer's commitment.
 
 ## 9. Privacy
 
@@ -389,8 +404,9 @@ Nothing sensitive is on-chain: mandate envelopes and receipts live off-chain; th
 - **XLS-56 Batch may be invisible to the FDC.** Outflow in a Batch happens in unsigned, fee-less inner transactions (§6.10). Whether the verifier attests them is untested, because the amendment is not on the testnet it indexes. If it does not, an agent can move XRP out through Batches without a provable deed.
 - **Stablecoins where the FDC cannot see.** The FDC's `EVMTransaction` indexes Ethereum, Flare and Songbird only. x402 settles mostly on Base today, and an agent paying there is outside every DELICTI challenge. On XRPL, `Payment` and `BalanceDecreasingTransaction` measure XRP only, so a budget in RLUSD or any other issued currency cannot be enforced. These are the FDC's limits, and each one reopens when the FDC adds the source or type.
 - §6.11 trusts the principal's choice of token. A token whose `Transfer` logs lie, including an upgradeable proxy upgraded to lie, convicts or acquits its agent accordingly. Name a token you would trust with the money itself.
-- Keeping a docket below the budget is paid only where somebody funded a watch pool (§8.4, v0.14). Elsewhere filers pay for attestations that are reimbursed only if their filing is the one that crosses. A long XRPL mandate with no pool is only as enforceable as somebody's willingness to file for it inside the verifier's ~14 days.
-- Recording is a race for new deeds, and the loser's attestation fee is spent for nothing (§8.4). The remedy, a short on-chain claim before the attestations are bought, is specified and not built.
+- Keeping a docket below the budget is paid only where the principal funded a watch pool (§8.4, v0.14). Elsewhere filers pay for attestations that are reimbursed only if their filing is the one that crosses. A long XRPL mandate with no pool is only as enforceable as somebody's willingness to file for it inside the verifier's ~14 days.
+- Two watchers can still both pay for the same attestation in the same block. Only the first is recorded as its requester (§8.4), so the second fee buys nothing. `requesterOf` shrinks this to one block, and it does not remove it.
+- An attestation bought outside the Vault earns no stipend, even when its proof is filed. That is deliberate: a filer of someone else's proofs is a courier, not a watcher.
 - The reference sentinel (§11.2) finds candidates through an explorer's log index and an XRPL node, and neither is a witness. If both hide a deed, the sentinel misses it. It cannot be made to file a deed that did not happen, because only an FDC proof reaches a judge. On XRPL it reads history through the FDC verifier's own index (§11.2), so what it cannot see there, nobody can prove.
 - An XRPL account may declare exclusivity for two overlapping mandates. Each is then judged on the same outflow; the account made two promises it cannot both keep, and that is its doing.
 - An effector that is merely late — writing the deed into the tally within `meterGrace` of it (§6.5) — is not convicted of under-reporting, and neither is one colluding with the agent that manages to write inside that window. The grace is two orders of magnitude above the honest write's latency and well below the earliest possible reveal, so the window is real but narrow; making it zero would convict effectors for a slow block.
@@ -429,20 +445,20 @@ The score is the next floor, and it must be computable from **logs and current s
 
 `CorroborationLog`, `AgentRefs` and `BondLens` hold no funds and have no privileges. They are listed here as part of the surface, but they are *outside* the core on purpose: each could have been deployed a year after it, and a better one still can be.
 
-### 11.2 The sentinel and the public score (v0.14, `sdk/`)
+### 11.2 The sentinel and the public score (v0.14–v0.15, `sdk/`)
 
 The reference implementation of a watcher, which also computes the score from §11. It holds no privileges and no state the protocol depends on. Kill it and start another anywhere, and it reaches the same conclusions from the same chains. That is the whole of its decentralisation story, and it is enough: security needs one honest watcher, and anyone can be one.
 
 - **Discovery from state, not logs.** `nextId` and `get` enumerate every mandate. A mandate is watchable by a third party when it is acknowledged, has bond left, and is either §6.11 (exclusive, an ERC-20 on this EVM source) or §6.10 (an XRP-outflow mandate with an exclusivity statement from the XRPL key). Receipted cases (§6.2, §6.3, §6.8) need the agent's leaves (`leavesURI`) and are listed, not watched.
 - **Finding the XRPL account.** A mandate names its XRPL account only by hash. The `ExclusiveProven` event carries the statement's XRPL transaction id. The verifier's index says who signed it, and `keccak256(signer)` must equal `agentRef`, or the mandate is not watched.
 - **Reading XRPL history the way the FDC will.** Every transaction that moves an account's XRP modifies its AccountRoot, and records the previous transaction that did (`PreviousTxnID`). An account's balance history is therefore a linked list, anchored at the head `account_info` returns. The sentinel walks it backwards through the FDC verifier's own index of full transactions (about 15 days deep). What it finds is exactly what can still be proven, including offers taken in other accounts' transactions. Nothing provable is missed, because a balance change that is not on the list did not happen. Public XRPL nodes keep far less history: the testnet endpoint used here keeps about 1,300 ledgers.
-- **Pricing before buying.** For each plan it quotes attestation fees and gas against stipends (§8.4) and the reward (`BondLens.penaltyFor`), and its policy decides: `observe`, `profit`, or `altruist`. The protocol's own sentinel is `altruist`: somebody has to be.
+- **Pricing before buying.** For each plan it quotes attestation fees and gas against stipends (§8.4) and the reward (`BondLens.penaltyFor`), and its policy decides: `observe`, `profit`, or `altruist`. On v0.15+ it buys attestations through `Vault.requestAttestation`, so stipends are its own whoever files. The protocol's own sentinel is `altruist`: somebody has to be.
 - **The score** is per agent, never one number, because a composite hides its weights and a counterparty should choose its own. Its facets:
   - `standing`: `breach-unjudged`, `convicted`, `unbonded` or `clean`. `breach-unjudged` is the alarm: the chain shows more outflow than the budget and no verdict exists yet.
   - verdicts and value taken, across every Vault the agent was bonded in;
   - bond at stake now;
   - `worstUseBps`, the highest share of a budget its proven or observed outflow reached;
-  - how many of its mandates are watched by a funded pool, and how many the agent funded itself;
+  - how many of its mandates are watched by a funded pool;
   - flags for outflow not yet on a docket, and for deeds lost past the verifier's memory.
 
   Unacknowledged mandates are ignored (§11.1).
@@ -504,14 +520,14 @@ Frozen means that a reader, an indexer, a watcher or a counterparty may build ag
    | 7 gross XRP outflow | 6.10 | JudgeXrpl | BalanceDecreasingTransaction | tx id | `fileXrpOutflow`, per transaction |
    | 8 gross ERC-20 outflow | 6.11 | JudgeEvm | EVMTransaction (events) | tx hash | `fileErc20Outflow`, per (tx, logIndex) |
 
-4. **The consequence rules** (§8): proportional penalty with the 10 % floor and the bond cap; nested budget kinds sharing one high-water mark, additive kinds 1 and 4; the challenger's 10 % plus reimbursed attestation fees; the surety rule; the cooling window; the watch pool's funding, terms-only-improve and per-new-value-moving-deed rules.
-5. **The docket semantics**: record below the budget uncommitted, convict on the committed crossing, skip what is filed, and record rather than refuse a filing that raises nothing (§6.11, v0.14).
+4. **The consequence rules** (§8): proportional penalty with the 10 % floor and the bond cap; nested budget kinds sharing one high-water mark, additive kinds 1 and 4; the challenger's 10 % plus reimbursed attestation fees; the surety rule; the cooling window; the watch pool's rules (principal-only funding, terms that only improve, a stipend per new value-moving deed paid to whoever paid for its attestation through the Vault, and the `deedKey` encoding).
+5. **The docket semantics**: record below the budget uncommitted, convict on the committed crossing, skip what is filed, and record (without spending a commitment) any filing on which `wouldTake` is zero (§8.4, v0.15).
 
 **How it may change.** Additions only, as numbered amendments (v1.1, v1.2, …): a new kind, a new judge in a new Vault, a new optional contract beside the core. An amendment may not alter the meaning of anything above. A change that would requires v2, a new registry, and a migration that each principal performs by committing new mandates. Nothing is ever changed under a mandate that already exists: its Vault and judges are immutable (§8.2).
 
 **Conformance.** The test suite is the executable half of this document, and each rule above is exercised by named tests. The invariant campaign drives all eight kinds, both judges, the three dockets, the surety rule and the watch pool on one Vault, and keeps its books exact after any sequence of calls. A second implementation is conformant when that suite passes against it unchanged.
 
-**What freezing is not.** It is not an audit, and it is not a statement that the code is free of defects. It is a promise about the *interface*: that people may build against it while the code under it is examined. Defects found in the code are fixed in a new Vault under the same specification, as v0.14 fixed the docket's high-water behaviour. The list of what DELICTI does not claim (§10) is part of what is frozen.
+**What freezing is not.** It is not an audit, and it is not a statement that the code is free of defects. It is a promise about the *interface*: that people may build against it while the code under it is examined. Defects found in the code are fixed in a new Vault under the same specification. v0.14 fixed the docket's high-water behaviour that way, and v0.15 fixed three defects that an adversarial review of v0.14 found, all before v0.14 was pushed anywhere. The list of what DELICTI does not claim (§10) is part of what is frozen.
 
 ---
 

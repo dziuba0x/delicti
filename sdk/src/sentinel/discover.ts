@@ -39,7 +39,6 @@ export interface MandateInfo {
   watchPool?: bigint;
   stipendPerDeed?: bigint;
   stipendMinValue?: bigint;
-  agentFundedWatch?: bigint;
 }
 
 const XRP_OUTFLOW_KEY = pad(toHex("XRP/outflow"), { dir: "right", size: 32 }).toLowerCase();
@@ -78,9 +77,7 @@ export async function readMandate(pc: PublicClient, n: DelictiNetwork, id: bigin
   const z = (p: Promise<any>, d: any = 0n) => p.catch(() => d);
   [info.bond, info.slashed, info.severity, info.taken] = await Promise.all([z(v("bondOf")), z(v("slashed"), false), z(v("severityOf")), z(v("slashedAmount"))]);
   if (dep.features.includes("watchPool")) {
-    [info.watchPool, info.stipendPerDeed, info.stipendMinValue, info.agentFundedWatch] = await Promise.all([
-      v("watchPool"), v("stipendPerDeed"), v("stipendMinValue"), v("watchFunded", [id, m.agent]),
-    ]);
+    [info.watchPool, info.stipendPerDeed, info.stipendMinValue] = await Promise.all([v("watchPool"), v("stipendPerDeed"), v("stipendMinValue")]);
   }
   if (!acknowledged) return { ...info, why: "not acknowledged by its agent (SPEC §11.1): not the agent's record" };
 

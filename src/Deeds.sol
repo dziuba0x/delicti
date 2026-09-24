@@ -126,6 +126,22 @@ library Deeds {
         return address(uint160(uint256(m.assetKey)));
     }
 
+    /// @dev The key under which `Vault.requestAttestation` recorded who paid for a proof's request:
+    ///      type, source, and the hash of the ABI-encoded request body (SPEC §8.4). Must equal
+    ///      `Vault.deedKey(t, s, keccak256(request[96:]))`; test/FdcKey.t.sol checks it on real data.
+    function deedKey(bytes32 attestationType, bytes32 sourceId, bytes memory encodedRequestBody) internal pure returns (bytes32) {
+        return keccak256(abi.encode(attestationType, sourceId, keccak256(encodedRequestBody)));
+    }
+
+    /// @dev Shrink a memory array to its first `n` elements.
+    function trim(bytes32[] memory a, uint256 n) internal pure returns (bytes32[] memory) {
+        // memory-safe: shortening an array's length in place writes only its own length slot
+        assembly ("memory-safe") {
+            mstore(a, n)
+        }
+        return a;
+    }
+
     /// @dev A live `Transfer(from, *, v)` emitted by `asset`.
     function isTransferFrom(IEVMTransaction.Event calldata e, address asset, address from) internal pure returns (bool) {
         return !e.removed && e.emitterAddress == asset && e.topics.length == 3 && e.topics[0] == TRANSFER_SIG

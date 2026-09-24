@@ -404,34 +404,37 @@ contract JudgeEvm is DelictiErrors {
         MandateRegistry.Mandate memory m = registry.get(mandateId);
         address asset = Deeds.erc20Of(m);
 
-        (uint256 added, uint256 fresh, uint256 paid, uint64 minRound, bytes32[] memory ids) = _fileErc20(mandateId, fdcProofs, m, asset);
+        (uint256 added, uint256 fresh, bytes32[] memory keys, uint64 minRound, bytes32[] memory ids) = _fileErc20(mandateId, fdcProofs, m, asset);
         if (fresh == 0) revert NothingNew();
         uint256 before = erc20Docket[mandateId];
         uint256 total = before + added;
         erc20Docket[mandateId] = total;
         emit Erc20OutflowFiled(mandateId, msg.sender, added, total, fresh);
-        vault.stipend(mandateId, msg.sender, paid);
+        vault.stipend(mandateId, keys);
         if (total <= m.budget || total == before) return;
-        // Past the budget, but not past what the bucket's verdicts already measured (another path —
-        // the one-shot challenge, a receipted case — may have convicted further): a recording, and
-        // it must stay one. Before v0.14 this reached `verdict`, which refused it `NothingNew`, and
-        // the docket could not record at all until one filing alone outran the high-water mark.
-        // Found by the §6.8 invariant track.
-        if (total - m.budget <= vault.severityIn(mandateId, Kinds.BUDGET_NATIVE)) return;
+        // Past the budget, but a verdict would take nothing: another path (the one-shot challenge, a
+        // receipted case) already convicted at this severity, or a proportional increase is still
+        // under the 10 % floor already taken. That is a recording, and it must stay one — no
+        // commitment spent for nothing. Before v0.14 it reached `verdict`, which refused it
+        // `NothingNew`, and the docket could not record at all until one filing alone outran the
+        // high-water mark (found by the §6.8 invariant track; v0.15 asks the Vault's own arithmetic).
+        if (vault.wouldTake(Kinds.ERC20_OUTFLOW, mandateId, m.budget, total - m.budget) == 0) return;
 
         vault.consumeCommitment(msg.sender, Kinds.ERC20_OUTFLOW, mandateId, keccak256(abi.encode(ids)), salt, minRound);
         uint256 taken = vault.verdict(
-            Kinds.ERC20_OUTFLOW, mandateId, m.budget, total - m.budget, msg.sender, fresh, bytes32("EVMTransaction"), m.sourceId, false
+            Kinds.ERC20_OUTFLOW, mandateId, m.budget, total - m.budget, msg.sender, fresh, bytes32("EVMTransaction"), m.sourceId, true
         );
         emit Erc20OutflowProven(mandateId, total, m.budget, fresh, msg.sender, taken);
     }
 
     function _fileErc20(uint256 mandateId, IEVMTransaction.Proof[] calldata fdcProofs, MandateRegistry.Mandate memory m, address asset)
         internal
-        returns (uint256 added, uint256 fresh, uint256 paid, uint64 minRound, bytes32[] memory ids)
+        returns (uint256 added, uint256 fresh, bytes32[] memory keys, uint64 minRound, bytes32[] memory ids)
     {
         uint256 n = fdcProofs.length;
         ids = new bytes32[](n);
+        keys = new bytes32[](n);
+        uint256 paid;
         minRound = type(uint64).max;
         uint256 minV = vault.stipendMinValue(mandateId);
         for (uint256 i = 0; i < n; i++) {
@@ -453,10 +456,13 @@ contract JudgeEvm is DelictiErrors {
             fresh++;
             // `transferFrom(agent, x, 0)` succeeds for ANYONE on a standard token, so a zero-value
             // Transfer out of the agent is not the agent's act: it counts nothing and earns nothing
-            if (out != 0 && out >= minV) paid++;
+            if (out != 0 && out >= minV) {
+                keys[paid++] = Deeds.deedKey(pr.data.attestationType, pr.data.sourceId, abi.encode(pr.data.requestBody));
+            }
             if (pr.data.votingRound < minRound) minRound = pr.data.votingRound;
             emit DeedJudged(mandateId, Kinds.ERC20_OUTFLOW, txh, out);
         }
+        Deeds.trim(keys, paid);
     }
 
     /// @dev Every `Transfer(from, *, v)` by `asset` in these events not yet on the docket: files it

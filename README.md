@@ -1,6 +1,9 @@
 <div align="center">
 
-# DELICTI
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+  <img src="assets/hero-light.svg" width="100%" alt="DELICTI — accountability for autonomous AI agents. Two witnesses to one deed: the effector's receipt and the Flare Data Connector. Agreement is evidence.">
+</picture>
 
 **Accountability for autonomous AI agents.** The principal commits a mandate before the agent acts. An independent witness confirms each deed. If the agent breaks the mandate, its bond pays for the breach, and no court is involved.
 
@@ -28,21 +31,17 @@
 
 An agent with a wallet is told *"spend at most 4"*, and then spends 1 five times. Each call passes its per-action policy check. Each call gets a signed receipt. Every receipt is true, and the mandate was still broken. In finance this is called **structuring**, or salami slicing.
 
-```mermaid
-xychart-beta
-    title "Five calls of 1, each allowed on its own. Budget: 4"
-    x-axis ["call 1", "call 2", "call 3", "call 4", "call 5"]
-    y-axis "units spent" 0 --> 6
-    bar [1, 1, 1, 1, 1]
-    line [1, 2, 3, 4, 5]
-    line [4, 4, 4, 4, 4]
-```
-
-<sub>Bars show each call, which a per-call policy approves. The rising line is the running total, which is what DELICTI judges. The flat line is the mandate's budget. Call 5 crosses it.</sub>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/structuring-dark.svg">
+  <img src="assets/structuring-light.svg" width="100%" alt="Five calls of 1 against a budget of 4. Each call passes its own policy check. The running total reaches 4 at call 4 and 5 at call 5, crossing the budget; DELICTI judges the running total and takes 25 % of the bond.">
+</picture>
 
 Receipts show that something was *registered*. Policies approve one *slice* at a time. Neither of them sees the sum, and neither can confirm that the effect happened in the world. DELICTI adds both of those, and then makes the breach cost the agent something.
 
-> When a mind becomes alien, its words stop being evidence. Its deeds, confirmed independently, remain. — the thesis, after J. Pachocki's *An Alien Mind*.
+> *"The intelligence produced by scaling deep learning is not directly comparable to human intelligence."*
+> — Jakub Pachocki, Chief Scientist of OpenAI, [*An Alien Mind*](https://openai.com/index/an-alien-mind/)
+>
+> When a mind becomes alien, its words stop being evidence. Its deeds, confirmed independently, remain. That is the thesis DELICTI is built on.
 
 ## How it works
 
@@ -84,7 +83,10 @@ flowchart LR
 
 ## A case, end to end
 
-This is how a stablecoin agent is convicted under §6.11 when it has no receipts at all. The agent only signs x402 authorizations and a facilitator sends the tokens. A watcher, which can be anyone, does the rest.
+> *"AI interactions increasingly span days or months. Agents operate autonomously and act in the world."*
+> — Wojciech Zaremba, co-founder of OpenAI, [on X](https://x.com/woj_zaremba/status/2094469674453111004)
+
+A mandate spans days, and so does a case. This is how a stablecoin agent is convicted under §6.11 when it has no receipts at all. The agent only signs x402 authorizations and a facilitator sends the tokens. A watcher, which can be anyone, does the rest.
 
 ```mermaid
 sequenceDiagram
@@ -420,7 +422,10 @@ Each release, with the reasoning behind every decision (including the ones that 
 
 ## Limits, stated up front
 
-Read §10 of the [SPEC](SPEC.md) first: *what DELICTI does not claim*. These are the limits a reader deciding whether to rely on it should see here:
+> *"Currently I believe that no lab has solved alignment and monitoring to a sufficient degree to continue responsibly scaling at maximum speed for much longer."*
+> — Jakub Pachocki, [*An Alien Mind*](https://openai.com/index/an-alien-mind/)
+
+DELICTI does not monitor minds. It proves deeds and prices them, and it is honest about where that stops. Read §10 of the [SPEC](SPEC.md) first: *what DELICTI does not claim*. These are the limits a reader deciding whether to rely on it should see here:
 
 - **SPEC v1.0 is frozen; the code is not audited.** The freeze binds the interface: the mandate, the leaf, kinds 1–8 and their encodings, and the consequence rules. It does not say the code is free of defects (SPEC §14).
 - **Testnet only.** Everything runs on Coston2, the XRPL testnet and forks. Slither, a 300,000-call invariant campaign and internal adversarial reviews have run. The v0.10 review found two openings and the v0.14 review found the copier; each was fixed with regression tests before shipping. No independent audit has run.

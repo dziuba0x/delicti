@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="assets/social-preview.png" alt="DELICTI — accountability for autonomous AI agents" width="720">
-
 # DELICTI
 
 **Accountability for autonomous AI agents.** The principal commits a mandate before the agent acts. An independent witness confirms each deed. If the agent breaks the mandate, its bond pays for the breach, and no court is involved.

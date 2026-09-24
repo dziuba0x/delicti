@@ -6,7 +6,7 @@ TypeScript for DELICTI, built on [viem](https://viem.sh). It has three parts:
 - **`Erc20OutflowWatcher`** and the `delicti-watch` CLI, the party the protocol's economics were written for. It watches an exclusive stablecoin mandate and keeps its §6.11 docket current. When the agent's outflow crosses the budget, it commits, waits out the lead, proves the deeds through the FDC and files the conviction. It needs no receipts and no cooperation from the agent or the facilitator. `XrplOutflowWatcher` does the same for §6.10 on XRPL.
 - **`Sentinel`** (`delicti-watch sentinel`) runs across the whole protocol. It discovers every mandate, watches every one a third party can (§6.11 stablecoins on Flare, §6.10 XRP outflow on XRPL), prices each piece of work before buying a single attestation, acts according to its policy, and publishes a per-agent public score (SPEC §11.2).
 
-v0.14, Coston2 and XRPL testnet only. Not audited. Whitehat use on testnets.
+v0.15, Coston2 and XRPL testnet only. Not audited. Whitehat use on testnets.
 
 ## An agent under a mandate, in a few lines
 

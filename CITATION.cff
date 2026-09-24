@@ -13,7 +13,8 @@ abstract: >-
   mandate on-chain before the agent acts; the effector's signed receipt is the first
   witness and a Flare Data Connector attestation of the effect on EVM chains or XRPL
   is the second; violations are computed over the whole sequence of deeds, so
-  structuring is caught; and a bond is slashed in proportion to the breach, without a court.
+  structuring is caught; a bond is slashed in proportion to the breach, without a court;
+  and a principal-funded watch pool pays independent watchers to keep the record.
 keywords:
   - ai-agents
   - agent-security
@@ -25,6 +26,9 @@ keywords:
   - x402
   - model-context-protocol
   - slashing
+  - stablecoins
+  - watchtower
+  - erc-8004
 license: MIT
-version: 0.9.0
-date-released: "2026-09-19"
+version: 0.15.0
+date-released: "2026-09-24"

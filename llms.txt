@@ -1,0 +1,47 @@
+# DELICTI
+
+> DELICTI is an accountability protocol for autonomous AI agents with wallets. A principal commits a mandate on-chain before the agent acts: a budget, a time window, an asset and a delegation tree. The agent acknowledges the mandate and posts a bond. The Flare Data Connector (FDC) attests what the agent actually did on Flare, Songbird, Ethereum or the XRP Ledger. When the cumulative sum of those deeds breaks the mandate, the bond is slashed in proportion to the breach. There are no jurors, no votes and no admin key. The contracts are Solidity/Foundry and the SDK is TypeScript/viem. It is live on Flare's Coston2 testnet and the XRPL testnet. SPEC v1.0 is frozen. MIT licensed and unaudited.
+
+Use DELICTI when you need to:
+
+- cap an AI agent's **total** spending across many calls, not only per call, which catches structuring (salami slicing);
+- prove, from consensus rather than from the agent's own logs, what an agent did on another chain;
+- hold an agent answerable for x402 / EIP-3009 stablecoin payments it only *signed*, with no receipts at all;
+- make a counterparty's loss cost the agent's bond automatically and proportionally;
+- run or pay watcher bots that keep that evidence on record (a watch pool, the sentinel, a public per-agent score).
+
+Key terms:
+
+- **mandate**: what the agent may do, committed before the act.
+- **effector**: an MCP tool server or x402 facilitator that emits a signed receipt, which is witness 1.
+- **FDC attestation**: witness 2, checked against the Merkle root of Flare's Relay.
+- **docket**: deeds filed once while provable and counted for ever; this defeats the XRPL verifier's ~14-day horizon.
+- **watch pool**: principal-funded stipends for each new deed recorded, paid to whoever paid for its attestation.
+- **commit–reveal**: protects a watcher's reward from mempool copiers.
+- **kinds 1–8**: the frozen challenge types.
+
+## Start here
+
+- [README](https://github.com/dziuba0x/delicti/blob/main/README.md): what DELICTI does, diagrams, every live transaction on Coston2, and the contract addresses.
+- [SPEC v1.0](https://github.com/dziuba0x/delicti/blob/main/SPEC.md): the normative specification. §3 mandates, §6 challenges (6.1 false payment, 6.2–6.3 overrun, 6.4 unanchored deed, 6.5 under-reported spend, 6.7 commit–reveal, 6.8 XRPL payments, 6.10 gross XRP outflow, 6.11 gross ERC-20/stablecoin outflow), §8 bond economics and the watch pool, §10 what DELICTI does not claim, §11 metrics and the public score.
+- [CHANGELOG](https://github.com/dziuba0x/delicti/blob/main/CHANGELOG.md): the reasoning behind every release, v0.1 to v0.15.
+
+## Code
+
+- [src/](https://github.com/dziuba0x/delicti/tree/main/src): contracts. MandateRegistry, AnchorLog, SpendMeter, Vault, JudgeEvm, JudgeXrpl, AgentRefs, CorroborationLog, BondLens, Kinds.
+- [sdk/](https://github.com/dziuba0x/delicti/tree/main/sdk): `@delicti/sdk`, a TypeScript client (`Delicti`), FDC helpers (`Fdc`), XRPL history walker (`XrplHistory`), watchers (`Erc20OutflowWatcher`, `XrplOutflowWatcher`), `Sentinel`, and the CLI `delicti-watch erc20|xrpl|status|sentinel`.
+- [test/](https://github.com/dziuba0x/delicti/tree/main/test): 226 Foundry tests, including 14 invariants, fuzzing, Halmos, and real FDC fixtures.
+- [scripts/](https://github.com/dziuba0x/delicti/tree/main/scripts): shell scripts that reproduce each live case on Coston2.
+
+## Evidence
+
+- [docs/DEPLOYMENTS.md](https://github.com/dziuba0x/delicti/blob/main/docs/DEPLOYMENTS.md): every deployment and live run, with transaction hashes.
+- [docs/sentinel/coston2-2026-09-24.html](https://github.com/dziuba0x/delicti/blob/main/docs/sentinel/coston2-2026-09-24.html): a public score report produced by the sentinel.
+
+## Optional
+
+- [docs/research/watchers.md](https://github.com/dziuba0x/delicti/blob/main/docs/research/watchers.md): lessons from Lightning watchtowers, Forta, Keep3r/Chainlink Automation, UMA/Kleros, Arbitrum BoLD/OP fault proofs and liquidation bots.
+- [docs/proposals/kya-os-mandate-ref.md](https://github.com/dziuba0x/delicti/blob/main/docs/proposals/kya-os-mandate-ref.md): `mandate_ref` for agent receipt standards.
+- [flario](https://github.com/dziuba0x/flario): an MCP server for Flare, and the first effector that speaks DELICTI.
+
+Related standards and ecosystems: Flare Data Connector (FDC), FTSO, FAssets/FXRP, XRPL (XLS-70 credentials), x402, EIP-3009, Model Context Protocol (MCP), ERC-8004 (trustless agents), AP2, KYA-OS, ACTA.

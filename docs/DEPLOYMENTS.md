@@ -196,3 +196,5 @@ Deployment (v0.2, `Receipts.Leaf.ref`): `MandateRegistry` [`0x52A61f0B9312042c51
 3. **Verdict** [`0x6bacd67c…`](https://coston2-explorer.flare.network/tx/0x6bacd67cdf4a44b959c7676ca6aa5e7f57a4a169755f9c8f4e2722dde92976b5): docket **$11.216685** against $10, so severity $1.216685 (12.17 %). **0.243337 of 2 C2FLR taken.** The umbrella was revoked. Both rails stay live, because each was inside its own budget (6 of 10 XRP; 2 of 10 mUSDT0).
 
 Every rail was within its limit, and the sum was not. This is the structuring attack of §6.2 one level up, and it is now judged across two chains in one unit: FDC for the deeds, FTSO for their prices, with no oracle and no bridge.
+
+**The brake across rails.** `SummaMeter` [`0x6Bc63F3a…4E0f`](https://coston2-explorer.flare.network/address/0x6Bc63F3aBc6Fc3055DB9949bb4e14515321a4E0f) reads the umbrella's tally in µUSD at the FTSO block-latency price, through JudgeSumma's own price map. First live reads (free `eth_call`): 2 XRP = **$3.072024**, 1 mUSDT0 = **$0.999669**. An effector on either chain asks `wouldExceed` before it signs or settles.

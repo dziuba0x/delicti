@@ -126,6 +126,12 @@ library Deeds {
         return address(uint160(uint256(m.assetKey)));
     }
 
+    /// @dev A live `Transfer(from, *, v)` emitted by `asset`.
+    function isTransferFrom(IEVMTransaction.Event calldata e, address asset, address from) internal pure returns (bool) {
+        return !e.removed && e.emitterAddress == asset && e.topics.length == 3 && e.topics[0] == TRANSFER_SIG
+            && address(uint160(uint256(e.topics[1]))) == from;
+    }
+
     bytes32 private constant TRANSFER_SIG = keccak256("Transfer(address,address,uint256)");
 
     function erc20TransferValue(IEVMTransaction.Event[] calldata events, address asset, address from, address to)

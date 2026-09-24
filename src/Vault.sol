@@ -53,6 +53,7 @@ contract Vault is DelictiErrors {
     uint8 public constant KIND_UNDER_REPORTED = Kinds.UNDER_REPORTED;
     uint8 public constant KIND_BUDGET_PAYMENT = Kinds.BUDGET_PAYMENT;
     uint8 public constant KIND_XRP_OUTFLOW = Kinds.XRP_OUTFLOW;
+    uint8 public constant KIND_ERC20_OUTFLOW = Kinds.ERC20_OUTFLOW;
 
     // -----------------------------------------------------------------------------------
     // Proportional slashing (SPEC §8.1).

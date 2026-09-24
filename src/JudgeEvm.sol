@@ -350,4 +350,117 @@ contract JudgeEvm is DelictiErrors {
         );
         emit UnderReportedSpendProven(mandateId, proven, recorded, n, msg.sender, taken);
     }
+
+    // -----------------------------------------------------------------------------------
+    // §6.11 Gross ERC-20 outflow on a docket (v0.13) — the EVM twin of §6.10
+    //
+    // x402 on EVM settles by EIP-3009 `transferWithAuthorization`: the agent SIGNS, a facilitator
+    // SENDS. The agent is never the transaction's sender, and an agent that writes no receipts left
+    // an exclusive stablecoin mandate reachable only one accusation at a time (§6.4). Here the
+    // conviction needs no receipt: every `Transfer(agent → anyone)` emitted by the mandate's token
+    // inside its window, proven by `EVMTransaction` with events, whoever sent the transaction.
+    //
+    // Why that is sound: a standard token lowers `from`'s balance only on a call `from` made or
+    // authorised — its own transfer, an allowance it granted, a signature (EIP-2612 permit,
+    // EIP-3009) — so every such event is the agent's act. The token is the one the PRINCIPAL named
+    // in the mandate, so its event log is the principal's chosen witness; a hostile token is the
+    // principal's own mistake. Burns (`to = 0`) count: FXRP redeemed to XRPL left the account.
+    //
+    // Counted per EVENT, not per transaction. The FDC lets a requester list a subset of a
+    // transaction's logs (`logIndices`, at most 50), so a docket keyed by transaction could be
+    // griefed: file the transaction with no events, and its real outflow is marked counted at
+    // zero for ever. Keyed by (transaction, logIndex), a partial filing only files what it shows,
+    // and a transaction with more than 50 logs is filed in several proofs.
+    // -----------------------------------------------------------------------------------
+
+    /// @notice Gross outflow of the mandate's token from its agent proven so far.
+    mapping(uint256 => uint256) public erc20Docket;
+    /// @notice mandateId => transaction hash => block-level log index => on the docket
+    mapping(uint256 => mapping(bytes32 => mapping(uint32 => bool))) public eventFiled;
+
+    /// @notice Least `requiredConfirmations` a docket proof may be attested with. Flare finalises in
+    ///         one block; on Ethereum an event from a block later reorged would convict an agent of
+    ///         something that never happened, so the proof must be from a block ~2 epochs deep.
+    function minConfirmations(bytes32 sourceId) public pure returns (uint16) {
+        return (sourceId == bytes32("ETH") || sourceId == bytes32("testETH")) ? 64 : 1;
+    }
+
+    event Erc20OutflowFiled(uint256 indexed mandateId, address indexed filer, uint256 added, uint256 docketTotal, uint256 newDeeds);
+    event Erc20OutflowProven(
+        uint256 indexed mandateId, uint256 outflow, uint256 budget, uint256 events, address indexed challenger, uint256 slashedAmount
+    );
+
+    /// @notice File `EVMTransaction` proofs (with events) of the agent's token outflow on the docket.
+    ///         Like §6.10: below the budget a filing only records and needs no commitment; the
+    ///         filing that takes the docket past the budget must be committed (kind 8, digest over
+    ///         the transaction hashes it supplies, strictly ascending). Events already filed are
+    ///         skipped; a filing that adds no new event reverts `NothingNew`.
+    /// @dev    Exclusive mandates only (`MandateRegistry.declareExclusive`): with no receipts, the
+    ///         agent must have said that everything its address does in the window is this mandate's.
+    function fileErc20Outflow(uint256 mandateId, IEVMTransaction.Proof[] calldata fdcProofs, bytes32 salt) external {
+        _requireBonded(mandateId);
+        if (fdcProofs.length == 0) revert LengthMismatch();
+        if (!registry.exclusive(mandateId)) revert NotExclusive();
+        MandateRegistry.Mandate memory m = registry.get(mandateId);
+        address asset = Deeds.erc20Of(m);
+
+        (uint256 added, uint256 fresh, uint64 minRound, bytes32[] memory ids) = _fileErc20(mandateId, fdcProofs, m, asset);
+        if (fresh == 0) revert NothingNew();
+        uint256 before = erc20Docket[mandateId];
+        uint256 total = before + added;
+        erc20Docket[mandateId] = total;
+        emit Erc20OutflowFiled(mandateId, msg.sender, added, total, fresh);
+        if (total <= m.budget || total == before) return;
+
+        vault.consumeCommitment(msg.sender, Kinds.ERC20_OUTFLOW, mandateId, keccak256(abi.encode(ids)), salt, minRound);
+        uint256 taken = vault.verdict(
+            Kinds.ERC20_OUTFLOW, mandateId, m.budget, total - m.budget, msg.sender, fresh, bytes32("EVMTransaction"), m.sourceId, true
+        );
+        emit Erc20OutflowProven(mandateId, total, m.budget, fresh, msg.sender, taken);
+    }
+
+    function _fileErc20(uint256 mandateId, IEVMTransaction.Proof[] calldata fdcProofs, MandateRegistry.Mandate memory m, address asset)
+        internal
+        returns (uint256 added, uint256 fresh, uint64 minRound, bytes32[] memory ids)
+    {
+        uint256 n = fdcProofs.length;
+        ids = new bytes32[](n);
+        minRound = type(uint64).max;
+        for (uint256 i = 0; i < n; i++) {
+            IEVMTransaction.Proof calldata pr = fdcProofs[i];
+            bytes32 txh = pr.data.requestBody.transactionHash;
+            if (i != 0 && txh <= ids[i - 1]) revert UnorderedTxs();
+            ids[i] = txh;
+            if (!fdc().verifyEVMTransaction(pr)) revert FdcProofInvalid();
+            if (pr.data.sourceId != m.sourceId) revert WrongSource();
+            if (pr.data.requestBody.requiredConfirmations < minConfirmations(m.sourceId)) revert TooFewConfirmations();
+            IEVMTransaction.ResponseBody calldata rb = pr.data.responseBody;
+            if (rb.status != 1) revert TxNotSuccessful();
+            if (rb.timestamp < m.validFrom || rb.timestamp > m.validUntil) revert ClaimOutsideProvenRange();
+            (uint256 out, uint256 k) = _newOutflow(mandateId, txh, rb.events, asset, m.agent);
+            if (k == 0) continue;
+            added += out;
+            // counted in PROOFS that added something, not in logs: the Vault reimburses the
+            // crossing filer per attestation, and one attestation can carry many logs
+            fresh++;
+            if (pr.data.votingRound < minRound) minRound = pr.data.votingRound;
+            emit DeedJudged(mandateId, Kinds.ERC20_OUTFLOW, txh, out);
+        }
+    }
+
+    /// @dev Every `Transfer(from, *, v)` by `asset` in these events not yet on the docket: files it
+    ///      and returns the sum and how many. Other events are ignored and NOT marked.
+    function _newOutflow(uint256 mandateId, bytes32 txh, IEVMTransaction.Event[] calldata events, address asset, address from)
+        internal
+        returns (uint256 total, uint256 k)
+    {
+        for (uint256 j = 0; j < events.length; j++) {
+            IEVMTransaction.Event calldata e = events[j];
+            if (!Deeds.isTransferFrom(e, asset, from)) continue;
+            if (eventFiled[mandateId][txh][e.logIndex]) continue;
+            eventFiled[mandateId][txh][e.logIndex] = true;
+            total += abi.decode(e.data, (uint256));
+            k++;
+        }
+    }
 }

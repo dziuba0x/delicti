@@ -766,4 +766,145 @@ contract Handler is Test {
     function honestOutflow(uint256 seed, uint256 whoSeed, bytes32 salt) external {
         this.fileOutflow(seed, whoSeed, 0, type(uint256).max, true, salt);
     }
+
+    // ------------------------------------------------------------------ EVM: §6.11 ERC-20 docket
+    //
+    // The token outflow docket, keyed per event. Moves are transactions sent by a facilitator with
+    // one to three Transfer logs out of the agent; filings list all of a transaction's logs or a
+    // subset (the FDC allows it), overlap earlier filings, and cross the budget committed or not.
+
+    address constant TOKEN = address(0x5DC0);
+
+    struct TEv {
+        uint256 mandateId;
+        bytes32 txh;
+        uint32 logIndex;
+        uint256 value;
+        uint64 ts;
+    }
+
+    TEv[] public tevs;
+    uint256[] public tMandates;
+    uint256 tCounter = 0x9000;
+    uint32 logCounter;
+    uint256 public nTokenFilings;
+    uint256 public nTokenVerdicts;
+    bool public tokenDocketDrifted;
+
+    function tokenEventCount() external view returns (uint256) {
+        return tevs.length;
+    }
+
+    function tMandateCount() external view returns (uint256) {
+        return tMandates.length;
+    }
+
+    function tokenScenario(uint256 pSeed, uint256 aSeed, uint256 budget, uint256 amount) external {
+        if (mandates.length >= 24) return;
+        address pr = _actor(pSeed);
+        address ag = _actor(aSeed);
+        vm.prank(pr);
+        uint256 id = reg.commit(
+            ag, keccak256("usdc"), 0, 0, bound(budget, 0, 50_000_000), uint64(block.timestamp), uint64(block.timestamp + 7 days),
+            MandateRegistry.Terms({sourceId: SRC, assetKey: bytes32(uint256(uint160(TOKEN))), agentRef: bytes32(0), bond: address(bond)})
+        );
+        mandates.push(id);
+        tMandates.push(id);
+        vm.prank(ag);
+        reg.declareExclusive(id);
+        amount = bound(amount, 1, 50 ether);
+        vm.prank(pr);
+        bond.post{value: amount}(id);
+        ghostPosted += amount;
+        ghostPostedTo[id] += amount;
+    }
+
+    function tokenMove(uint256 seed, uint256 v, uint8 nLogs) external {
+        if (tMandates.length == 0 || tevs.length >= 120) return;
+        uint256 id = tMandates[seed % tMandates.length];
+        bytes32 txh = bytes32(tCounter++);
+        uint256 k = bound(nLogs, 1, 3);
+        for (uint256 j = 0; j < k; j++) {
+            tevs.push(TEv(id, txh, logCounter++, bound(v, 0, 2_000_000), uint64(block.timestamp)));
+        }
+    }
+
+    function _tokenProof(uint256 id, bytes32 txh, uint256 mask, uint64 round) internal view returns (IEVMTransaction.Proof memory p) {
+        // collect the listed logs of this transaction (bit j of mask = list the j-th log)
+        IEVMTransaction.Event[] memory tmp = new IEVMTransaction.Event[](3);
+        uint256 n;
+        uint256 j;
+        uint64 ts;
+        for (uint256 i = 0; i < tevs.length; i++) {
+            if (tevs[i].txh != txh) continue;
+            ts = tevs[i].ts;
+            if ((mask >> j++) & 1 == 0) continue;
+            IEVMTransaction.Event memory e;
+            e.logIndex = tevs[i].logIndex;
+            e.emitterAddress = TOKEN;
+            e.topics = new bytes32[](3);
+            e.topics[0] = keccak256("Transfer(address,address,uint256)");
+            e.topics[1] = bytes32(uint256(uint160(reg.get(id).agent)));
+            e.topics[2] = bytes32(uint256(uint160(MERCHANT)));
+            e.data = abi.encode(tevs[i].value);
+            tmp[n++] = e;
+        }
+        IEVMTransaction.Event[] memory evs = new IEVMTransaction.Event[](n);
+        for (uint256 i = 0; i < n; i++) evs[i] = tmp[i];
+        p.data.sourceId = SRC;
+        p.data.votingRound = round;
+        p.data.requestBody.transactionHash = txh;
+        p.data.requestBody.requiredConfirmations = 1;
+        p.data.requestBody.listEvents = true;
+        p.data.responseBody.timestamp = ts;
+        p.data.responseBody.status = 1;
+        p.data.responseBody.events = evs;
+    }
+
+    /// File a run of the mandate's transactions, each with all or some of its logs listed.
+    function fileTokens(uint256 seed, uint256 whoSeed, uint256 startSeed, uint256 nSeed, uint256 mask, bool committed, bytes32 salt)
+        external
+    {
+        if (tMandates.length == 0) return;
+        uint256 id = tMandates[seed % tMandates.length];
+        // distinct transactions of this mandate, in creation (= ascending hash) order
+        bytes32[] memory txs = new bytes32[](tevs.length);
+        uint256 total;
+        for (uint256 i = 0; i < tevs.length; i++) {
+            if (tevs[i].mandateId != id) continue;
+            if (total == 0 || txs[total - 1] != tevs[i].txh) txs[total++] = tevs[i].txh;
+        }
+        if (total == 0) return;
+        uint256 start = startSeed % total;
+        uint256 n = bound(nSeed, 1, total - start);
+        bytes32[] memory ids = new bytes32[](n);
+        for (uint256 i = 0; i < n; i++) ids[i] = txs[start + i];
+        address who = _actor(whoSeed);
+        if (committed) {
+            _commit(bond.commitmentFor(who, id, Kinds.ERC20_OUTFLOW, keccak256(abi.encode(ids)), salt), who);
+            vm.warp(block.timestamp + bond.commitLead());
+            _sweepLiveness();
+        }
+        uint64 round = uint64(bound(uint256(salt), 1, 1_000_000));
+        rounds.setRoundStart(round, uint64(block.timestamp));
+        IEVMTransaction.Proof[] memory proofs = new IEVMTransaction.Proof[](n);
+        for (uint256 i = 0; i < n; i++) {
+            proofs[i] = _tokenProof(id, ids[i], committed ? 7 : uint256(keccak256(abi.encode(mask, i))) | 1, round);
+        }
+        uint256 bondBefore = bond.bondOf(id);
+        vm.prank(who);
+        try judge.fileErc20Outflow(id, proofs, salt) {
+            nTokenFilings++;
+            uint256 slashesBefore = nSlashes;
+            _recordSlash(id, bondBefore);
+            if (nSlashes > slashesBefore) nTokenVerdicts++;
+            if (committed) {
+                bytes32 c = bond.commitmentFor(who, id, Kinds.ERC20_OUTFLOW, keccak256(abi.encode(ids)), salt);
+                if (bond.committedAt(c) == 0 && !ghostConsumed[c]) {
+                    ghostConsumed[c] = true;
+                    ghostConsumeCount[c]++;
+                }
+            }
+        } catch {}
+    }
 }

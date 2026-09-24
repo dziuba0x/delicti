@@ -60,4 +60,5 @@ interface DelictiErrors {
     // v0.12
     error NoBeneficiary();
     error BeneficiaryFixed();
+    error TooFewConfirmations();
 }

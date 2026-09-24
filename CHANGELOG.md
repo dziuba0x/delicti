@@ -1,6 +1,22 @@
 # Changelog
 
-## Unreleased (after v0.12.0)
+## v0.13.0 — 2026-09-24 — stablecoins: the agent that signs and never sends
+
+BlackRock's thesis of the week is that AI agents will drive demand for stablecoins and blockchain payments. The agent that thesis describes pays in USDC or USDT0 by x402. It signs an EIP-3009 authorisation, a facilitator sends it, and it writes no receipt. Until now DELICTI reached that agent only through a staked accusation, one deed at a time (§6.4).
+
+### §6.11 — gross ERC-20 outflow on a docket (`JudgeEvm.fileErc20Outflow`, kind 8)
+
+- **Applies to** exclusive mandates whose asset is an ERC-20. Every live `Transfer(agent → anyone)` of that token inside the window counts, **whoever sent the transaction**, burns included (FXRP redeemed to XRPL). Proven by FDC `EVMTransaction` with events. No receipt, no meter.
+- **Keyed per log, not per transaction.** The FDC lets a requester list any subset of a transaction's logs, including none. A per-transaction docket could be buried: file a transaction with no logs listed and its outflow is counted at zero for ever. `eventFiled[mandate][tx][logIndex]` closes that; a filing that shows no new log reverts `NothingNew`.
+- Below the budget a filing only records, needs no commitment and pays nothing. The crossing filing is committed and convicts. Nested in the budget bucket with §6.2, §6.3, §6.8 and §6.10.
+- **Reimbursement counts proofs, not logs.** Found while writing the docs: the first draft passed the number of new logs to the Vault, which reimburses per attestation, so one proof carrying five logs would have paid the filer for five. Fixed before any deploy; `test_reimbursementCountsProofsNotLogs`.
+- **Confirmations:** `minConfirmations` is 64 on Ethereum (a reorged block would convict an agent of an outflow that never happened) and 1 on Flare.
+- The FDC's EVM verifier has no lower timestamp limit on Flare and Songbird, so here the docket is not about the verifier's memory. It exists for the receipt-less conviction and the anti-burial rule.
+- **Executed on Coston2, mandate #11:** five facilitator-sent x402 settlements, no receipts. Three filed uncommitted (docket 3), then the committed crossing (docket 5 > 4): `bondOf` 1 → 0.75. Crossing [`0x75d51613…`](https://coston2-explorer.flare.network/tx/0x75d51613fed7a4d69fc84fce28654cfdc43e91cccfdf557a3a60326506071dea), docs/DEPLOYMENTS.md.
+- **Tests:** 16 unit tests (`test/Erc20Outflow.t.sol`), including a 512-run fuzz that splits and repeats the same logs across filings. The invariant handler now drives a third track on the same Vault: token moves with 1–3 logs each, filings listing all or some of them, and committed crossings. New invariant: `invariant_tokenDocketIsTheSumOfItsFiledEvents`. Campaign: 14 invariants × 1,500 runs × depth 200, 0 failures. 205 tests.
+- **Stated in SPEC §10:** the FDC indexes Ethereum, Flare and Songbird only. Base, where most x402 settles today, is outside every DELICTI challenge. So is RLUSD on XRPL.
+
+### Also deployed with v0.13 (merged after v0.12.0): kind-4 receipts, the §6.8 docket, the invariant tracks
 
 - **The invariant campaign now drives both judges on one Vault.** Until now the fuzzer only called JudgeEvm, so every value invariant (the balance equals bonds + credits + unsettled remainders + open stakes; per mandate, posted = bonded + taken + withdrawn; verdicts never take more than the base) had only ever been checked on a Vault that one judge had touched. The handler now also opens exclusive outflow mandates, moves XRP in and out of their accounts (including slightly outside the window), and files runs of those moves on the §6.10 docket. It covers overlapping runs, uncommitted filings that must stay below the budget, and committed crossings, all interleaved with every EVM path on the same Vault. New invariant `invariant_docketIsTheSumOfWhatItFiled`: after any sequence, the docket equals a from-scratch recount of the positive outflow over the transactions it has filed; no filing adds anything other than its new outflow; nothing outside the window is ever filed. A canary run confirmed that XRPL verdicts are reached within the first 10 runs. Campaign: 13 invariants × 1,500 runs × depth 200 (300,000 calls each), 0 failures. 188 tests.
 - **§6.8 on a docket:** `JudgeXrpl.fileBudgetPayments` works like §6.10's docket (record below the budget without commitment, convict on the committed crossing, skip already-filed payments, one receipt per payment across filings). The verifier's ~14-day memory no longer bounds a receipted XRPL case. Five tests.

@@ -105,6 +105,17 @@ contract Invariants is Test {
         assertEq(h.nFilings(), 2, "the committed crossing did not land");
         assertEq(h.nOutflowVerdicts(), 1, "the crossing took nothing");
         assertEq(h.nSlashes(), 4);
+
+        // §6.11 on the same Vault: logs filed piecemeal, then a committed crossing.
+        h.tokenScenario(0, 1, 5_000_000, 10 ether); // budget 5 USDC
+        h.tokenMove(0, 1_000_000, 3);
+        h.tokenMove(0, 1_000_000, 3);
+        h.fileTokens(0, 2, 0, 1, 1, false, keccak256("t1")); // one log of the first tx
+        assertEq(h.nTokenFilings(), 1, "a partial filing did not land");
+        h.tokenMove(0, 1_000_000, 3);
+        h.tokenMove(0, 1_000_000, 3);
+        h.fileTokens(0, 3, 0, 4, 0, true, keccak256("t2"));
+        assertEq(h.nTokenVerdicts(), 1, "the token crossing took nothing");
     }
 
     // ---------------------------------------------------------------- value
@@ -225,6 +236,20 @@ contract Invariants is Test {
         }
     }
 
+    /// §6.11: the token docket is exactly the sum of the Transfer logs it has filed, each once —
+    /// whatever subsets of each transaction's logs the filings listed.
+    function invariant_tokenDocketIsTheSumOfItsFiledEvents() public view {
+        for (uint256 m = 0; m < h.tMandateCount(); m++) {
+            uint256 id = h.tMandates(m);
+            uint256 sum;
+            for (uint256 i = 0; i < h.tokenEventCount(); i++) {
+                (uint256 mid, bytes32 txh, uint32 li, uint256 v,) = h.tevs(i);
+                if (mid == id && judge.eventFiled(id, txh, li)) sum += v;
+            }
+            assertEq(judge.erc20Docket(id), sum, "token docket != sum of filed Transfer logs");
+        }
+    }
+
     /// Not a property: a report. `forge test --match-test invariant_coverageReport -vv` prints how
     /// often the deep states were actually reached in the last run of the campaign.
     function invariant_coverageReport() public view {
@@ -237,6 +262,8 @@ contract Invariants is Test {
         console.log("claims", h.nClaims());
         console.log("docket filings", h.nFilings());
         console.log("outflow verdicts", h.nOutflowVerdicts());
+        console.log("token filings", h.nTokenFilings());
+        console.log("token verdicts", h.nTokenVerdicts());
     }
 
     // ---------------------------------------------------------------- liveness of the books

@@ -29,7 +29,7 @@ Key terms:
 ## Code
 
 - [src/](https://github.com/dziuba0x/delicti/tree/main/src): contracts. MandateRegistry, AnchorLog, SpendMeter, Vault, JudgeEvm, JudgeXrpl, AgentRefs, CorroborationLog, BondLens, Kinds.
-- [sdk/](https://github.com/dziuba0x/delicti/tree/main/sdk): `@delicti/sdk`, a TypeScript client (`Delicti`), FDC helpers (`Fdc`), XRPL history walker (`XrplHistory`), watchers (`Erc20OutflowWatcher`, `XrplOutflowWatcher`), `Sentinel`, and the CLI `delicti-watch erc20|xrpl|status|sentinel`.
+- [sdk/](https://github.com/dziuba0x/delicti/tree/main/sdk): `@delicti-protocol/sdk`, a TypeScript client (`Delicti`), FDC helpers (`Fdc`), XRPL history walker (`XrplHistory`), watchers (`Erc20OutflowWatcher`, `XrplOutflowWatcher`), `Sentinel`, and the CLI `delicti-watch erc20|xrpl|status|sentinel`.
 - [test/](https://github.com/dziuba0x/delicti/tree/main/test): 226 Foundry tests, including 14 invariants, fuzzing, Halmos, and real FDC fixtures.
 - [scripts/](https://github.com/dziuba0x/delicti/tree/main/scripts): shell scripts that reproduce each live case on Coston2.
 

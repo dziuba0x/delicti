@@ -1,4 +1,4 @@
-# @delicti/sdk
+# @delicti-protocol/sdk
 
 TypeScript for DELICTI, built on [viem](https://viem.sh). It has three parts:
 
@@ -11,16 +11,16 @@ v0.15, Coston2 and XRPL testnet only. Not audited. Whitehat use on testnets.
 ## Install
 
 ```sh
-npm i @delicti/sdk viem          # the library (ESM, Node ≥ 22, types included)
-npx delicti sentinel             # the command line, without installing anything
+npm i @delicti-protocol/sdk viem                          # the library (ESM, Node ≥ 22, types included)
+npx -p @delicti-protocol/sdk delicti sentinel             # the command line, without installing anything
 ```
 
-`delicti` on npm is a thin launcher for this package's CLI. Once `@delicti/sdk` is installed, the same CLI is also available as `delicti-watch`.
+Once installed, the CLI is `delicti` (alias `delicti-watch`).
 
 ## An agent under a mandate, in a few lines
 
 ```ts
-import { Delicti, coston2 } from "@delicti/sdk";
+import { Delicti, coston2 } from "@delicti-protocol/sdk";
 
 const delicti = new Delicti(coston2, publicClient);
 const { id } = await delicti.commitMandate(principal, {

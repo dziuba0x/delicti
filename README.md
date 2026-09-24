@@ -312,7 +312,7 @@ cd sdk && npm ci && npx tsc --noEmit && npx vitest run   # 28 SDK tests offline 
 ### An agent under a mandate, in TypeScript
 
 ```ts
-import { Delicti, coston2 } from "@delicti/sdk";   // build from ./sdk; not yet on npm
+import { Delicti, coston2 } from "@delicti-protocol/sdk";   // npm i @delicti-protocol/sdk viem
 
 const delicti = new Delicti(coston2, publicClient);
 const { id } = await delicti.commitMandate(principal, {

@@ -1,5 +1,14 @@
 # @delicti-protocol/sdk
 
+[![npm](https://img.shields.io/npm/v/@delicti-protocol/sdk?color=35CFFF&label=npm)](https://www.npmjs.com/package/@delicti-protocol/sdk)
+[![license](https://img.shields.io/npm/l/@delicti-protocol/sdk?color=FFAE45)](https://github.com/dziuba0x/delicti/blob/main/LICENSE)
+[![SPEC](https://img.shields.io/badge/SPEC-v1.0%20frozen-8957e5)](https://github.com/dziuba0x/delicti/blob/main/SPEC.md)
+![Coston2](https://img.shields.io/badge/live%20on-Flare%20Coston2-e62058)
+
+**Spending limits for AI agents that hold across a whole sequence of payments. The proof comes from consensus, and a bond enforces them.** An agent told *"spend at most 4"* that spends 1 five times passes every per-call check. DELICTI judges the sum. The Flare Data Connector witnesses what the agent really did on Flare, Ethereum or the XRP Ledger, and the agent's bond pays for the breach in proportion. There is no court and no admin key.
+
+Works with **x402** (EIP-3009) payments, **stablecoins** (USD₮0, USDC.e, FXRP), **MCP** tool servers and receipt-less agents.
+
 TypeScript for DELICTI, built on [viem](https://viem.sh). It has three parts:
 
 - **`Delicti`**, the calls an integrator makes. A principal commits a mandate and bonds it, an agent accepts it or declares it exclusive, and anyone reads where a mandate stands.

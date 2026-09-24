@@ -8,6 +8,7 @@
 
 [![test](https://github.com/dziuba0x/delicti/actions/workflows/test.yml/badge.svg)](https://github.com/dziuba0x/delicti/actions/workflows/test.yml)
 [![release](https://img.shields.io/github/v/release/dziuba0x/delicti?color=c9d1d9&label=release)](https://github.com/dziuba0x/delicti/releases)
+[![npm](https://img.shields.io/npm/v/@delicti-protocol/sdk?color=35CFFF&label=npm)](https://www.npmjs.com/package/@delicti-protocol/sdk)
 ![tests](https://img.shields.io/badge/tests-226%20contract%20·%2028%20SDK-2ea44f)
 ![invariants](https://img.shields.io/badge/invariants-14-2ea44f)
 [![SPEC](https://img.shields.io/badge/SPEC-v1.0%20frozen-8957e5)](SPEC.md)

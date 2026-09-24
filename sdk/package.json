@@ -1,7 +1,7 @@
 {
   "name": "@delicti-protocol/sdk",
-  "version": "0.15.1",
-  "description": "TypeScript SDK, watchers and sentinel for DELICTI: mandates, bonds, two-witness evidence from Flare's FDC, and the bots that keep dockets and convict. Flare · XRPL · x402 · stablecoins.",
+  "version": "0.15.2",
+  "description": "Spending limits for AI agents that hold across calls and chains, proven by Flare's FDC and enforced by a bond: TypeScript SDK, watchers and sentinel for DELICTI. x402 · stablecoins · XRPL · Flare.",
   "keywords": [
     "agent-accountability",
     "agent-wallets",
@@ -37,7 +37,7 @@
     "url": "https://github.com/dziuba0x/delicti/issues"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=20"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

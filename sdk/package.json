@@ -1,6 +1,6 @@
 {
   "name": "@delicti-protocol/sdk",
-  "version": "0.15.3",
+  "version": "0.15.4",
   "description": "Spending limits for AI agents that hold across calls and chains, proven by Flare's FDC and enforced by a bond: TypeScript SDK, watchers and sentinel for DELICTI. x402 · stablecoins · XRPL · Flare.",
   "keywords": [
     "agent-accountability",

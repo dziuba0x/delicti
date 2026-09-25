@@ -57,6 +57,8 @@ export interface DelictiNetwork {
     meter: Address;
     /** MandateFacilitator: x402 on this chain; brake + settlement + receipt in one transaction. */
     facilitator: Address;
+    /** SummaLens: the FLR bond read in dollars after the haircut; covers(k), topUpFor(k). */
+    lens: Address;
   };
 }
 
@@ -101,6 +103,7 @@ export const coston2: DelictiNetwork = {
     vault: "0x8Dd62BE6Ee0689e3Eb5960F08a5356a57bD2F354",
     meter: "0x6Bc63F3aBc6Fc3055DB9949bb4e14515321a4E0f",
     facilitator: "0xBC545E2610EAf68956684c56Dd308c1988f9307B",
+    lens: "0xa0A5159b7c8271B2c2cefD52DC85697c954B268B",
   },
 };
 

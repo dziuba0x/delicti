@@ -207,3 +207,10 @@ Every rail was within its limit, and the sum was not. This is the structuring at
   - [`0xddc9d63b…`](https://coston2-explorer.flare.network/tx/0xddc9d63b0255dab5ac73e8fd39ddd7cb0e7f874f2237726a528858515a4f15b5): tally $1.999413.
   - [`0x24167e82…`](https://coston2-explorer.flare.network/tx/0x24167e82202aa803c55a0d646cc94f0a43c4f5a5f3b521f0333379ad1d162075): tally $2.999058.
 - The next $1 slice: **`WouldExceed(999645)`**. It reverted inside the facilitator, before any token moved. Because the agent's signature names the facilitator as payee, the same authorisation cannot be taken to the token directly (`CallerMustBePayee`).
+
+**The bond, read in dollars.** `SummaLens` [`0xa0A5159b…268B`](https://coston2-explorer.flare.network/address/0xa0A5159b7c8271B2c2cefD52DC85697c954B268B) (FLR/USD block-latency, 30 % haircut for FTSO risk tier 1). One `read(23)` of the Lancea umbrella:
+- bond 0.5 C2FLR × $0.007202 = **$0.00252** after the haircut, which is **0.05×** of the $5 budget;
+- spent $4.085854 per SummaMeter; remaining $0.914146;
+- `topUpFor(23, 1×)` = **991.29 C2FLR**.
+
+This is the margin call the amendment describes, made visible. A testnet bond of half a coin insures almost nothing, and the lens says so.

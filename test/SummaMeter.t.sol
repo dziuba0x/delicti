@@ -127,4 +127,48 @@ contract SummaMeterTest is Test {
         assertEq(meter.spentAt(umbrella, t1 + 60), 9_120_000 + 1_999_320);
         assertEq(meter.checkpointCount(umbrella), 2);
     }
+
+    // ------------------------------------------------------------------ amendment v1.2: the tripwire
+
+    function test_tripwire_countsButStopsNothingUntilThePrincipalSetsIt() public {
+        vm.startPrank(facilitator);
+        meter.strike(umbrella, bytes32("a"));
+        meter.strike(umbrella, bytes32("b"));
+        vm.stopPrank();
+        assertEq(meter.strikes(umbrella), 2);
+        assertFalse(meter.tripped(umbrella));
+        (bool stop,) = meter.wouldExceed(umbrella, XRP_SRC, OUTFLOW, 1, 0);
+        assertFalse(stop);
+    }
+
+    /// A strike from the x402 facilitator on Flare stops the co-signer on XRPL: both ask this meter.
+    /// The tally keeps recording while tripped, and re-arming restores the brake's plain answer.
+    function test_tripwire_aStrikeOnOneRailStopsTheOther() public {
+        vm.prank(principal);
+        meter.setTripwire(umbrella, 1);
+        vm.prank(facilitator);
+        assertTrue(meter.strike(umbrella, bytes32("nonce")));
+        (bool stop,) = meter.wouldExceed(umbrella, XRP_SRC, OUTFLOW, 1, 0); // one drop
+        assertTrue(stop);
+        vm.prank(guard);
+        meter.note(umbrella, XRP_SRC, OUTFLOW, 1_000_000); // funds that moved anyway are still noted
+        assertEq(meter.spentUsd6(umbrella), 1_520_000);
+
+        vm.prank(principal);
+        meter.rearm(umbrella);
+        assertEq(meter.strikes(umbrella), 0);
+        (stop,) = meter.wouldExceed(umbrella, XRP_SRC, OUTFLOW, 1, 0);
+        assertFalse(stop);
+    }
+
+    function test_tripwire_onlyEffectorsStrikeAndOnlyThePrincipalArmsOrRearms() public {
+        vm.startPrank(agent);
+        vm.expectRevert(SummaMeter.NotEffector.selector);
+        meter.strike(umbrella, bytes32("x"));
+        vm.expectRevert(SummaMeter.NotPrincipal.selector);
+        meter.setTripwire(umbrella, 1);
+        vm.expectRevert(SummaMeter.NotPrincipal.selector);
+        meter.rearm(umbrella);
+        vm.stopPrank();
+    }
 }

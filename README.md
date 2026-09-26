@@ -501,6 +501,9 @@ The effector is the final common pathway. A deed with no mandate is a muscle mov
 
 - [SPEC.md](SPEC.md): **v1.0, frozen**. Vocabulary, trust model, challenges and their invariants, bond economics, the watch pool, non-claims, metrics, and the XRPL credentials roadmap.
 - [CHANGELOG.md](CHANGELOG.md): every release, with the reasoning behind each decision.
+- [docs/amendments/v1.1-summa.md](docs/amendments/v1.1-summa.md): SUMMA, one dollar budget across every rail.
+- [docs/amendments/v1.2-conatus.md](docs/amendments/v1.2-conatus.md): Conatus, refused attempts on record and a tripwire across rails (v0.16, not deployed).
+- [docs/v2/watch-pool.md](docs/v2/watch-pool.md): watch pool v2, the seal (v0.16, not deployed).
 - [docs/DEPLOYMENTS.md](docs/DEPLOYMENTS.md): every Coston2 deployment and live run since v0.1.
 - [docs/research/watchers.md](docs/research/watchers.md): who watches and why they would, drawn from seven earlier systems.
 - [sdk/README.md](sdk/README.md): the TypeScript SDK, the watchers and the sentinel.

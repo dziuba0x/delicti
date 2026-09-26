@@ -19,6 +19,11 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 ///         value of the deed's round, proven on-chain. The two can differ by the ±0.25 % band that
 ///         FTSO keeps block-latency feeds in around the anchors, so an effector that wants margin
 ///         should brake a little early (`wouldExceed` takes a `slackBps`).
+///
+///         The tripwire (amendment v1.2, Conatus): effectors report refused attempts they can stand
+///         behind as strikes. Once the principal's threshold is reached, `wouldExceed` answers yes
+///         for every amount on every rail until the principal re-arms. One brake, so one trip stops
+///         the facilitator on Flare and the co-signer on XRPL alike, with no change to either.
 contract SummaMeter {
     struct Checkpoint {
         uint64 at;
@@ -33,8 +38,15 @@ contract SummaMeter {
     mapping(uint256 => uint256) public spentUsd6;
     mapping(uint256 => mapping(address => bool)) public effector;
     mapping(uint256 => Checkpoint[]) private _history;
+    /// umbrella => strikes that trip the brake (0 = never). The principal's alone.
+    mapping(uint256 => uint256) public tripwire;
+    /// umbrella => strikes since the principal last re-armed
+    mapping(uint256 => uint256) public strikes;
 
     event EffectorDeclared(uint256 indexed umbrellaId, address indexed effector);
+    event TripwireSet(uint256 indexed umbrellaId, uint256 strikesToTrip);
+    event Struck(uint256 indexed umbrellaId, address indexed effector, bytes32 evidence, uint256 strikes, bool tripped);
+    event Rearmed(uint256 indexed umbrellaId, uint256 strikesCleared);
     event Noted(uint256 indexed umbrellaId, address indexed effector, bytes32 sourceId, bytes32 assetKey, uint256 amount, uint256 usd6, uint256 total);
 
     error NotPrincipal();
@@ -77,7 +89,8 @@ contract SummaMeter {
     }
 
     /// @notice Would moving `amount` of this asset now take the umbrella past its budget, braking
-    ///         `slackBps` early? Returns the answer and the amount's value in µUSD.
+    ///         `slackBps` early? Returns the answer and the amount's value in µUSD. A tripped
+    ///         umbrella answers yes to everything, as a dead one does.
     function wouldExceed(uint256 umbrellaId, bytes32 sourceId, bytes32 assetKey, uint256 amount, uint16 slackBps)
         external
         returns (bool, uint256 usd6)
@@ -85,7 +98,40 @@ contract SummaMeter {
         usd6 = valueNow(sourceId, assetKey, amount);
         uint256 budget = registry.get(umbrellaId).budget;
         uint256 limit = budget - (budget * slackBps) / 10_000;
-        return (spentUsd6[umbrellaId] + usd6 > limit || !registry.isLive(umbrellaId), usd6);
+        return (spentUsd6[umbrellaId] + usd6 > limit || !registry.isLive(umbrellaId) || tripped(umbrellaId), usd6);
+    }
+
+    // ------------------------------------------------------------------ the tripwire (v1.2)
+
+    /// @notice How many strikes stop every effector of the umbrella. 0 turns the tripwire off.
+    function setTripwire(uint256 umbrellaId, uint256 strikesToTrip) external {
+        if (msg.sender != registry.get(umbrellaId).principal) revert NotPrincipal();
+        tripwire[umbrellaId] = strikesToTrip;
+        emit TripwireSet(umbrellaId, strikesToTrip);
+    }
+
+    /// @notice An effector reports a refused attempt. `evidence` is the effector's own reference to
+    ///         it (the facilitator passes the nonce of the authorisation it recorded).
+    /// @dev    No new trust: an effector can already stop the umbrella by noting spend that never
+    ///         moved, and a noted amount, unlike a strike, cannot be re-armed away.
+    function strike(uint256 umbrellaId, bytes32 evidence) external returns (bool isTripped) {
+        if (!effector[umbrellaId][msg.sender]) revert NotEffector();
+        uint256 n = strikes[umbrellaId] + 1;
+        strikes[umbrellaId] = n;
+        isTripped = tripped(umbrellaId);
+        emit Struck(umbrellaId, msg.sender, evidence, n, isTripped);
+    }
+
+    /// @notice The principal, having looked, clears the strikes.
+    function rearm(uint256 umbrellaId) external {
+        if (msg.sender != registry.get(umbrellaId).principal) revert NotPrincipal();
+        emit Rearmed(umbrellaId, strikes[umbrellaId]);
+        strikes[umbrellaId] = 0;
+    }
+
+    function tripped(uint256 umbrellaId) public view returns (bool) {
+        uint256 k = tripwire[umbrellaId];
+        return k != 0 && strikes[umbrellaId] >= k;
     }
 
     /// @notice Record a settlement after the funds moved. Records past the budget too: a meter

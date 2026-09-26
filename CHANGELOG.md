@@ -1,6 +1,10 @@
 # Changelog
 
-## v0.16.0 — unreleased — watch pool v2: the seal
+## v0.16.0 — unreleased — watch pool v2 (the seal) and amendment v1.2 (Conatus)
+
+Not deployed. v0.15 mandates keep their rules for ever; SDK support lands with the deployment.
+
+### Watch pool v2: the seal
 
 Two holes in the watch pool (§8.4), both proven with proof-of-concept tests against `5fd2925` before any fix was written:
 
@@ -12,9 +16,19 @@ Two holes in the watch pool (§8.4), both proven with proof-of-concept tests aga
 - `Vault`: `requestAttestation(request, salt)`, `claimantOf`, `claimKeyOf`, `paysStipends`, `KIND_CLAIM`, event `AttestationClaimed`; `requesterOf` and the unsealed `requestAttestation(request)` are gone. `DelictiErrors.AlreadyClaimed`.
 - `Deeds`: `requestEvm` / `requestBdt` / `requestPayment` and `claimKey*`. All three judges key stipends by claim key (computed in a second pass, off the filing loops' stack).
 - Tests: **269** (was 261). New: the two PoCs as regressions, a different request for the same deed, the claimant's resend, the seal's clock, real-data claim-key pins, SUMMA stipends on both rails. The invariant handler seals every attestation it buys.
-- **Batch (XLS-56), resolved on paper and in emulation:** Flare's indexer stores every transaction the `ledger` call returns and MCC 4.5.0 derives spent amounts from metadata alone; on a real devnet Batch the inner transactions come back from `ledger` with their own ids and metadata, and the verifier's logic attests 2 000 000 and 3 000 000 drops to them and the 4-drop fee to the outer one (docs/research/batch-fdc-2026-09-26.md). SPEC §10 annotated. A live attestation waits for the testnet; mainnet activation is no earlier than 2026-10-09 (majority since 2026-09-25 14:46 UTC).
 - **Named for what it is: v2 of the watch pool, v1 for everything else.** It narrows a rule §14 froze, so by §14 it is not an amendment. The migration is the one §14 names, new mandates bonded in a v0.16 Vault; the registry stays, because nothing it stores changes (docs/v2/watch-pool.md P.6).
-- **Not deployed.** v0.15 mandates keep the v1 pool for ever. SDK support lands with the deployment.
+
+### Amendment v1.2: Conatus
+
+`docs/amendments/v1.2-conatus.md`. The brake used to refuse and forget. `MandateFacilitator.recordAttempt` now records a refused authorisation when the agent signed it to the facilitator, it is still live at the token, and it breaks the umbrella's budget against the tally as it stood at `validAfter`, at 99 % of its value. Spend noted later does not count, so an honest authorisation that lost a race, or that a seller sat on, is not an attempt; a cancelled one is a withdrawn attempt and cannot be recorded. A recorded nonce never settles (`Recorded`). No new kind and no slashing: the consequence is a strike on the tripwire.
+
+- `SummaMeter`: `setTripwire` / `rearm` (principal), `strike` (any declared effector), `tripped`. A tripped umbrella makes `wouldExceed` answer yes on every rail, so one recorded attempt on Flare stops the XRPL co-signer too, with no change to it. `note` keeps recording. Effectors gain no new power: they could already stop an umbrella by noting spend.
+- `MandateFacilitator`: `recordAttempt`, `attemptedAt`, `attempts`, event `Attempted`; `settle` refuses `Tripped` and `Recorded`. The EIP-3009 views it reads (`DOMAIN_SEPARATOR`, `authorizationState`, the receive typehash) were checked on USD₮0 on Flare mainnet.
+- Tests: **280** (11 new).
+
+### Also
+
+- **Batch (XLS-56), resolved on paper and in emulation:** Flare's indexer stores every transaction the `ledger` call returns and MCC 4.5.0 derives spent amounts from metadata alone; on a real devnet Batch the inner transactions come back from `ledger` with their own ids and metadata, and the verifier's logic attests 2 000 000 and 3 000 000 drops to them and the 4-drop fee to the outer one (docs/research/batch-fdc-2026-09-26.md). SPEC §10 annotated. A live attestation waits for the testnet; mainnet activation is no earlier than 2026-10-09 (majority since 2026-09-25 14:46 UTC).
 
 ## v0.15.0 — 2026-09-24 — v0.14, reviewed adversarially and fixed before it shipped
 

@@ -4,6 +4,8 @@ pragma solidity ^0.8.28;
 import {IFdcVerification} from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
 import {IEVMTransaction} from "@flarenetwork/flare-periphery-contracts/coston2/IEVMTransaction.sol";
 import {IPayment} from "@flarenetwork/flare-periphery-contracts/coston2/IPayment.sol";
+import {IBalanceDecreasingTransaction} from
+    "@flarenetwork/flare-periphery-contracts/coston2/IBalanceDecreasingTransaction.sol";
 import {MandateRegistry} from "./MandateRegistry.sol";
 import {AnchorLog} from "./AnchorLog.sol";
 import {Receipts} from "./Receipts.sol";
@@ -126,11 +128,65 @@ library Deeds {
         return address(uint160(uint256(m.assetKey)));
     }
 
-    /// @dev The key under which `Vault.requestAttestation` recorded who paid for a proof's request:
-    ///      type, source, and the hash of the ABI-encoded request body (SPEC §8.4). Must equal
-    ///      `Vault.deedKey(t, s, keccak256(request[96:]))`; test/FdcKey.t.sol checks it on real data.
+    /// @dev The v1.0 key (SPEC §8.4): type, source, and the hash of the ABI-encoded request body. It
+    ///      leaves the MIC out, which is why watch pool v2 pays by `claimKey*`. Kept for readers of
+    ///      earlier Vaults; test/FdcKey.t.sol pins it on real data.
     function deedKey(bytes32 attestationType, bytes32 sourceId, bytes memory encodedRequestBody) internal pure returns (bytes32) {
         return keccak256(abi.encode(attestationType, sourceId, keccak256(encodedRequestBody)));
+    }
+
+    // -----------------------------------------------------------------------------------
+    // Claim keys (watch pool v2): the exact request an attestation answered, rebuilt from its proof.
+    //
+    // The FDC's message integrity code is keccak256(abi.encode(response with votingRound = 0,
+    // "Flare")) — measured bit for bit against Flare's testnet verifier on EVMTransaction and
+    // BalanceDecreasingTransaction (test/FdcKey.t.sol). So a proof carries everything its request
+    // was made of, type ‖ source ‖ MIC ‖ abi.encode(requestBody), and the stipend can follow the
+    // request that produced the proof rather than any request that merely shares its body. The
+    // round is zeroed for the hash and put back, so a caller's memory struct is left as it was.
+    // -----------------------------------------------------------------------------------
+
+    function _request(bytes32 aType, bytes32 source, bytes32 mic, bytes memory encodedBody) private pure returns (bytes memory) {
+        return bytes.concat(abi.encode(aType, source, mic), encodedBody);
+    }
+
+    /// @dev The exact request bytes behind an `EVMTransaction` proof, and their hash, the claim key.
+    function requestEvm(IEVMTransaction.Response memory r) internal pure returns (bytes memory) {
+        uint64 round = r.votingRound;
+        r.votingRound = 0;
+        bytes32 mic = keccak256(abi.encode(r, "Flare"));
+        r.votingRound = round; // the caller's struct is left as it was
+        return _request(r.attestationType, r.sourceId, mic, abi.encode(r.requestBody));
+    }
+
+    function claimKeyEvm(IEVMTransaction.Response memory r) internal pure returns (bytes32) {
+        return keccak256(requestEvm(r));
+    }
+
+    /// @dev The same for `BalanceDecreasingTransaction` (§6.10, SUMMA's XRP rail).
+    function requestBdt(IBalanceDecreasingTransaction.Response memory r) internal pure returns (bytes memory) {
+        uint64 round = r.votingRound;
+        r.votingRound = 0;
+        bytes32 mic = keccak256(abi.encode(r, "Flare"));
+        r.votingRound = round;
+        return _request(r.attestationType, r.sourceId, mic, abi.encode(r.requestBody));
+    }
+
+    function claimKeyBdt(IBalanceDecreasingTransaction.Response memory r) internal pure returns (bytes32) {
+        return keccak256(requestBdt(r));
+    }
+
+    /// @dev The same for `Payment` (§6.8).
+    function requestPayment(IPayment.Response memory r) internal pure returns (bytes memory) {
+        uint64 round = r.votingRound;
+        r.votingRound = 0;
+        bytes32 mic = keccak256(abi.encode(r, "Flare"));
+        r.votingRound = round;
+        return _request(r.attestationType, r.sourceId, mic, abi.encode(r.requestBody));
+    }
+
+    function claimKeyPayment(IPayment.Response memory r) internal pure returns (bytes32) {
+        return keccak256(requestPayment(r));
     }
 
     /// @dev Shrink a memory array to its first `n` elements.

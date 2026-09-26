@@ -431,6 +431,7 @@ DELICTI does not monitor minds. It proves deeds and prices them, and it is hones
 - **Stablecoins only where the FDC looks.** §6.11 enforces ERC-20 budgets on Ethereum, Flare and Songbird. Base, where most x402 payments settle today, is not an FDC source, so nothing there can be proven.
 - **On XRPL, DELICTI sees XRP, not issued currencies.** RLUSD and every other IOU are invisible to it.
 - **XRPL proofs age out after ~14 days.** A docket carries a deed for ever once it is filed. A deed nobody files in time is lost to the case. The watch pool pays for filing only where a principal funded one.
+- **Watch-pool stipends in v0.15 can be taken by a copier** (a mempool front-run, or a request with a made-up MIC). Fixed by watch pool v2, *the seal* ([docs/v2/watch-pool.md](docs/v2/watch-pool.md)): merged, tested, not yet deployed.
 - **Small bonds are hard to watch without a pool.** A verdict pays for proving a case only when 10 % of the bond exceeds the attestation fees, which are 20 FLR per request on mainnet.
 - **Collusion between a principal and its own agent** can take the challenger's share of an outsider's deposit, and nothing more (§8.3).
 - **Proportional up to the bond, not beyond.** Once the overrun equals the budget, further units cost nothing more. Only a larger bond moves that ceiling.

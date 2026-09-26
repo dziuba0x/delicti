@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.16.0 — unreleased — watch pool v2: the seal
+
+Two holes in the watch pool (§8.4), both proven with proof-of-concept tests against `5fd2925` before any fix was written:
+
+- **MEDIUM: a mempool copier held the stipend.** Flare orders transactions by priority gas auction. A copier who outbid a watcher's pending `requestAttestation(request)` became `requesterOf`; the watcher's call still paid FdcHub, for nothing.
+- **MEDIUM: a made-up MIC held the stipend, no mempool needed.** `deedKey` leaves the MIC out, so a request no provider will ever attest, sent before the verifier has even indexed the deed, claimed the key of the valid request.
+
+**Fix: watch pool v2** (`docs/v2/watch-pool.md`). A stipend is paid to the first address that sealed the exact request a filed proof answers — `commitmentFor(watcher, 0, KIND_CLAIM = 0, keccak256(request), salt)`, at least `commitLead` and at most `COMMIT_TTL` old — and paid for it through `requestAttestation(request, salt)`. Judges rebuild the exact request from the proof: the FDC's MIC is `keccak256(abi.encode(response with votingRound = 0, "Flare"))`, measured bit for bit on real `EVMTransaction` and `BalanceDecreasingTransaction` requests (`test/FdcKey.t.sol`). A second sealed payer of the same bytes is refused `AlreadyClaimed` and keeps its fee; the holder may re-send its own request. `Vault.paysStipends` lets judges skip the key computation where no pool is funded.
+
+- `Vault`: `requestAttestation(request, salt)`, `claimantOf`, `claimKeyOf`, `paysStipends`, `KIND_CLAIM`, event `AttestationClaimed`; `requesterOf` and the unsealed `requestAttestation(request)` are gone. `DelictiErrors.AlreadyClaimed`.
+- `Deeds`: `requestEvm` / `requestBdt` / `requestPayment` and `claimKey*`. All three judges key stipends by claim key (computed in a second pass, off the filing loops' stack).
+- Tests: **269** (was 261). New: the two PoCs as regressions, a different request for the same deed, the claimant's resend, the seal's clock, real-data claim-key pins, SUMMA stipends on both rails. The invariant handler seals every attestation it buys.
+- **Batch (XLS-56), resolved on paper and in emulation:** Flare's indexer stores every transaction the `ledger` call returns and MCC 4.5.0 derives spent amounts from metadata alone; on a real devnet Batch the inner transactions come back from `ledger` with their own ids and metadata, and the verifier's logic attests 2 000 000 and 3 000 000 drops to them and the 4-drop fee to the outer one (docs/research/batch-fdc-2026-09-26.md). SPEC §10 annotated. A live attestation waits for the testnet; mainnet activation is no earlier than 2026-10-09 (majority since 2026-09-25 14:46 UTC).
+- **Named for what it is: v2 of the watch pool, v1 for everything else.** It narrows a rule §14 froze, so by §14 it is not an amendment. The migration is the one §14 names, new mandates bonded in a v0.16 Vault; the registry stays, because nothing it stores changes (docs/v2/watch-pool.md P.6).
+- **Not deployed.** v0.15 mandates keep the v1 pool for ever. SDK support lands with the deployment.
+
 ## v0.15.0 — 2026-09-24 — v0.14, reviewed adversarially and fixed before it shipped
 
 Before v0.14 left the sandbox, a fresh adversarial review was run against it: a separate agent with the diff, the sources, the SPEC and permission to write proof-of-concept tests. It found one high, two medium and one low issue, and confirmed three of them with working exploits. All are fixed here. v0.14 stays on Coston2 for mandate #13, is superseded, and was never pushed as a release on its own.

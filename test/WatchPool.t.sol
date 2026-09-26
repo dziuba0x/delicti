@@ -10,6 +10,7 @@ import {Vault} from "../src/Vault.sol";
 import {JudgeEvm} from "../src/JudgeEvm.sol";
 import {JudgeXrpl} from "../src/JudgeXrpl.sol";
 import {DelictiErrors} from "../src/DelictiErrors.sol";
+import {Deeds} from "../src/Deeds.sol";
 import {Core} from "./Core.sol";
 import {MockProtocolsV2} from "./Rounds.sol";
 import {MockFdcXrpl} from "./Outflow.t.sol";
@@ -141,15 +142,30 @@ contract WatchPoolTest is Test {
         }
     }
 
-    /// The request bytes a verifier would return for this proof: type ‖ source ‖ MIC ‖ body.
+    uint64 constant LEAD = 10 minutes; // the Vault's commitLead in setUp
+
+    /// The request bytes a verifier would return for this proof: type ‖ source ‖ MIC ‖ body, with the
+    /// FDC's own MIC (pinned on real data in test/FdcKey.t.sol).
     function _requestOf(IEVMTransaction.Proof memory p) internal pure returns (bytes memory) {
-        return abi.encodePacked(p.data.attestationType, p.data.sourceId, keccak256("mic"), abi.encode(p.data.requestBody));
+        return Deeds.requestEvm(p.data);
     }
 
+    /// A watcher seals its claim on `request` when it finds the deed — here, `LEAD` in the past.
+    function _seal(address who, bytes memory request, bytes32 salt) internal {
+        uint256 t = vm.getBlockTimestamp(); // not block.timestamp: via-IR re-reads it after a warp (claude/50)
+        vm.warp(t - LEAD);
+        bond.commitChallenge(bond.commitmentFor(who, 0, 0, keccak256(request), salt));
+        vm.warp(t);
+    }
+
+    /// Seal, wait out the lead, pay: the whole watch-pool-v2 purchase of an attestation.
     function _pay(address who, IEVMTransaction.Proof[] memory pr) internal {
         for (uint256 i = 0; i < pr.length; i++) {
+            bytes memory req = _requestOf(pr[i]);
+            bytes32 salt = keccak256(abi.encode(who, req));
+            _seal(who, req, salt);
             vm.prank(who);
-            bond.requestAttestation{value: FEE}(_requestOf(pr[i]));
+            bond.requestAttestation{value: FEE}(req, salt);
         }
     }
 
@@ -200,18 +216,24 @@ contract WatchPoolTest is Test {
         assertEq(bond.owed(watcher), 3 * RATE);
     }
 
-    /// The first payer of a request holds it. A second watcher can read `requesterOf` before buying
-    /// the same attestation — the race §10 described, closed without a separate claim.
-    function test_theFirstPayerHoldsTheDeed() public {
+    /// The first SEALED payer of the exact request holds it (watch pool v2). A second watcher with a
+    /// valid seal of its own is refused before any fee moves — the same-block race §10 described no
+    /// longer costs the loser an attestation.
+    function test_theFirstSealedPayerHoldsTheDeed() public {
         _terms(RATE, 0, 1 ether);
         IEVMTransaction.Proof[] memory pr = _txs(0, 1, EACH);
         _pay(watcher, pr);
-        bytes32 key = bond.deedKey(pr[0].data.attestationType, pr[0].data.sourceId, keccak256(abi.encode(pr[0].data.requestBody)));
-        assertEq(bond.requesterOf(key), watcher);
-        _pay(copier, pr); // paid, but too late: FdcHub gets the fee, the stipend stays the watcher's
-        assertEq(bond.requesterOf(key), watcher);
+        bytes memory req = _requestOf(pr[0]);
+        assertEq(bond.claimantOf(keccak256(req)), watcher);
+        _seal(copier, req, SALT);
+        uint256 b0 = copier.balance;
+        vm.prank(copier);
+        vm.expectRevert(DelictiErrors.AlreadyClaimed.selector);
+        bond.requestAttestation{value: FEE}(req, SALT);
+        assertEq(copier.balance, b0, "the refused payer keeps its fee");
         _file(copier, pr, bytes32(0));
         assertEq(bond.owed(watcher), RATE);
+        assertEq(bond.owed(copier), 0);
     }
 
     /// A deed whose attestation nobody paid for through the Vault is recorded and earns nothing.
@@ -412,10 +434,10 @@ contract WatchPoolTest is Test {
             pr[i].data.responseBody.sourceAddressHash = ref;
             pr[i].data.responseBody.blockTimestamp = uint64(block.timestamp);
             pr[i].data.responseBody.spentAmount = int256(1_000_012);
+            bytes memory req = Deeds.requestBdt(pr[i].data);
+            _seal(watcher, req, SALT);
             vm.prank(watcher);
-            bond.requestAttestation{value: FEE}(
-                abi.encodePacked(pr[i].data.attestationType, pr[i].data.sourceId, bytes32(0), abi.encode(pr[i].data.requestBody))
-            );
+            bond.requestAttestation{value: FEE}(req, SALT);
         }
         pr[1].data.responseBody.spentAmount = -5_000_000; // somebody paid the agent
         vm.prank(copier);
@@ -424,10 +446,117 @@ contract WatchPoolTest is Test {
         assertEq(bond.owed(copier), 0);
     }
 
+    // ------------------------------------------------------------------ watch pool v2: the seal
+    //
+    // Both holes below were live in v0.15 (claude/58 H1; PoC run against 5fd2925, claude/59): the
+    // first payer of ANY request sharing a deed's body held its stipend.
+
+    /// PoC 1, closed. A copier outbids the watcher's pending request in Flare's priority gas auction.
+    /// Without a seal it cannot pay through the Vault at all; sealing when it sees the request is
+    /// `commitLead` too late. The watcher's request lands and the stipend is the watcher's.
+    function test_poolV2_aMempoolCopierCannotHoldTheKey() public {
+        _terms(RATE, 0, 1 ether);
+        IEVMTransaction.Proof[] memory pr = _txs(0, 1, EACH);
+        bytes memory req = _requestOf(pr[0]);
+        _seal(watcher, req, SALT);                  // the watcher found the deed LEAD ago
+        // the watcher's `requestAttestation(req, SALT)` is now in the mempool; the copier bids higher
+        vm.prank(copier);
+        vm.expectRevert(DelictiErrors.NoCommitment.selector);
+        bond.requestAttestation{value: FEE}(req, SALT);
+        bond.commitChallenge(bond.commitmentFor(copier, 0, 0, keccak256(req), SALT)); // seals now
+        vm.prank(copier);
+        vm.expectRevert(DelictiErrors.CommittedTooLate.selector);
+        bond.requestAttestation{value: FEE}(req, SALT);
+        vm.prank(watcher);
+        bond.requestAttestation{value: FEE}(req, SALT);
+        _file(copier, pr, bytes32(0));
+        assertEq(bond.owed(watcher), RATE);
+        assertEq(bond.owed(copier), 0);
+    }
+
+    /// PoC 2, closed. A request with a made-up MIC — sendable the moment the deed exists, with no
+    /// verifier round-trip, and never attestable — used to claim the same key as the valid request.
+    /// Now it holds a key that no proof will ever name, even sealed on time.
+    function test_poolV2_aMadeUpMicClaimsNothing() public {
+        _terms(RATE, 0, 1 ether);
+        IEVMTransaction.Proof[] memory pr = _txs(0, 1, EACH);
+        bytes memory junk = abi.encodePacked(pr[0].data.attestationType, pr[0].data.sourceId, bytes32(uint256(0xdead)), abi.encode(pr[0].data.requestBody));
+        _seal(copier, junk, SALT);
+        vm.prank(copier);
+        bond.requestAttestation{value: FEE}(junk, SALT); // FdcHub takes it; no provider will ever attest it
+        assertEq(bond.claimantOf(keccak256(junk)), copier);
+        _pay(watcher, pr); // the valid request, the one that makes the proof
+        _file(watcher, pr, bytes32(0));
+        assertEq(bond.owed(copier), 0, "paid for an attestation that never existed: no longer");
+        assertEq(bond.owed(watcher), RATE);
+    }
+
+    /// The copier's last resort: a DIFFERENT valid request for the same deed (here two confirmations
+    /// instead of one), sealed when it saw the watcher's. It matures `commitLead` after the watcher's
+    /// proof exists; by then the deed is on the docket and the copier's proof adds nothing.
+    function test_poolV2_aDifferentRequestForTheSameDeedComesTooLate() public {
+        _terms(RATE, 0, 1 ether);
+        IEVMTransaction.Proof[] memory pr = _txs(0, 1, EACH);
+        _pay(watcher, pr);                           // sealed LEAD ago, paid now
+        IEVMTransaction.Proof[] memory alt = _txs(0, 1, EACH);
+        alt[0].data.requestBody.requiredConfirmations = 2;
+        bytes memory altReq = _requestOf(alt[0]);
+        assertTrue(keccak256(altReq) != keccak256(_requestOf(pr[0])));
+        bond.commitChallenge(bond.commitmentFor(copier, 0, 0, keccak256(altReq), SALT));
+        _file(watcher, pr, bytes32(0));              // the watcher's proof is ready minutes later
+        vm.warp(block.timestamp + LEAD);
+        vm.prank(copier);
+        bond.requestAttestation{value: FEE}(altReq, SALT);
+        vm.prank(copier);
+        vm.expectRevert(DelictiErrors.NothingNew.selector);
+        judge.fileErc20Outflow(id, alt, bytes32(0));
+        assertEq(bond.owed(copier), 0);
+        assertEq(bond.owed(watcher), RATE);
+    }
+
+    /// A round that failed to attest is retried by the claimant, through the Vault, with any salt.
+    function test_poolV2_theClaimantMayResendItsOwnRequest() public {
+        IEVMTransaction.Proof[] memory pr = _txs(0, 1, EACH);
+        _pay(watcher, pr);
+        uint256 n = hub.requests();
+        vm.prank(watcher);
+        bond.requestAttestation{value: FEE}(_requestOf(pr[0]), bytes32(0));
+        assertEq(hub.requests(), n + 1, "forwarded again");
+        assertEq(bond.claimantOf(keccak256(_requestOf(pr[0]))), watcher);
+    }
+
+    /// The seal obeys the challenge gate's clock: at least `commitLead` old, at most `COMMIT_TTL`,
+    /// one use, and only its own sealer can spend it.
+    function test_poolV2_theSealKeepsTheGatesClock() public {
+        IEVMTransaction.Proof[] memory pr = _txs(0, 3, EACH);
+        bytes memory a = _requestOf(pr[0]);
+        bytes memory b = _requestOf(pr[1]);
+        bytes memory c = _requestOf(pr[2]);
+        // too young
+        bond.commitChallenge(bond.commitmentFor(watcher, 0, 0, keccak256(a), SALT));
+        vm.warp(block.timestamp + LEAD - 1);
+        vm.prank(watcher);
+        vm.expectRevert(DelictiErrors.CommittedTooLate.selector);
+        bond.requestAttestation{value: FEE}(a, SALT);
+        // stale
+        bond.commitChallenge(bond.commitmentFor(watcher, 0, 0, keccak256(b), SALT));
+        vm.warp(block.timestamp + bond.COMMIT_TTL() + 1);
+        vm.prank(watcher);
+        vm.expectRevert(DelictiErrors.CommitmentStale.selector);
+        bond.requestAttestation{value: FEE}(b, SALT);
+        // someone else's seal
+        _seal(watcher, c, SALT);
+        vm.prank(copier);
+        vm.expectRevert(DelictiErrors.NoCommitment.selector);
+        bond.requestAttestation{value: FEE}(c, SALT);
+        // a claim seal is not a challenge commitment: kind 0, mandate 0 — no judge ever consumes it
+        assertTrue(bond.commitmentFor(watcher, 0, 0, keccak256(c), SALT) != bond.commitmentFor(watcher, id, bond.KIND_ERC20_OUTFLOW(), keccak256(c), SALT));
+    }
+
     /// Requests shorter than a header and a body are refused before any fee moves.
     function test_revert_malformedRequest() public {
         vm.prank(watcher);
         vm.expectRevert(DelictiErrors.BadRequest.selector);
-        bond.requestAttestation{value: FEE}(hex"00");
+        bond.requestAttestation{value: FEE}(hex"00", SALT);
     }
 }

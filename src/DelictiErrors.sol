@@ -66,4 +66,6 @@ interface DelictiErrors {
     error WatchClosed();
     error NothingFunded();
     error BadRequest();
+    // v0.16 (watch pool v2)
+    error AlreadyClaimed();
 }

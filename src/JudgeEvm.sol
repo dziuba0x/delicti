@@ -437,6 +437,7 @@ contract JudgeEvm is DelictiErrors {
         uint256 paid;
         minRound = type(uint64).max;
         uint256 minV = vault.stipendMinValue(mandateId);
+        bool pays = vault.paysStipends(mandateId);
         for (uint256 i = 0; i < n; i++) {
             IEVMTransaction.Proof calldata pr = fdcProofs[i];
             bytes32 txh = pr.data.requestBody.transactionHash;
@@ -456,13 +457,17 @@ contract JudgeEvm is DelictiErrors {
             fresh++;
             // `transferFrom(agent, x, 0)` succeeds for ANYONE on a standard token, so a zero-value
             // Transfer out of the agent is not the agent's act: it counts nothing and earns nothing
-            if (out != 0 && out >= minV) {
-                keys[paid++] = Deeds.deedKey(pr.data.attestationType, pr.data.sourceId, abi.encode(pr.data.requestBody));
-            }
+            if (pays && out != 0 && out >= minV) keys[paid++] = bytes32(i); // index now, claim key below
             if (pr.data.votingRound < minRound) minRound = pr.data.votingRound;
             emit DeedJudged(mandateId, Kinds.ERC20_OUTFLOW, txh, out);
         }
-        Deeds.trim(keys, paid);
+        _claimKeys(fdcProofs, Deeds.trim(keys, paid));
+    }
+
+    /// @dev Replace each index in `keys` with the claim key of that proof (watch pool v2). A second
+    ///      pass, so the filing loop keeps its stack.
+    function _claimKeys(IEVMTransaction.Proof[] calldata fdcProofs, bytes32[] memory keys) private pure {
+        for (uint256 j = 0; j < keys.length; j++) keys[j] = Deeds.claimKeyEvm(fdcProofs[uint256(keys[j])].data);
     }
 
     /// @dev Every `Transfer(from, *, v)` by `asset` in these events not yet on the docket: files it

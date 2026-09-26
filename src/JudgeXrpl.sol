@@ -152,6 +152,7 @@ contract JudgeXrpl is DelictiErrors {
         uint256 paid; // new deeds that moved at least the watch pool's minimum (§8.4)
         bytes32[] memory keys = new bytes32[](n);
         uint256 minV = vault.stipendMinValue(mandateId);
+        bool pays = vault.paysStipends(mandateId);
         uint64 minRound = type(uint64).max;
         bytes32[] memory ids = new bytes32[](n);
         for (uint256 i = 0; i < n; i++) {
@@ -162,9 +163,7 @@ contract JudgeXrpl is DelictiErrors {
             uint256 v = _filePayment(mandateId, episodeIndices[i], leaves[i], merkleProofs[i], fdcProofs[i], m);
             added += v;
             fresh++;
-            if (v != 0 && v >= minV) {
-                keys[paid++] = Deeds.deedKey(fdcProofs[i].data.attestationType, fdcProofs[i].data.sourceId, abi.encode(fdcProofs[i].data.requestBody));
-            }
+            if (pays && v != 0 && v >= minV) keys[paid++] = bytes32(i); // index now, claim key below
             if (fdcProofs[i].data.votingRound < minRound) minRound = fdcProofs[i].data.votingRound;
         }
         if (fresh == 0) revert NothingNew();
@@ -172,7 +171,7 @@ contract JudgeXrpl is DelictiErrors {
         uint256 total = before + added;
         paymentDocket[mandateId] = total;
         emit PaymentsFiled(mandateId, msg.sender, added, total, fresh);
-        vault.stipend(mandateId, Deeds.trim(keys, paid));
+        vault.stipend(mandateId, _paymentKeys(fdcProofs, Deeds.trim(keys, paid)));
         if (total <= m.budget || total == before) return;
         // Past the budget, but a verdict would take nothing: another path (the one-shot challenge, a
         // receipted case) already convicted at this severity, or a proportional increase is still
@@ -269,14 +268,15 @@ contract JudgeXrpl is DelictiErrors {
     ///           needs no commitment), but the honest transaction still lands: its digest is over
     ///           the ids it supplied, the skipped ones still count through the docket, and the
     ///           crossing, which pays the challenger, happens in its transaction. A front-run
-    ///           recording pays its stipends to whoever PAID for those attestations (v0.15), not to
-    ///           the copier.
+    ///           recording pays its stipends to whoever SEALED and paid for those exact attestations
+    ///           (watch pool v2), not to the copier.
     ///         - A filing that adds nothing reverts `NothingNew`.
     ///         - Only POSITIVE `spentAmount`s count: a budget of outflow limits what left; XRP that
     ///           came back does not un-spend it. Fees count: the agent paid them.
     ///         - The crossing filer is reimbursed for the attestations IT supplied (new proofs only)
-    ///           and earns 10% of the rest. Stipends for new, value-moving deeds go to whoever paid for
-    ///           their attestations through `Vault.requestAttestation` (SPEC §8.4).
+    ///           and earns 10% of the rest. Stipends for new, value-moving deeds go to whoever sealed
+    ///           and paid for their exact attestations through `Vault.requestAttestation` (SPEC §8.4,
+    ///           watch pool v2).
     function fileXrpOutflow(uint256 mandateId, IBalanceDecreasingTransaction.Proof[] calldata fdcProofs, bytes32 salt)
         external
     {
@@ -324,6 +324,7 @@ contract JudgeXrpl is DelictiErrors {
         uint256 paid;
         minRound = type(uint64).max;
         uint256 minV = vault.stipendMinValue(mandateId);
+        bool pays = vault.paysStipends(mandateId);
         for (uint256 i = 0; i < n; i++) {
             IBalanceDecreasingTransaction.Proof calldata pr = fdcProofs[i];
             bytes32 txid = pr.data.requestBody.transactionId;
@@ -335,13 +336,22 @@ contract JudgeXrpl is DelictiErrors {
             fresh++;
             added += out;
             // an inflow (anyone can send the agent XRP) is a provable deed that moved nothing out
-            if (out != 0 && out >= minV) {
-                keys[paid++] = Deeds.deedKey(pr.data.attestationType, pr.data.sourceId, abi.encode(pr.data.requestBody));
-            }
+            if (pays && out != 0 && out >= minV) keys[paid++] = bytes32(i); // index now, claim key below
             if (pr.data.votingRound < minRound) minRound = pr.data.votingRound;
             emit DeedJudged(mandateId, Kinds.XRP_OUTFLOW, txid, out);
         }
-        Deeds.trim(keys, paid);
+        _bdtKeys(fdcProofs, Deeds.trim(keys, paid));
+    }
+
+    /// @dev Replace each index in `keys` with the claim key of that proof (watch pool v2). Second
+    ///      passes, so the filing loops keep their stack.
+    function _bdtKeys(IBalanceDecreasingTransaction.Proof[] calldata fdcProofs, bytes32[] memory keys) private pure {
+        for (uint256 j = 0; j < keys.length; j++) keys[j] = Deeds.claimKeyBdt(fdcProofs[uint256(keys[j])].data);
+    }
+
+    function _paymentKeys(IPayment.Proof[] calldata fdcProofs, bytes32[] memory keys) private pure returns (bytes32[] memory) {
+        for (uint256 j = 0; j < keys.length; j++) keys[j] = Deeds.claimKeyPayment(fdcProofs[uint256(keys[j])].data);
+        return keys;
     }
 
     /// @dev One attested balance decrease of the mandate's account inside its window. Returns what

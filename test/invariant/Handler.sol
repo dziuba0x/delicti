@@ -17,6 +17,7 @@ import {IBalanceDecreasingTransaction} from
     "@flarenetwork/flare-periphery-contracts/coston2/IBalanceDecreasingTransaction.sol";
 import {AgentRefs} from "../../src/AgentRefs.sol";
 import {Kinds} from "../../src/Kinds.sol";
+import {Deeds} from "../../src/Deeds.sol";
 import {IReferencedPaymentNonexistence} from
     "@flarenetwork/flare-periphery-contracts/coston2/IReferencedPaymentNonexistence.sol";
 import {MockProtocolsV2} from "../Rounds.sol";
@@ -1174,20 +1175,28 @@ contract Handler is Test {
         } catch {}
     }
 
-    // ------------------------------------------------------------------ paying for attestations (v0.15)
+    // ------------------------------------------------------------------ paying for attestations (v0.15; sealed in watch pool v2)
     //
-    // Stipends go to whoever paid for a deed's attestation through `Vault.requestAttestation`, keyed
-    // by (type, source, request body). These build the exact request bytes the verifier would, so
-    // the key the Vault records is the key the judge rebuilds from the handler's proofs.
+    // Stipends go to whoever sealed and paid for the exact request a filed proof answers (watch
+    // pool v2). These rebuild the request bytes from the very proof the handler would file, MIC
+    // included, seal them `commitLead` in the past and pay. A second payer of the same bytes is
+    // refused `AlreadyClaimed` and keeps its fee.
 
-    mapping(bytes32 => address) public ghostRequester;
+    mapping(bytes32 => address) public ghostClaimant;
 
-    function _request(bytes32 aType, bytes32 source, bytes memory body, address who) internal {
-        bytes memory req = abi.encodePacked(aType, source, bytes32(uint256(0xC0DE)), body);
+    function _request(bytes memory req, address who) internal {
+        bytes32 key = keccak256(req);
+        bytes32 salt = keccak256(abi.encode(who, key));
+        uint256 t = vm.getBlockTimestamp();
+        uint64 lead = bond.commitLead();
+        vm.warp(t - lead);
+        bond.commitChallenge(bond.commitmentFor(who, 0, 0, key, salt));
+        vm.warp(t);
         vm.deal(who, who.balance + 1);
         vm.prank(who);
-        bytes32 key = bond.requestAttestation{value: 1}(req);
-        if (ghostRequester[key] == address(0)) ghostRequester[key] = who;
+        try bond.requestAttestation{value: 1}(req, salt) {
+            if (ghostClaimant[key] == address(0)) ghostClaimant[key] = who;
+        } catch {}
     }
 
     /// Someone pays for the attestation of a token move, an XRPL move, or an XRPL payment.
@@ -1196,20 +1205,11 @@ contract Handler is Test {
         uint256 k = which % 3;
         if (k == 0 && tevs.length != 0) {
             TEv memory t = tevs[seed % tevs.length];
-            IEVMTransaction.RequestBody memory b;
-            b.transactionHash = t.txh;
-            b.requiredConfirmations = 1;
-            b.listEvents = true;
-            _request(bytes32("EVMTransaction"), SRC, abi.encode(b), who);
+            _request(Deeds.requestEvm(_tokenProof(t.mandateId, t.txh, 7, 0).data), who);
         } else if (k == 1 && xtxs.length != 0) {
-            XTx memory t = xtxs[seed % xtxs.length];
-            IBalanceDecreasingTransaction.RequestBody memory b =
-                IBalanceDecreasingTransaction.RequestBody({transactionId: t.txid, sourceAddressIndicator: reg.get(t.mandateId).agentRef});
-            _request(bytes32("BalanceDecreasingTransaction"), XSRC, abi.encode(b), who);
+            _request(Deeds.requestBdt(_bdt(xtxs[seed % xtxs.length], 0).data), who);
         } else if (k == 2 && pdeeds.length != 0) {
-            PDeed memory d = pdeeds[seed % pdeeds.length];
-            IPayment.RequestBody memory b = IPayment.RequestBody({transactionId: d.txid, inUtxo: 0, utxo: 0});
-            _request(bytes32("Payment"), XSRC, abi.encode(b), who);
+            _request(Deeds.requestPayment(_payment(pdeeds[seed % pdeeds.length], 0).data), who);
         }
     }
 
@@ -1236,9 +1236,7 @@ contract Handler is Test {
         if (xrpl) {
             for (uint256 i = 0; i < xtxs.length; i++) {
                 if (xtxs[i].mandateId != id) continue;
-                IBalanceDecreasingTransaction.RequestBody memory b =
-                    IBalanceDecreasingTransaction.RequestBody({transactionId: xtxs[i].txid, sourceAddressIndicator: m.agentRef});
-                _request(bytes32("BalanceDecreasingTransaction"), XSRC, abi.encode(b), who);
+                _request(Deeds.requestBdt(_bdt(xtxs[i], 0).data), who);
             }
             this.fileOutflow(seed, whoSeed, 0, type(uint256).max, true, salt);
         } else {
@@ -1246,11 +1244,7 @@ contract Handler is Test {
             for (uint256 i = 0; i < tevs.length; i++) {
                 if (tevs[i].mandateId != id || tevs[i].txh == last) continue;
                 last = tevs[i].txh;
-                IEVMTransaction.RequestBody memory b;
-                b.transactionHash = tevs[i].txh;
-                b.requiredConfirmations = 1;
-                b.listEvents = true;
-                _request(bytes32("EVMTransaction"), SRC, abi.encode(b), who);
+                _request(Deeds.requestEvm(_tokenProof(id, tevs[i].txh, 7, 0).data), who);
             }
             this.fileTokens(seed, whoSeed, 0, type(uint256).max, 7, true, salt);
         }

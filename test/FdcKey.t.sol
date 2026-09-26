@@ -41,6 +41,24 @@ contract FdcKeyTest is Test {
         assertEq(_vaultKey(request), Deeds.deedKey(r.attestationType, r.sourceId, abi.encode(r.requestBody)));
     }
 
+    /// Watch pool v2: the judge rebuilds the WHOLE request from the proof — MIC included — and it is
+    /// byte for byte what Flare's verifier returned. The MIC is keccak256(abi.encode(response with
+    /// votingRound = 0, "Flare")); if this ever broke, every sealed stipend would silently go unpaid.
+    function test_evmTransactionClaimKeyFromRequestEqualsClaimKeyFromProof() public view {
+        (bytes memory request, bytes memory response) = _load("fdc-evm-12.json");
+        IEVMTransaction.Response memory r = abi.decode(response, (IEVMTransaction.Response));
+        assertEq(keccak256(Deeds.requestEvm(r)), keccak256(request), "the request, rebuilt");
+        assertEq(Deeds.claimKeyEvm(r), keccak256(request));
+        assertEq(r.votingRound, 1464335, "the caller's struct is left as it was");
+    }
+
+    function test_balanceDecreasingClaimKeyFromRequestEqualsClaimKeyFromProof() public view {
+        (bytes memory request, bytes memory response) = _load("fdc-bdt-13.json");
+        IBalanceDecreasingTransaction.Response memory r = abi.decode(response, (IBalanceDecreasingTransaction.Response));
+        assertEq(keccak256(Deeds.requestBdt(r)), keccak256(request), "the request, rebuilt");
+        assertEq(Deeds.claimKeyBdt(r), keccak256(request));
+    }
+
     /// BalanceDecreasingTransaction, a static request body.
     function test_balanceDecreasingKeyFromRequestEqualsKeyFromProof() public view {
         (bytes memory request, bytes memory response) = _load("fdc-bdt-13.json");

@@ -4,6 +4,7 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {MandateRegistry} from "../src/MandateRegistry.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
+import {Deeds} from "../src/Deeds.sol";
 import {Vault} from "../src/Vault.sol";
 import {JudgeEvm} from "../src/JudgeEvm.sol";
 import {JudgeXrpl} from "../src/JudgeXrpl.sol";
@@ -262,11 +263,18 @@ contract XrplTest is Test {
         (uint256[] memory idx, Receipts.Leaf[] memory ls, bytes32[][] memory paths, IPayment.Proof[] memory pr) = _slice(0, 3);
         address keeper = makeAddr("keeper");
         vm.deal(keeper, 1 ether);
-        for (uint256 i = 0; i < 2; i++) { // the keeper pays for two of the three
-            vm.prank(keeper);
-            bond.requestAttestation{value: 1}(abi.encodePacked(bytes32("Payment"), pr[i].data.sourceId, bytes32(0), abi.encode(pr[i].data.requestBody)));
-        }
         for (uint256 i = 0; i < 3; i++) pr[i].data.attestationType = bytes32("Payment");
+        uint64 lead = bond.commitLead();
+        for (uint256 i = 0; i < 2; i++) { // the keeper seals and pays for two of the three
+            bytes memory req = Deeds.requestPayment(pr[i].data);
+            bytes32 salt = keccak256(abi.encode(i));
+            uint256 t = vm.getBlockTimestamp();
+            vm.warp(t - lead);
+            bond.commitChallenge(bond.commitmentFor(keeper, 0, 0, keccak256(req), salt));
+            vm.warp(t);
+            vm.prank(keeper);
+            bond.requestAttestation{value: 1}(req, salt);
+        }
         vm.prank(challenger);
         xjudge.fileBudgetPayments(mandateId, idx, ls, paths, pr, bytes32(0));
         assertEq(bond.owed(keeper), 0.02 ether);

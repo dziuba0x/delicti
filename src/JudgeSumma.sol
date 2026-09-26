@@ -216,9 +216,7 @@ contract JudgeSumma is DelictiErrors {
             uint256 out = _newErc20(umbrellaId, m.sourceId, txh, rb.events, asset, m.agent);
             if (out == type(uint256).max) continue; // nothing new in this proof
             _count(t, umbrellaId, memberId, txh, out, px, prices[i], rb.timestamp, pr.data.votingRound);
-            if (t.lastUsd != 0 && t.lastUsd >= t.minV) {
-                t.keys[t.paid++] = Deeds.deedKey(pr.data.attestationType, pr.data.sourceId, abi.encode(pr.data.requestBody));
-            }
+            _payKeyEvm(t, pr.data);
         }
         _judge(umbrellaId, u, t, salt, bytes32("EVMTransaction"), m.sourceId);
     }
@@ -253,9 +251,7 @@ contract JudgeSumma is DelictiErrors {
             // Only positive amounts: XRP that came back does not un-spend what went (§6.10).
             uint256 out = rb.spentAmount > 0 ? uint256(rb.spentAmount) : 0;
             _count(t, umbrellaId, memberId, txid, out, px, prices[i], rb.blockTimestamp, pr.data.votingRound);
-            if (t.lastUsd != 0 && t.lastUsd >= t.minV) {
-                t.keys[t.paid++] = Deeds.deedKey(pr.data.attestationType, pr.data.sourceId, abi.encode(pr.data.requestBody));
-            }
+            _payKeyBdt(t, pr.data);
         }
         _judge(umbrellaId, u, t, salt, bytes32("BalanceDecreasingTransaction"), m.sourceId);
     }
@@ -273,6 +269,17 @@ contract JudgeSumma is DelictiErrors {
         uint64 minRound;
         uint256 minV;
         uint256 lastUsd;
+        bool pays;
+    }
+
+    /// @dev The claim key (watch pool v2) of a proof whose deed earns a stipend. Own functions, so the
+    ///      filing loops keep their stack.
+    function _payKeyEvm(Tally memory t, IEVMTransaction.Response calldata d) private pure {
+        if (t.pays && t.lastUsd != 0 && t.lastUsd >= t.minV) t.keys[t.paid++] = Deeds.claimKeyEvm(d);
+    }
+
+    function _payKeyBdt(Tally memory t, IBalanceDecreasingTransaction.Response calldata d) private pure {
+        if (t.pays && t.lastUsd != 0 && t.lastUsd >= t.minV) t.keys[t.paid++] = Deeds.claimKeyBdt(d);
     }
 
     function _tally(uint256 n) internal pure returns (Tally memory t) {
@@ -316,7 +323,10 @@ contract JudgeSumma is DelictiErrors {
         uint64 when,
         uint64 fdcRound
     ) internal {
-        if (t.fresh == 0) t.minV = vault.stipendMinValue(umbrellaId);
+        if (t.fresh == 0) {
+            t.minV = vault.stipendMinValue(umbrellaId);
+            t.pays = vault.paysStipends(umbrellaId);
+        }
         uint32 r = roundOf(when);
         (int32 v, int8 d) = _priceAt(px.feedId, r, price);
         uint256 usd = valueUsd6(out, px.assetDecimals, v, d);

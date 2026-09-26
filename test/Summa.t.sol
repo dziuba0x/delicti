@@ -6,6 +6,8 @@ import {MandateRegistry} from "../src/MandateRegistry.sol";
 import {AnchorLog} from "../src/AnchorLog.sol";
 import {AgentRefs} from "../src/AgentRefs.sol";
 import {SpendMeter} from "../src/SpendMeter.sol";
+import {Deeds} from "../src/Deeds.sol";
+import {HubStub, RegistryStub} from "./WatchPool.t.sol";
 import {Vault} from "../src/Vault.sol";
 import {JudgeEvm} from "../src/JudgeEvm.sol";
 import {JudgeXrpl} from "../src/JudgeXrpl.sol";
@@ -282,6 +284,43 @@ contract SummaTest is Test {
         vm.prank(challenger);
         summa.fileErc20(umbrella, usdtMember, u, up, SALT);
         assertEq(summa.docket(umbrella), 3_498_810);
+    }
+
+    // ------------------------------------------------------------------ watch pool v2 on an umbrella
+
+    function _claim(address who, bytes memory req) internal {
+        uint256 t = vm.getBlockTimestamp();
+        vm.warp(t - COMMIT_LEAD);
+        summaVault.commitChallenge(summaVault.commitmentFor(who, 0, 0, keccak256(req), SALT));
+        vm.warp(t);
+        vm.prank(who);
+        summaVault.requestAttestation{value: 1}(req, SALT);
+    }
+
+    /// The watch pool on an umbrella pays per deed on either rail, to whoever sealed and paid for the
+    /// exact request each filed proof answers — not to whoever files.
+    function test_poolV2_umbrellaStipendsGoToTheSealedClaimant() public {
+        address flareRegistry = 0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019;
+        vm.etch(flareRegistry, address(new RegistryStub()).code);
+        vm.store(flareRegistry, bytes32(0), bytes32(uint256(uint160(address(new HubStub())))));
+        address watcher = makeAddr("watcher");
+        vm.deal(watcher, 1 ether);
+        vm.startPrank(principal);
+        summaVault.setWatchTerms(umbrella, 0.01 ether, 0);
+        summaVault.fundWatch{value: 1 ether}(umbrella);
+        vm.stopPrank();
+        vm.warp(t0 + 1 hours);
+        (IBalanceDecreasingTransaction.Proof[] memory x, FtsoV2Interface.FeedDataWithProof[] memory xp) = _xrpSalami(2, 1_000_000, 0);
+        (IEVMTransaction.Proof[] memory u, FtsoV2Interface.FeedDataWithProof[] memory up) = _usdtSalami(1, 1_000_000, 10, 100_000);
+        _claim(watcher, Deeds.requestBdt(x[0].data));
+        _claim(watcher, Deeds.requestBdt(x[1].data));
+        _claim(watcher, Deeds.requestEvm(u[0].data));
+        vm.prank(stranger);
+        summa.fileXrp(umbrella, xrpMember, x, xp, SALT);
+        vm.prank(stranger);
+        summa.fileErc20(umbrella, usdtMember, u, up, SALT);
+        assertEq(summaVault.owed(watcher), 0.03 ether);
+        assertEq(summaVault.owed(stranger), 0);
     }
 
     // ------------------------------------------------------------------ S.12.1 no double count

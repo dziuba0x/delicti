@@ -378,21 +378,31 @@ contract Vault is DelictiErrors {
     // raises `perDeed` to the whole pool, a sock puppet files one ordinary deed. The §8.3 answer
     // again: a party that wants a mandate watched and is not its principal posts bond.
     //
-    // WHO IS PAID: whoever PAID FOR THE ATTESTATION, not whoever files it. Recordings below the
-    // budget need no commitment, and an FDC proof works for whoever submits it, so in v0.14 a
-    // copier could lift a watcher's proofs from the mempool (or from the public DA layer, using the
-    // request the watcher paid FdcHub for), file first, and take every stipend while the watcher's
-    // own filing reverted `NothingNew`. Since v0.15 attestations for stipend-paying deeds are
-    // requested THROUGH this Vault (`requestAttestation`), which forwards the fee to FdcHub and
-    // records the first payer of each request under a key the judge can rebuild from the proof:
+    // WHO IS PAID: whoever SEALED AND PAID FOR THE EXACT ATTESTATION that the filed proof answers
+    // — not whoever files it (v0.14 paid the filer, and a copier lifted the filings), and, since
+    // v0.16, not merely whoever paid first. v0.15 paid the first payer of a request under
+    // `deedKey`, a key that leaves the MIC out; that left two holes (claude/58 H1, PoC in
+    // test/Seal.t.sol): a copier that outbids a watcher's pending request in the priority gas
+    // auction Flare orders transactions by is recorded first, and — no mempool needed — a request
+    // with a made-up MIC, which no data provider will ever attest, claims the same key the valid
+    // request will. Both took the stipend for work they did not do.
     //
-    //   deedKey = keccak256(abi.encode(attestationType, sourceId, keccak256(requestBody bytes)))
+    // Watch pool v2 (prior tempore, potior iure) closes both with the machinery the challenges
+    // already use (§6.7):
     //
-    // (a request is attestationType ‖ sourceId ‖ messageIntegrityCode ‖ abi.encode(requestBody)
-    // — measured against the verifier on 2026-09-24, test/FdcKey.t.sol). Filing becomes a public
-    // service: a copier pays the gas to deliver someone else's stipend. And the key is claimed the
-    // moment a watcher pays for it, so a second watcher can read `requesterOf` before buying the
-    // same attestation — the race §10 described, closed without a separate claim step.
+    //   claimKey = keccak256(request)       the exact bytes, type ‖ source ‖ MIC ‖ abi.encode(body)
+    //   seal     = commitmentFor(watcher, 0, KIND_CLAIM, claimKey, salt), committed with
+    //              `commitChallenge` at least `commitLead` (and at most `COMMIT_TTL`) before the
+    //              watcher pays for the request through `requestAttestation(request, salt)`
+    //
+    // The judge rebuilds `claimKey` from the proof it verifies: the FDC's MIC is
+    // keccak256(abi.encode(response with votingRound = 0, "Flare")), measured bit for bit against
+    // the verifier's own requests (test/FdcKey.t.sol), so only the request that produced the proof
+    // can hold its stipend. A copier learns the key when the sealed request reaches the mempool —
+    // `commitLead` too late to hold a seal of its own; a made-up MIC is a different key that no
+    // proof will ever name. The first sealed payer holds the key; a second sealed payer of the same
+    // bytes is refused `AlreadyClaimed` and keeps its fee, and the holder may re-send its own
+    // request when a round fails to attest it.
     //
     // WHAT IS PAID: `perDeed` for every NEW deed that moved positive value of at least `minValue`,
     // on any docket (§6.8, §6.10, §6.11), crossing or not. Anyone can make a token emit
@@ -413,13 +423,16 @@ contract Vault is DelictiErrors {
     mapping(uint256 => uint256) public stipendMinValue;
     mapping(uint256 => bool) public watchTermsSet;
     mapping(uint256 => bool) public watchClosed;
-    /// @notice deedKey => the first address that paid FdcHub for that attestation through this Vault
-    mapping(bytes32 => address) public requesterOf;
+    /// @notice The kind a sealed claim on an attestation is committed under (watch pool v2). No judge
+    ///         passes verdicts of kind 0, so a claim and a challenge can never spend each other's seal.
+    uint8 public constant KIND_CLAIM = 0;
+    /// @notice claimKey => the first address that sealed that exact request and paid FdcHub for it here
+    mapping(bytes32 => address) public claimantOf;
 
     event WatchTerms(uint256 indexed mandateId, uint256 perDeed, uint256 minValue);
     event WatchFunded(uint256 indexed mandateId, uint256 amount, uint256 pool);
-    event AttestationRequested(bytes32 indexed deedKey, address indexed requester, bytes32 attestationType, uint256 fee);
-    event StipendPaid(uint256 indexed mandateId, bytes32 indexed deedKey, address indexed requester, uint256 paid);
+    event AttestationClaimed(bytes32 indexed claimKey, address indexed claimant, bytes32 attestationType, uint256 fee);
+    event StipendPaid(uint256 indexed mandateId, bytes32 indexed claimKey, address indexed claimant, uint256 paid);
     event WatchRefunded(uint256 indexed mandateId, address to, uint256 amount);
 
     /// @notice The principal's offer to watchers. Once set, it can only improve for them: the
@@ -449,36 +462,62 @@ contract Vault is DelictiErrors {
         emit WatchFunded(mandateId, msg.value, watchPool[mandateId]);
     }
 
-    /// @notice The key a judge rebuilds from a proof: type, source, and the hash of the request body.
+    /// @notice The v1.0 identity of a deed's request: type, source, and the hash of the request body.
+    ///         Kept for readers of earlier Vaults; in watch pool v2 no payment is keyed by it (see `claimKeyOf`).
     function deedKey(bytes32 attestationType, bytes32 sourceId, bytes32 requestBodyHash) public pure returns (bytes32) {
         return keccak256(abi.encode(attestationType, sourceId, requestBodyHash));
     }
 
-    /// @notice Request an FDC attestation through the Vault: the fee (`msg.value`) is forwarded to
-    ///         FdcHub unchanged, and the first payer of this request is recorded as the one a
-    ///         stipend for the deed it proves will be paid to. Holds nothing.
-    function requestAttestation(bytes calldata request) external payable returns (bytes32 key) {
+    /// @notice The key a watcher seals and a judge rebuilds: the hash of the exact request bytes.
+    function claimKeyOf(bytes calldata request) external pure returns (bytes32) {
+        return keccak256(request);
+    }
+
+    /// @notice Pay for an attestation you sealed: the fee (`msg.value`) goes to FdcHub unchanged, and
+    ///         you hold its stipend if you are the first to seal and pay for these exact bytes. The
+    ///         seal must be at least `commitLead` old and at most `COMMIT_TTL`. A later sealed payer
+    ///         of the same bytes is refused and keeps its fee; the holder may re-send its own request
+    ///         (a round that failed to attest it) with any salt. Holds nothing.
+    function requestAttestation(bytes calldata request, bytes32 salt) external payable returns (bytes32 key) {
         if (request.length < 128) revert BadRequest();
-        key = deedKey(bytes32(request[0:32]), bytes32(request[32:64]), keccak256(request[96:]));
-        if (requesterOf[key] == address(0)) requesterOf[key] = msg.sender;
+        key = keccak256(request);
+        address holder = claimantOf[key];
+        if (holder == address(0)) {
+            bytes32 c = commitmentFor(msg.sender, 0, KIND_CLAIM, key, salt);
+            uint64 at = committedAt[c];
+            if (at == 0) revert NoCommitment();
+            if (uint256(at) + commitLead > block.timestamp) revert CommittedTooLate();
+            if (uint256(at) + COMMIT_TTL < block.timestamp) revert CommitmentStale();
+            delete committedAt[c];
+            claimantOf[key] = msg.sender;
+            emit CommitmentConsumed(c, 0, KIND_CLAIM, 0);
+        } else if (holder != msg.sender) {
+            revert AlreadyClaimed();
+        }
         (bool ok, bytes memory r) = FLARE_REGISTRY.staticcall(
             abi.encodeCall(IFlareContractRegistry.getContractAddressByName, ("FdcHub"))
         );
         if (!ok || r.length != 32) revert BadRequest();
         IFdcHubLike(address(uint160(uint256(bytes32(r))))).requestAttestation{value: msg.value}(request);
-        emit AttestationRequested(key, msg.sender, bytes32(request[0:32]), msg.value);
+        emit AttestationClaimed(key, msg.sender, bytes32(request[0:32]), msg.value);
     }
 
-    /// @notice A judge filed new, value-moving deeds, one per key: pay each deed's stipend to the
-    ///         address that paid for its attestation here, as far as the pool goes. A deed nobody
-    ///         requested through the Vault earns nothing. Never reverts on an empty or closed pool
-    ///         — a filing must not fail because nobody paid for it.
+    /// @notice Whether a filing on this mandate can pay stipends right now. Judges ask before they
+    ///         rebuild claim keys, so a mandate without a pool pays no gas for them.
+    function paysStipends(uint256 mandateId) external view returns (bool) {
+        return stipendPerDeed[mandateId] != 0 && watchPool[mandateId] != 0 && !watchClosed[mandateId];
+    }
+
+    /// @notice A judge filed new, value-moving deeds, one claim key each: pay each deed's stipend to
+    ///         whoever sealed and paid for that exact request here, as far as the pool goes. A deed
+    ///         whose attestation nobody claimed here earns nothing. Never reverts on an empty or
+    ///         closed pool — a filing must not fail because nobody paid for it.
     function stipend(uint256 mandateId, bytes32[] calldata keys) external onlyJudge returns (uint256 total) {
         uint256 rate = stipendPerDeed[mandateId];
         uint256 pool = watchPool[mandateId];
         if (rate == 0 || pool == 0 || watchClosed[mandateId]) return 0;
         for (uint256 i = 0; i < keys.length && pool != 0; i++) {
-            address to = requesterOf[keys[i]];
+            address to = claimantOf[keys[i]];
             if (to == address(0)) continue;
             uint256 paid = rate > pool ? pool : rate;
             pool -= paid;

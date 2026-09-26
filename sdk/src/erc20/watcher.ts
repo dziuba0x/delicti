@@ -3,6 +3,7 @@ import { judgeEvmAbi, mandateRegistryAbi, vaultAbi } from "../abi.js";
 import { Kind } from "../commit.js";
 import { Fdc, type FdcProof } from "../fdc.js";
 import { commitAndWait } from "../lead.js";
+import { payClaims, sealClaims, type ClaimPlan } from "../seal.js";
 import { deploymentOf, type DelictiNetwork, type Deployment } from "../networks.js";
 import type { LogSource, OutflowLog } from "./logs.js";
 import { planErc20, type Plan, type TxFiling } from "./planner.js";
@@ -121,30 +122,39 @@ export class Erc20OutflowWatcher {
     return { plan, txs, docket: after.docket, bond: after.bond, slashed: after.slashed };
   }
 
-  /** Commit first — before any attestation makes the case public — then wait out the lead. */
+  /**
+   * Commit first — before any attestation makes the case public — then wait out the lead. On a v0.16
+   * Vault the stipend claims are sealed before the challenge is committed, so one wait covers both.
+   */
   private async convict(filings: TxFiling[]): Promise<Hex[]> {
     const { publicClient, wallet, mandateId, fdc } = this.o;
+    const requests = await this.requests(filings);
+    const claims = await sealClaims({ publicClient, wallet, dep: this.dep!, requests, say: (m) => this.say(m) });
     const { salt, commitTx } = await commitAndWait({
       publicClient, wallet, fdc, vault: this.dep!.vault, mandateId, kind: Kind.ERC20_OUTFLOW,
       ids: filings.map((f) => f.txHash), say: (m) => this.say(m),
     });
-    return [commitTx, await this.file(filings, salt)];
+    return [commitTx, await this.file(filings, salt, requests, claims)];
   }
 
-  private async prove(filings: TxFiling[]): Promise<FdcProof[]> {
-    const { fdc, wallet } = this.o;
-    const reqs: { req: Hex; round: bigint }[] = [];
-    for (const f of filings) {
-      const req = await fdc.prepareEvmTransaction(f.txHash, f.logIndices);
-      reqs.push({ req, round: await fdc.request(wallet, req, this.dep!.features.includes("paidRequests") ? this.dep!.vault : undefined) });
-      this.say(`attestation requested for ${f.txHash} (logs ${f.logIndices.join(",")})`);
-    }
-    return Promise.all(reqs.map(({ req, round }) => fdc.proof(round, req)));
+  private async requests(filings: TxFiling[]): Promise<Hex[]> {
+    const out: Hex[] = [];
+    for (const f of filings) out.push(await this.o.fdc.prepareEvmTransaction(f.txHash, f.logIndices));
+    return out;
   }
 
-  private async file(filings: TxFiling[], salt: Hex): Promise<Hex> {
+  private async prove(filings: TxFiling[], requests?: Hex[], claims?: ClaimPlan): Promise<FdcProof[]> {
+    const { fdc, wallet, publicClient } = this.o;
+    const reqs = requests ?? (await this.requests(filings));
+    const plan = claims ?? (await sealClaims({ publicClient, wallet, dep: this.dep!, requests: reqs, say: (m) => this.say(m) }));
+    const rounds = await payClaims({ publicClient, wallet, fdc, plan, say: (m) => this.say(m) });
+    filings.forEach((f, i) => this.say(`attestation requested for ${f.txHash} (logs ${f.logIndices.join(",")}; ${plan.entries[i].route})`));
+    return Promise.all(reqs.map((req, i) => fdc.proof(rounds[i], req)));
+  }
+
+  private async file(filings: TxFiling[], salt: Hex, requests?: Hex[], claims?: ClaimPlan): Promise<Hex> {
     const { network: n, wallet, mandateId: id } = this.o;
-    const proofs = await this.prove(filings);
+    const proofs = await this.prove(filings, requests, claims);
     const hash = await wallet.writeContract({ address: this.dep!.judgeEvm, abi: judgeEvmAbi, functionName: "fileErc20Outflow", args: [id, proofs as any, salt] });
     await this.mined(hash, "fileErc20Outflow");
     this.say(`filed: ${n.explorerUrl}/tx/${hash}`);

@@ -107,14 +107,22 @@ Each row is a named test in `test/WatchPool.t.sol` (`test_poolV2_*`). `test/Summ
 - **Umbrella:** `test/Summa.t.sol` `test_poolV2_umbrellaStipendsGoToTheSealedClaimant`, covering both rails.
 - **Books:** the invariant handler rebuilds each request from the very proof it will file, seals it `commitLead` in the past, and pays. The deep-state canary still reaches paid stipends. 15 invariants hold.
 
-## P.8 Deployment (not done)
+## P.8 Deployment (prepared, not yet run)
 
-**Contracts:**
-- A new consequence layer over the v0.10 core: `Vault` + `JudgeEvm` + `JudgeXrpl` (+ `BondLens`).
-- For SUMMA: `VaultSumma` + `JudgeSumma`, plus `SummaMeter`, `MandateFacilitator` and `SummaLens`, which point at `JudgeSumma` immutably.
+**Contracts:** `script/DeployV016.s.sol` deploys, in one broadcast over the live core:
+- a new consequence layer: `Vault` + `JudgeEvm` + `JudgeXrpl` (+ `BondLens`);
+- for SUMMA: `VaultSumma` + `JudgeSumma` (the v0.15 price map, row for row), plus `SummaMeter`, `MandateFacilitator` and `SummaLens`, which point at `JudgeSumma` immutably.
+
+It was rehearsed on a Coston2 fork held at Coston2's fees: 19.97 M gas, about 13 C2FLR at 650 gwei.
 
 **SDK:**
-- The seal flow: `commitChallenge(commitmentFor(watcher, 0, 0, keccak256(request), salt))`, wait `commitLead`, then `requestAttestation(request, salt)`.
-- `claimantOf` replaces `requesterOf`.
-- A new `sealedClaims` feature in `networks.ts`.
-- The SDK's generated ABIs must not be regenerated before then, or the live v0.15 sentinel breaks.
+- **The seal flow** (`sdk/src/seal.ts`): `commitChallenge(commitmentFor(watcher, 0, 0, keccak256(request), salt))`, wait `commitLead`, then `requestAttestation(request, salt)`.
+  - The watchers seal before a challenge's own commitment, so one wait covers both.
+  - A request someone else holds goes straight to FdcHub.
+- **`claimantOf` replaces `requesterOf`.**
+- **A new `sealedClaims` feature** in `networks.ts`.
+- **ABIs:** `abi.ts` is regenerated from the v0.16 build. Mandates in v0.15 Vaults keep the unsealed call through the frozen `abi-v015.ts`, so the live v0.15 sentinel does not break.
+- **Checked** against the v0.16 bytecode on the fork:
+  - paying too early is refused (`CommittedTooLate`);
+  - a copier's seal is refused (`AlreadyClaimed`);
+  - the holder re-sends without a new seal.

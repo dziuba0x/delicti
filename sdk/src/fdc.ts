@@ -12,6 +12,7 @@ import {
   type WalletClient,
 } from "viem";
 import { agentRefsAbi, judgeEvmAbi, judgeXrplAbi, vaultAbi } from "./abi.js";
+import { vaultV015Abi } from "./abi-v015.js";
 import type { DelictiNetwork } from "./networks.js";
 
 /** Where the FDC's off-chain halves live. Both are Flare's services; both need an API key. */
@@ -146,16 +147,21 @@ export class Fdc {
 
   /**
    * Pay the fee and submit the request to FdcHub. Returns the voting round it landed in.
-   * With `viaVault` (v0.15+), the request goes through `Vault.requestAttestation`, which forwards the
-   * fee to FdcHub and records the payer as the one any watch-pool stipend for this deed is paid to
-   * (SPEC §8.4) — whoever later files the proof.
+   * Through a Vault, the fee is forwarded to FdcHub unchanged and the Vault records who a
+   * watch-pool stipend for this deed is paid to (SPEC §8.4), whoever later files the proof:
+   * - `{ vault, salt }` (v0.16, watch pool v2): the request must have been sealed at least
+   *   `commitLead` earlier (`seal.ts`); the first sealed payer holds the stipend;
+   * - a bare Vault address (v0.15, watch pool v1): the first payer, unsealed.
    */
-  async request(wallet: WalletClient<Transport, Chain, Account>, abiEncodedRequest: Hex, viaVault?: Address): Promise<bigint> {
+  async request(wallet: WalletClient<Transport, Chain, Account>, abiEncodedRequest: Hex, via?: Address | { vault: Address; salt: Hex }): Promise<bigint> {
     const [hub, feeCfg, clock] = await Promise.all([this.named("FdcHub"), this.named("FdcRequestFeeConfigurations"), this.clock()]);
     const fee = await this.publicClient.readContract({ address: feeCfg, abi: feeConfigAbi, functionName: "getRequestFee", args: [abiEncodedRequest] });
-    const hash = viaVault
-      ? await wallet.writeContract({ address: viaVault, abi: vaultAbi, functionName: "requestAttestation", args: [abiEncodedRequest], value: fee })
-      : await wallet.writeContract({ address: hub, abi: fdcHubAbi, functionName: "requestAttestation", args: [abiEncodedRequest], value: fee });
+    const hash =
+      via === undefined
+        ? await wallet.writeContract({ address: hub, abi: fdcHubAbi, functionName: "requestAttestation", args: [abiEncodedRequest], value: fee })
+        : typeof via === "string"
+          ? await wallet.writeContract({ address: via, abi: vaultV015Abi, functionName: "requestAttestation", args: [abiEncodedRequest], value: fee })
+          : await wallet.writeContract({ address: via.vault, abi: vaultAbi, functionName: "requestAttestation", args: [abiEncodedRequest, via.salt], value: fee });
     const rc = await this.publicClient.waitForTransactionReceipt({ hash });
     if (rc.status !== "success") throw new Error(`requestAttestation reverted: ${hash}`);
     const block = await this.publicClient.getBlock({ blockNumber: rc.blockNumber });

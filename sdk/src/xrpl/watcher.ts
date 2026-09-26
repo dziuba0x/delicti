@@ -4,6 +4,7 @@ import { Kind } from "../commit.js";
 import { explorerLogs } from "../explorer.js";
 import type { Fdc, FdcProof } from "../fdc.js";
 import { commitAndWait } from "../lead.js";
+import { payClaims, sealClaims, type ClaimPlan } from "../seal.js";
 import { deploymentOf, type DelictiNetwork, type Deployment } from "../networks.js";
 import { XrplHistory, xrplAddressHash, type XrplMove } from "./history.js";
 import { planXrpl, type XrplPlan } from "./planner.js";
@@ -115,11 +116,14 @@ export class XrplOutflowWatcher {
     if (plan.action === "record") {
       txs = [await this.file(plan.txIds, s.m.agentRef, `0x${"0".repeat(64)}` as Hex)];
     } else {
+      // On a v0.16 Vault the stipend claims are sealed before the challenge is committed: one wait covers both.
+      const requests = await this.requests(plan.txIds, s.m.agentRef);
+      const claims = await sealClaims({ publicClient: this.o.publicClient, wallet: this.o.wallet, dep: this.dep!, requests, say: (m) => this.say(m) });
       const { salt, commitTx } = await commitAndWait({
         publicClient: this.o.publicClient, wallet: this.o.wallet, fdc: this.o.fdc, vault: this.dep!.vault,
         mandateId: this.o.mandateId, kind: Kind.XRP_OUTFLOW, ids: plan.txIds, say: (m) => this.say(m),
       });
-      txs = [commitTx, await this.file(plan.txIds, s.m.agentRef, salt)];
+      txs = [commitTx, await this.file(plan.txIds, s.m.agentRef, salt, requests, claims)];
     }
     const after = await this.state();
     this.say(`docket ${after.docket}, bond ${after.bond}, slashed ${after.slashed}`);
@@ -134,15 +138,19 @@ export class XrplOutflowWatcher {
     return new Set(moves.filter((_, i) => flags[i]).map((mv) => mv.txId.toLowerCase()));
   }
 
-  private async file(txIds: Hex[], agentRef: Hex, salt: Hex): Promise<Hex> {
+  private async requests(txIds: Hex[], agentRef: Hex): Promise<Hex[]> {
+    const out: Hex[] = [];
+    for (const txId of txIds) out.push(await this.o.fdc.prepareBalanceDecrease(txId, agentRef));
+    return out;
+  }
+
+  private async file(txIds: Hex[], agentRef: Hex, salt: Hex, requests?: Hex[], claims?: ClaimPlan): Promise<Hex> {
     const { fdc, wallet, mandateId: id, publicClient: pc, network: n } = this.o;
-    const reqs: { req: Hex; round: bigint }[] = [];
-    for (const txId of txIds) {
-      const req = await fdc.prepareBalanceDecrease(txId, agentRef);
-      reqs.push({ req, round: await fdc.request(wallet, req, this.dep!.features.includes("paidRequests") ? this.dep!.vault : undefined) });
-      this.say(`BalanceDecreasingTransaction requested for ${txId}`);
-    }
-    const proofs: FdcProof[] = await Promise.all(reqs.map(({ req, round }) => fdc.proof(round, req, "BalanceDecreasingTransaction")));
+    const reqs = requests ?? (await this.requests(txIds, agentRef));
+    const plan = claims ?? (await sealClaims({ publicClient: pc, wallet, dep: this.dep!, requests: reqs, say: (m) => this.say(m) }));
+    const rounds = await payClaims({ publicClient: pc, wallet, fdc, plan, say: (m) => this.say(m) });
+    txIds.forEach((txId, i) => this.say(`BalanceDecreasingTransaction requested for ${txId} (${plan.entries[i].route})`));
+    const proofs: FdcProof[] = await Promise.all(reqs.map((req, i) => fdc.proof(rounds[i], req, "BalanceDecreasingTransaction")));
     const hash = await wallet.writeContract({ address: this.dep!.judgeXrpl, abi: judgeXrplAbi, functionName: "fileXrpOutflow", args: [id, proofs as any, salt] });
     const rc = await pc.waitForTransactionReceipt({ hash });
     if (rc.status !== "success") throw new Error(`fileXrpOutflow reverted: ${hash}`);

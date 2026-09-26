@@ -1,7 +1,9 @@
 import type { Address } from "viem";
 
-/** What a consequence layer can do; older Vaults' judges lack the later dockets. */
-export type Feature = "erc20Docket" | "xrpDocket" | "paymentDocket" | "watchPool" | "paidRequests";
+/** What a consequence layer can do; older Vaults' judges lack the later dockets.
+ *  `paidRequests` (v0.15): stipends go to whoever paid for the attestation through the Vault.
+ *  `sealedClaims` (v0.16, watch pool v2): only to whoever sealed that exact request `commitLead` before paying for it. */
+export type Feature = "erc20Docket" | "xrpDocket" | "paymentDocket" | "watchPool" | "paidRequests" | "sealedClaims";
 
 export interface Deployment {
   version: string;

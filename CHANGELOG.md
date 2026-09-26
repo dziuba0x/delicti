@@ -2,7 +2,22 @@
 
 ## v0.16.0 — unreleased — watch pool v2 (the seal) and amendment v1.2 (Conatus)
 
-Not deployed. v0.15 mandates keep their rules for ever; SDK support lands with the deployment.
+Not deployed yet: the deploy script and the SDK support are ready (below). v0.15 mandates keep their rules for ever.
+
+### Deployment and SDK (prepared 2026-09-27)
+
+- `script/DeployV016.s.sol`: the whole layer over the live core in one broadcast. It deploys `JudgeEvm`, `JudgeXrpl`, `Vault` and `BondLens`; then `JudgeSumma` and `VaultSumma`, with the v0.15 price map row for row (read back from the live `JudgeSumma`); then `SummaMeter` v1.2, `MandateFacilitator` v1.2 and `SummaLens`. The registry, anchor log, spend meter and `AgentRefs` are reused. It writes `deployments/<network>-v0.16.json`.
+  - Rehearsed on a Coston2 fork held at Coston2's fees (`lancea/scripts/coston2-fork-proxy.mjs`): 19.97 M gas, 12.98 C2FLR at 650 gwei.
+  - With forge's own fee guess the same deploy paid 1500 gwei, 29.96 C2FLR. The fees are now passed explicitly.
+- SDK, watch pool v2:
+  - `seal.ts`: `claimKeyOf`, `sealOf`, `sealClaims`, `payClaims`, `requestAttestations`, `KIND_CLAIM`.
+  - `Fdc.request` takes `{ vault, salt }` (v0.16) or a bare Vault (v0.15, through the frozen `abi-v015.ts`).
+  - Both watchers seal their requests **before** a challenge's own commitment, so one `commitLead` wait covers both.
+  - A request someone else already holds goes straight to FdcHub: the proof is the same, the stipend is theirs.
+  - New feature flag: `sealedClaims`.
+  - 5 new offline tests, 33 in all.
+  - Run against the real v0.16 bytecode on the fork: paying before `commitLead` is refused `CommittedTooLate`; after it, `claimantOf` is the watcher; a copier's own seal is refused `AlreadyClaimed`; the holder re-sends without a new seal.
+- `abi.ts` regenerated from the v0.16 build.
 
 ### Watch pool v2: the seal
 

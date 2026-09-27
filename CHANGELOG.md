@@ -1,5 +1,23 @@
 # Changelog
 
+## SDK 0.16.1 — 2026-09-27 — SUMMA helpers, and every mandate read from its own Vault
+
+- **Fixed, a regression in 0.16.0.** `status`, `post`, `withdraw` and the watch-pool calls used the network's *current* Vault and judges. A v0.15 mandate read as unbonded, with empty dockets. They now follow the mandate's own `Terms.bond` (`vaultOf`), and `status` reports which version it is.
+- **`summa.ts`:**
+  - `Summa` (`link`, `declareEffector`, `setTripwire`, `rearm`, `strike`, `wouldExceed`, `settle`, `recordAttempt`, `attemptedAt`, `attempts`, `state`);
+  - `signPayment`, the agent's EIP-3009 authorisation to the facilitator;
+  - `payNonce`, pinned to the live facilitator;
+  - `summaStackOf`, `SUMMA_SOURCE`, `USD6_ASSET`.
+- **`status`** reads an umbrella's tally and tripwire. Meters from before v1.2 show the tally only.
+- **Other API changes:** `NewMandate.bond` (umbrellas name VaultSumma); `claim(from, vault?)`.
+- **`examples/seal-live.ts`:** watch pool v2 live. `examples/copier-demo.ts` now names its v0.15 Vault explicitly.
+- **Checked against the v0.16 bytecode on a Coston2 fork:**
+  - two payments settled;
+  - $5 refused `WouldExceed`, then recorded as an attempt, and the umbrella tripped;
+  - a later payment refused `Tripped`; the same attempt refused `Recorded`;
+  - re-armed, a payment settled again.
+- **Tests:** 39 SDK (6 new).
+
 ## v0.16.0 — 2026-09-27 — watch pool v2 (the seal) and amendment v1.2 (Conatus)
 
 Deployed on Coston2 on 2026-09-27 (docs/DEPLOYMENTS.md, `deployments/coston2-v0.16.json`).

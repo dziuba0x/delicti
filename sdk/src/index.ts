@@ -9,6 +9,7 @@ export * from "./erc20/watcher.js";
 export * from "./explorer.js";
 export * from "./lead.js";
 export * from "./seal.js";
+export * from "./summa.js";
 export * from "./abi-v015.js";
 export * from "./xrpl/history.js";
 export * from "./xrpl/planner.js";

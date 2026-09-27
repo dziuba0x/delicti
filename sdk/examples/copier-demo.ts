@@ -1,5 +1,6 @@
 /**
- * Why a copier earns nothing (v0.15, SPEC §8.4) — live.
+ * Why a copier earns nothing (v0.15, SPEC §8.4) — live. Kept as the record of watch pool v1: it runs
+ * against the v0.15 Vault and judge (mandate #14). The v0.16 rule, the seal, is shown by seal-live.ts.
  *
  *   tsx examples/copier-demo.ts <mandateId>
  *
@@ -12,7 +13,7 @@
  */
 import { createPublicClient, createWalletClient, defineChain, http, parseEther, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { coston2, Fdc, XrplHistory, XrplOutflowWatcher, judgeXrplAbi, vaultAbi } from "../src/index.js";
+import { coston2, deploymentOf, Fdc, XrplHistory, XrplOutflowWatcher, judgeXrplAbi, vaultAbi } from "../src/index.js";
 
 const id = BigInt(process.argv[2] ?? "0");
 const net = { ...coston2, rpcUrl: process.env.COSTON2_RPC ?? coston2.rpcUrl };
@@ -22,7 +23,8 @@ const watcher = createWalletClient({ account: privateKeyToAccount(process.env.PR
 const copier = createWalletClient({ account: privateKeyToAccount((process.env.COPIER_KEY as Hex) ?? generatePrivateKey()), chain, transport: http(net.rpcUrl) });
 const fdc = new Fdc(net, { verifierUrl: process.env.VERIFIER_URL!, daUrl: process.env.DA_URL!, apiKey: process.env.VERIFIER_API_KEY! }, pc as any);
 const history = new XrplHistory(net.xrpl.rpcUrl, process.env.VERIFIER_URL!, process.env.VERIFIER_API_KEY!);
-const vault = net.contracts.vault;
+const v015 = deploymentOf(net, "0xB15f5041F4aA2bc212832dfb0e59CD6c0e9a24aF")!; // watch pool v1
+const vault = v015.vault;
 const owed = (a: Hex) => pc.readContract({ address: vault, abi: vaultAbi, functionName: "owed", args: [a] });
 
 const w = new XrplOutflowWatcher({ network: net, publicClient: pc as any, wallet: watcher, fdc, history, mandateId: id });
@@ -43,7 +45,7 @@ if ((await pc.getBalance({ address: copier.account.address })) < parseEther("0.3
   await pc.waitForTransactionReceipt({ hash: await watcher.sendTransaction({ to: copier.account.address, value: parseEther("0.5") }) });
 }
 const [w0, c0] = await Promise.all([owed(watcher.account.address), owed(copier.account.address)]);
-const hash = await copier.writeContract({ address: net.contracts.judgeXrpl, abi: judgeXrplAbi, functionName: "fileXrpOutflow", args: [id, proofs as any, `0x${"0".repeat(64)}`] });
+const hash = await copier.writeContract({ address: v015.judgeXrpl, abi: judgeXrplAbi, functionName: "fileXrpOutflow", args: [id, proofs as any, `0x${"0".repeat(64)}`] });
 await pc.waitForTransactionReceipt({ hash });
 const [w1, c1] = await Promise.all([owed(watcher.account.address), owed(copier.account.address)]);
 console.log(`copier ${copier.account.address} filed the watcher's proofs first: ${net.explorerUrl}/tx/${hash}`);

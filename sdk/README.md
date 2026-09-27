@@ -139,6 +139,31 @@ import { requestAttestations } from "@delicti-protocol/sdk";
 const { plan, rounds } = await requestAttestations({ fdc, publicClient, wallet, dep, requests });
 ```
 
+`examples/seal-live.ts` runs it live on Coston2:
+- a watcher seals and is paid;
+- an attacker's made-up MIC holds a key no proof names;
+- a mempool copier is refused on-chain, with and without a fresh seal.
+
+## SUMMA: one dollar budget, the tripwire, the attempt register (amendments v1.1, v1.2)
+
+```ts
+import { Summa, signPayment, USD6_ASSET } from "@delicti-protocol/sdk";
+const summa = Summa.of(coston2, publicClient);                       // the v0.16 stack; Summa.of(net, pc, vaultSumma) for an older one
+const { id: umbrella } = await delicti.commitMandate(principal, { agent, terms: "at most $40", budget: 40_000_000n,
+  validFrom, validUntil, source: "SUMMA", assetKey: USD6_ASSET, bond: coston2.summa!.vault });
+await summa.link(agent, umbrella, member);                            // the umbrella's agent puts a rail under it
+await summa.declareEffector(principal, umbrella, guardOrFacilitator);
+await summa.setTripwire(principal, umbrella, 1n);                     // one recorded attempt stops every rail
+const auth = await signPayment(agent, { token, domain: { name: "Mock USDT0", version: "1" }, facilitator: coston2.summa!.facilitator,
+  seller, umbrellaId: umbrella, memberId: member, value, validBefore });
+await summa.settle(anyone, { umbrellaId: umbrella, memberId: member, seller, auth });       // or, refused by the brake:
+await summa.recordAttempt(anyone, { umbrellaId: umbrella, memberId: member, seller, auth });
+await summa.state(umbrella);   // { tallyUsd6, tripwire, strikes, tripped }
+await summa.rearm(principal, umbrella);
+```
+
+`delicti status <id>` reads any mandate from the Vault it names, whichever version that is. For an umbrella, it also reads its meter.
+
 ## Tests
 
 ```sh

@@ -14,7 +14,8 @@ import {
 } from "viem";
 import { agentRefsAbi, judgeEvmAbi, judgeXrplAbi, mandateRegistryAbi, vaultAbi } from "./abi.js";
 import { pad32, type Fdc } from "./fdc.js";
-import type { DelictiNetwork } from "./networks.js";
+import { deploymentOf, type DelictiNetwork } from "./networks.js";
+import { SUMMA_SOURCE, Summa, summaStackOf, type UmbrellaState } from "./summa.js";
 
 type Wallet = WalletClient<Transport, Chain, Account>;
 
@@ -37,6 +38,8 @@ export interface NewMandate {
   /** XRPL account hash for XRPL mandates; zero on EVM. */
   agentRef?: Hex;
   parentId?: bigint;
+  /** The Vault that holds the bond. Defaults to this network's current Vault; a SUMMA umbrella names `network.summa.vault`. */
+  bond?: Address;
 }
 
 /**
@@ -53,7 +56,13 @@ export class Delicti {
     return rc;
   }
 
-  /** Principal: commit a mandate naming this network's Vault. Returns its id. */
+  /** The Vault a mandate is bonded in: its own `Terms.bond`, whichever version that is. */
+  async vaultOf(id: bigint): Promise<Address> {
+    const m = (await this.publicClient.readContract({ address: this.network.contracts.registry, abi: mandateRegistryAbi, functionName: "get", args: [id] })) as { bond: Address };
+    return m.bond;
+  }
+
+  /** Principal: commit a mandate naming this network's Vault (or `n.bond`). Returns its id. */
   async commitMandate(principal: Wallet, n: NewMandate): Promise<{ id: bigint; tx: Hex }> {
     const hash = await principal.writeContract({
       address: this.network.contracts.registry,
@@ -71,7 +80,7 @@ export class Delicti {
           sourceId: pad32(n.source ?? this.network.fdcSource),
           assetKey: n.assetKey ?? (n.token ? pad(n.token, { size: 32 }) : zeroHash),
           agentRef: n.agentRef ?? zeroHash,
-          bond: this.network.contracts.vault,
+          bond: n.bond ?? this.network.contracts.vault,
         },
       ],
     });
@@ -97,7 +106,7 @@ export class Delicti {
 
   /** Bond the mandate. With `beneficiary`, name whom this deposit's remainder compensates (§8.3). */
   async post(from: Wallet, id: bigint, value: bigint, beneficiary?: Address): Promise<Hex> {
-    const v = this.network.contracts.vault;
+    const v = await this.vaultOf(id);
     const h = beneficiary
       ? await from.writeContract({ address: v, abi: vaultAbi, functionName: "postFor", args: [id, beneficiary], value })
       : await from.writeContract({ address: v, abi: vaultAbi, functionName: "post", args: [id], value });
@@ -106,13 +115,14 @@ export class Delicti {
   }
 
   async withdraw(from: Wallet, id: bigint, to?: Address): Promise<Hex> {
-    const h = await from.writeContract({ address: this.network.contracts.vault, abi: vaultAbi, functionName: "withdraw", args: [id, to ?? from.account.address] });
+    const h = await from.writeContract({ address: await this.vaultOf(id), abi: vaultAbi, functionName: "withdraw", args: [id, to ?? from.account.address] });
     await this.mined(h);
     return h;
   }
 
-  async claim(from: Wallet): Promise<Hex> {
-    const h = await from.writeContract({ address: this.network.contracts.vault, abi: vaultAbi, functionName: "claim" });
+  /** Collect what a Vault owes you (rewards, stipends, remainders). Defaults to the current Vault. */
+  async claim(from: Wallet, vault?: Address): Promise<Hex> {
+    const h = await from.writeContract({ address: vault ?? this.network.contracts.vault, abi: vaultAbi, functionName: "claim" });
     await this.mined(h);
     return h;
   }
@@ -144,46 +154,58 @@ export class Delicti {
   /** Principal: what watchers are paid per new, value-moving deed they file, and the least value a
    *  deed must move to earn it (§8.4). Once set, terms can only get better for watchers. */
   async setWatchTerms(principal: Wallet, id: bigint, perDeed: bigint, minValue: bigint): Promise<Hex> {
-    const h = await principal.writeContract({ address: this.network.contracts.vault, abi: vaultAbi, functionName: "setWatchTerms", args: [id, perDeed, minValue] });
+    const h = await principal.writeContract({ address: await this.vaultOf(id), abi: vaultAbi, functionName: "setWatchTerms", args: [id, perDeed, minValue] });
     await this.mined(h);
     return h;
   }
 
-  /** Principal: pay into the mandate's watch pool (§8.4). Nobody else can (v0.15). */
+  /** Principal: pay into the mandate's watch pool (§8.4). Nobody else can (since v0.15). */
   async fundWatch(from: Wallet, id: bigint, value: bigint): Promise<Hex> {
-    const h = await from.writeContract({ address: this.network.contracts.vault, abi: vaultAbi, functionName: "fundWatch", args: [id], value });
+    const h = await from.writeContract({ address: await this.vaultOf(id), abi: vaultAbi, functionName: "fundWatch", args: [id], value });
     await this.mined(h);
     return h;
   }
 
   /** Principal: what the pool has left, once no bond remains or `WATCH_TAIL` after the cooling window. */
   async refundWatch(from: Wallet, id: bigint, to?: Address): Promise<Hex> {
-    const h = await from.writeContract({ address: this.network.contracts.vault, abi: vaultAbi, functionName: "refundWatch", args: [id, to ?? from.account.address] });
+    const h = await from.writeContract({ address: await this.vaultOf(id), abi: vaultAbi, functionName: "refundWatch", args: [id, to ?? from.account.address] });
     await this.mined(h);
     return h;
   }
 
-  /** Where a mandate stands: is it live, how much is bonded, what has been proven against it. */
+  /**
+   * Where a mandate stands: is it live, how much is bonded, what has been proven against it. Read
+   * from the mandate's own Vault and its judges, whichever version it names (`Terms.bond`); for a
+   * SUMMA umbrella, also its meter: the tally in µUSD and the tripwire (amendment v1.2).
+   */
   async status(id: bigint) {
     const c = this.network.contracts;
-    const r = (address: Address, abi: any, functionName: string, args: any[] = [id]) =>
-      this.publicClient.readContract({ address, abi, functionName, args }) as Promise<any>;
-    const [m, live, exclusive, exclusiveXrpl, acknowledged, bond, slashed, severity, taken, erc20Docket, xrpDocket, paymentDocket, watchPool, perDeed] = await Promise.all([
-      r(c.registry, mandateRegistryAbi, "get"),
-      r(c.registry, mandateRegistryAbi, "isLive"),
-      r(c.registry, mandateRegistryAbi, "exclusive"),
-      r(c.agentRefs, agentRefsAbi, "exclusive"),
-      r(c.registry, mandateRegistryAbi, "acknowledged"),
-      r(c.vault, vaultAbi, "bondOf"),
-      r(c.vault, vaultAbi, "slashed"),
-      r(c.vault, vaultAbi, "severityOf"),
-      r(c.vault, vaultAbi, "slashedAmount"),
-      r(c.judgeEvm, judgeEvmAbi, "erc20Docket"),
-      r(c.judgeXrpl, judgeXrplAbi, "docket"),
-      r(c.judgeXrpl, judgeXrplAbi, "paymentDocket"),
-      r(c.vault, vaultAbi, "watchPool"),
-      r(c.vault, vaultAbi, "stipendPerDeed"),
+    const pc = this.publicClient;
+    const read = (address: Address, abi: any, functionName: string, args: any[] = [id]) =>
+      pc.readContract({ address, abi, functionName, args }).catch(() => undefined) as Promise<any>;
+    const m = (await pc.readContract({ address: c.registry, abi: mandateRegistryAbi, functionName: "get", args: [id] })) as any;
+    const vault = m.bond as Address;
+    const dep = deploymentOf(this.network, vault);
+    const stack = summaStackOf(this.network, vault);
+    const [live, exclusive, exclusiveXrpl, acknowledged, bond, slashed, severity, taken, watchPool, perDeed, erc20Docket, xrpDocket, paymentDocket] = await Promise.all([
+      read(c.registry, mandateRegistryAbi, "isLive"),
+      read(c.registry, mandateRegistryAbi, "exclusive"),
+      read(c.agentRefs, agentRefsAbi, "exclusive"),
+      read(c.registry, mandateRegistryAbi, "acknowledged"),
+      read(vault, vaultAbi, "bondOf"),
+      read(vault, vaultAbi, "slashed"),
+      read(vault, vaultAbi, "severityOf"),
+      read(vault, vaultAbi, "slashedAmount"),
+      read(vault, vaultAbi, "watchPool"),
+      read(vault, vaultAbi, "stipendPerDeed"),
+      dep ? read(dep.judgeEvm, judgeEvmAbi, "erc20Docket") : undefined,
+      dep ? read(dep.judgeXrpl, judgeXrplAbi, "docket") : undefined,
+      dep ? read(dep.judgeXrpl, judgeXrplAbi, "paymentDocket") : undefined,
     ]);
+    let summa: (UmbrellaState & { version: string; meter: Address }) | undefined;
+    if (stack && String(m.sourceId).toLowerCase() === SUMMA_SOURCE.toLowerCase()) {
+      summa = { version: stack.version, meter: stack.meter, ...(await new Summa(pc, stack).state(id)) };
+    }
     return {
       id,
       principal: m.principal as Address,
@@ -192,7 +214,9 @@ export class Delicti {
       validFrom: m.validFrom as bigint,
       validUntil: m.validUntil as bigint,
       assetKey: m.assetKey as Hex,
-      vault: m.bond as Address,
+      vault,
+      /** The consequence layer that Vault belongs to: "current", "v0.15", …, "summa" or "summa v0.15". */
+      version: dep?.version ?? (stack ? `summa${stack.version === "current" ? "" : ` ${stack.version}`}` : "unknown"),
       live: live as boolean,
       /** The EVM key's promise (§6.4, §6.11) and the XRPL key's (§6.10). */
       exclusive: { evm: exclusive as boolean, xrpl: exclusiveXrpl as boolean },
@@ -201,8 +225,11 @@ export class Delicti {
       slashed: slashed as boolean,
       severity: severity as bigint,
       taken: taken as bigint,
-      dockets: { erc20: erc20Docket as bigint, xrpOutflow: xrpDocket as bigint, xrpPayments: paymentDocket as bigint },
+      dockets: { erc20: erc20Docket as bigint | undefined, xrpOutflow: xrpDocket as bigint | undefined, xrpPayments: paymentDocket as bigint | undefined },
       watch: { pool: watchPool as bigint, perDeed: perDeed as bigint },
+      /** A SUMMA umbrella: its stack's meter, the tally in µUSD there, and the tripwire (v1.2 meters only).
+       *  An umbrella whose effectors write to another meter shows that meter's tally nowhere here. */
+      summa,
     };
   }
 }

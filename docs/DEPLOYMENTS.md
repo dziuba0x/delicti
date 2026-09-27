@@ -4,6 +4,27 @@ Every DELICTI release that changed storage or ABI was redeployed to Flare's Cost
 
 Flare infrastructure every deployment resolves at runtime: `FdcVerification` [`0x906507E0B64bcD494Db73bd0459d1C667e14B933`](https://coston2-explorer.flare.network/address/0x906507E0B64bcD494Db73bd0459d1C667e14B933), `Relay` [`0xa10B672D1c62e5457b17af63d4302add6A99d7dE`](https://coston2-explorer.flare.network/address/0xa10B672D1c62e5457b17af63d4302add6A99d7dE), FDC protocol id `200`, `ProtocolsV2` [`0xA90Db6D10F856799b10ef2A77EBCbF460aC71e52`](https://coston2-explorer.flare.network/address/0xA90Db6D10F856799b10ef2A77EBCbF460aC71e52).
 
+## Live on Coston2 (2026-09-27) — v0.16: the stipend follows the seal, and v1.2 stops every rail
+
+`sdk/examples/seal-live.ts` (SDK 0.16.1), against the v0.16 `Vault` below. Production timers: `commitLead` 600 s.
+
+**Mandate #29: MockUSDT0 ≤ 10, exclusive (§6.11), bond 0.3 C2FLR, watch pool 0.3 C2FLR at 0.05 per deed ≥ 0.1 USDT0.** The agent paid three sellers 1 USDT0 each: [`0x3903d6b3…b3a54a`](https://coston2-explorer.flare.network/tx/0x3903d6b38c5baf36839a244629d4950a31101560a5510fb3fbf6e696afb3a54a), [`0xe64806f4…258ef1`](https://coston2-explorer.flare.network/tx/0xe64806f4bac81535a6b0da6ab17af194e98b131bef9e8383418f23ead2258ef1), [`0x34712aa3…822010`](https://coston2-explorer.flare.network/tx/0x34712aa3f3d47f033258608b6827916404445381dc7aeeb8c8f5f5884c822010).
+
+1. **The seal.** The watcher [`0x37a4125E…dc1d07`](https://coston2-explorer.flare.network/address/0x37a4125E4E36408f2e52aDF01D44F4C4b3dc1d07) sealed the three `EVMTransaction` requests (`commitChallenge`) and paid for them through the Vault once each seal was `commitLead` old, in round 1,467,163. `claimantOf(keccak256(request))` is the watcher for all three.
+2. **The mempool copier.** Before the watcher paid, a copier sent the watcher's own request bytes to `Vault.requestAttestation`:
+   - with no seal: [`0x410a2f9a…d10c9f`](https://coston2-explorer.flare.network/tx/0x410a2f9a05d51456dcf852e5d3b07cc3d4e1d0385282946c215d45fc7ed10c9f), reverted `NoCommitment`;
+   - with a seal made that moment: [`0xbee4bd37…d93555`](https://coston2-explorer.flare.network/tx/0xbee4bd3770e967eeda6f116671d236bd1c862fb6b30dc07d35f3bea665d93555), reverted `CommittedTooLate`.
+
+   Both reasons were read again afterwards, by replaying each call on the state of the block before it (an archive RPC): `0x5b07c989` and `0xc9e9ac51`.
+3. **The made-up MIC.** An attacker [`0xbE794eb3…18a493`](https://coston2-explorer.flare.network/address/0xbE794eb3A408F7D2e3058142431D58a90818a493) sealed deed 1's request with an invented MIC (the same type, source and body) and paid for it first, in the same round. v0.15 keyed the stipend by (type, source, body), so that request would have held deed 1's stipend. Here it is a different claim key, `0x23402fb8…1540c2`, and once the round was final the FDC had attested nothing for it.
+4. **The docket and the stipends.** The watcher filed [`0xf7d1d6f1…f7ffa0`](https://coston2-explorer.flare.network/tx/0xf7d1d6f189f57f9baaa3de7ada7c44530574a5afb41250679ad325b0aaf7ffa0) (`JudgeEvm.fileErc20Outflow`): three `StipendPaid` of 0.05 C2FLR, all to the watcher, none to anyone else. It claimed 0.15 C2FLR: [`0xf255cb83…85585b`](https://coston2-explorer.flare.network/tx/0xf255cb831811b42fbb20b4289dce7ba577c4728ad9f70517729cdb3e6885585b).
+
+**An earlier run the same night, mandate #27.** The watcher's cycle went through there too: filing [`0x215d72a0…459ba0`](https://coston2-explorer.flare.network/tx/0x215d72a0a00eec126b184b67864fccf3591098203320cc82a5e2526330459ba0), three stipends to the watcher, claim [`0x70922cfc…efeb41`](https://coston2-explorer.flare.network/tx/0x70922cfc1f555a0a12fc52fac8fd58dcff4287d13e0141507b037e3054efeb41). The negative stages did not. The attacker had sealed 12 s after the watcher's first seal, and the example paid for the attacker's seal at the watcher's `payableAt`, two seconds before that seal was `commitLead` old. The Vault refused it `CommittedTooLate` in gas estimation, so no transaction was sent. The contract was right and the example waited on the wrong clock. The fix (`7085354`) makes every payer wait out its own seal. A fork mines at once and had hidden the gap; fork rehearsals now reproduce it.
+
+**Amendment v1.2 on the deployed meter (Lancea).** Lancea's guard, the umbrella's declared effector, refused a mint to a stranger and struck umbrella #28 on the `SummaMeter`: [`0xa9c305e4…14b9f5`](https://coston2-explorer.flare.network/tx/0xa9c305e42bfdc4ff1f4ac0e222295d0eb7e1467701ae42ab01fdea33e214b9f5). The umbrella tripped, and every rail refused until the principal re-armed. Six decisions out of six were as designed, on the XRP Ledger and on Flare: [Lancea's record](https://github.com/dziuba0x/lancea#live-the-autopilot-on-a-leash-2026-09-27-xrpl-testnet--flare-coston2).
+
+**Not run live yet:** `MandateFacilitator.recordAttempt`, the attempt register (an x402 authorisation the brake refused, recorded by anyone who holds it). It is covered by `test/MandateFacilitator.t.sol` and by the SDK 0.16.1 check on a Coston2 fork, not by a transaction. The tripwire itself has run live, through a guard's `strike`.
+
 ## Deployed on Coston2 (2026-09-27) — v0.16, watch pool v2 (the seal), and amendment v1.2 (Conatus)
 
 `script/DeployV016.s.sol` made one broadcast over the live core, reusing `MandateRegistry`, `AnchorLog`, `SpendMeter` and `AgentRefs`.

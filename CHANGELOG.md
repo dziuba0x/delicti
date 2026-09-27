@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **v0.16 live on Coston2** (mandate #29): the stipend follows the seal. The mempool copier is refused `NoCommitment` and `CommittedTooLate`; the made-up MIC holds a key the FDC never attests. README *Proven on-chain* and docs/DEPLOYMENTS.md.
+- **Amendment v1.2 live on the deployed `SummaMeter`:** Lancea's guard struck umbrella #28, and every rail stopped until the principal re-armed.
+- **`examples/seal-live.ts`:**
+  - every payer waits out its own seal (run 0042 paid for the attacker's seal two seconds early, on the watcher's clock, and the Vault refused it `CommittedTooLate`);
+  - a revert names the contract's error;
+  - the attacker's payment and the copier's tries are separate findings;
+  - the DA layer is asked for the made-up request's proof once its round is final;
+  - on a fork, the attacker's seal comes 12 s after the watcher's, as on Coston2.
+
 ## SDK 0.16.1 — 2026-09-27 — SUMMA helpers, and every mandate read from its own Vault
 
 - **Fixed, a regression in 0.16.0.** `status`, `post`, `withdraw` and the watch-pool calls used the network's *current* Vault and judges. A v0.15 mandate read as unbonded, with empty dockets. They now follow the mandate's own `Terms.bond` (`vaultOf`), and `status` reports which version it is.

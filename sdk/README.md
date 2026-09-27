@@ -15,7 +15,7 @@ TypeScript for DELICTI, built on [viem](https://viem.sh). It has three parts:
 - **`Erc20OutflowWatcher`** and the `delicti-watch` CLI, the party the protocol's economics were written for. It watches an exclusive stablecoin mandate and keeps its §6.11 docket current. When the agent's outflow crosses the budget, it commits, waits out the lead, proves the deeds through the FDC and files the conviction. It needs no receipts and no cooperation from the agent or the facilitator. `XrplOutflowWatcher` does the same for §6.10 on XRPL.
 - **`Sentinel`** (`delicti-watch sentinel`) runs across the whole protocol. It discovers every mandate, watches every one a third party can (§6.11 stablecoins on Flare, §6.10 XRP outflow on XRPL), prices each piece of work before buying a single attestation, acts according to its policy, and publishes a per-agent public score (SPEC §11.2).
 
-v0.15, Coston2 and XRPL testnet only. Not audited. Whitehat use on testnets.
+v0.16, Coston2 and XRPL testnet only. Not audited. Whitehat use on testnets.
 
 ## Install
 
@@ -116,17 +116,28 @@ The score it publishes is per agent and deliberately not a single number. The fa
 - watched and self-watched mandates;
 - unfiled and lost deeds.
 
-## The watch pool (v0.14, reworked in v0.15)
+## The watch pool (v0.14; watch pool v2 since v0.16)
 
 ```ts
 await delicti.setWatchTerms(principal, id, parseEther("0.05"), 100_000n); // per new deed moving ≥ 0.1 XRP
 await delicti.fundWatch(principal, id, parseEther("0.5"));                // the principal only
 ```
 
-A stipend is paid to whoever **paid for the deed's attestation through the Vault**
-(`Vault.requestAttestation`, which forwards the fee to FdcHub), not to whoever files it. The
-watchers do this automatically on v0.15+ deployments. A copier who files someone else's proofs
-only pays the gas to deliver their stipends.
+A stipend is paid to whoever **sealed the deed's exact attestation request, then paid for it
+through the Vault**, not to whoever files it.
+
+The watchers do this automatically (`seal.ts`):
+- **On v0.16 mandates** they seal every request, wait `commitLead` (10 minutes) and pay with the salt.
+- **Before a conviction** the seals go in before the case's own commitment, so one wait covers both.
+- **A request someone else already holds** goes straight to FdcHub.
+- **On v0.15 mandates** they pay unsealed, as those Vaults require.
+
+A copier who files someone else's proofs, or lifts a request from the mempool, holds nothing.
+
+```ts
+import { requestAttestations } from "@delicti-protocol/sdk";
+const { plan, rounds } = await requestAttestations({ fdc, publicClient, wallet, dep, requests });
+```
 
 ## Tests
 

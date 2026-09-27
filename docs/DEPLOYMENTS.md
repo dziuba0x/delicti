@@ -4,6 +4,40 @@ Every DELICTI release that changed storage or ABI was redeployed to Flare's Cost
 
 Flare infrastructure every deployment resolves at runtime: `FdcVerification` [`0x906507E0B64bcD494Db73bd0459d1C667e14B933`](https://coston2-explorer.flare.network/address/0x906507E0B64bcD494Db73bd0459d1C667e14B933), `Relay` [`0xa10B672D1c62e5457b17af63d4302add6A99d7dE`](https://coston2-explorer.flare.network/address/0xa10B672D1c62e5457b17af63d4302add6A99d7dE), FDC protocol id `200`, `ProtocolsV2` [`0xA90Db6D10F856799b10ef2A77EBCbF460aC71e52`](https://coston2-explorer.flare.network/address/0xA90Db6D10F856799b10ef2A77EBCbF460aC71e52).
 
+## Deployed on Coston2 (2026-09-27) — v0.16, watch pool v2 (the seal), and amendment v1.2 (Conatus)
+
+`script/DeployV016.s.sol` made one broadcast over the live core, reusing `MandateRegistry`, `AnchorLog`, `SpendMeter` and `AgentRefs`.
+- **Deployer:** `0x616C9041…42E99`.
+- **Timers** (production): `commitLead` 600 s, `responseWindow` 24 h, `anchorGrace` 1 h, `meterGrace` 5 min.
+- **Cost:** 19.97 M gas, **12.98 C2FLR** at 650 gwei. The fees were passed explicitly: forge's own guess paid 1500 gwei on the rehearsal fork.
+- **Record:** [`deployments/coston2-v0.16.json`](../deployments/coston2-v0.16.json).
+- **Sources:** every contract below is verified on the Coston2 explorer. This is the first deployment with published sources.
+
+| Contract | Address |
+|---|---|
+| `Vault` (watch pool v2) | [`0x76305Ef760f394d547F14dcd1a7df88fEf21b270`](https://coston2-explorer.flare.network/address/0x76305Ef760f394d547F14dcd1a7df88fEf21b270) |
+| `JudgeEvm` | [`0x665478F311A267D0855531fFd30498Eb292D48eE`](https://coston2-explorer.flare.network/address/0x665478F311A267D0855531fFd30498Eb292D48eE) |
+| `JudgeXrpl` | [`0x9D4D47E282e54F0317f23A94630cAd9107D6a0D4`](https://coston2-explorer.flare.network/address/0x9D4D47E282e54F0317f23A94630cAd9107D6a0D4) |
+| `BondLens` | [`0xd3b2B7751DD8456E476a752278F8d47A6baA76EF`](https://coston2-explorer.flare.network/address/0xd3b2B7751DD8456E476a752278F8d47A6baA76EF) |
+| `JudgeSumma` | [`0x947FE2b349Df501A330697D10795F1150FB0f3D6`](https://coston2-explorer.flare.network/address/0x947FE2b349Df501A330697D10795F1150FB0f3D6) |
+| `VaultSumma` (watch pool v2) | [`0x274e8aa149C0904E10b99c79017EB7EE74184E54`](https://coston2-explorer.flare.network/address/0x274e8aa149C0904E10b99c79017EB7EE74184E54) |
+| `SummaMeter` (the tripwire) | [`0x39aa9b12CDe7bFc936456247DFb3eb78aA1FaB1D`](https://coston2-explorer.flare.network/address/0x39aa9b12CDe7bFc936456247DFb3eb78aA1FaB1D) |
+| `MandateFacilitator` (the attempt register) | [`0xa3C41FfD3a89dbf78c0923a0E0223DaA69238b6B`](https://coston2-explorer.flare.network/address/0xa3C41FfD3a89dbf78c0923a0E0223DaA69238b6B) |
+| `SummaLens` | [`0x555309CAE4819A1F57e0988f570440D0EDBb280c`](https://coston2-explorer.flare.network/address/0x555309CAE4819A1F57e0988f570440D0EDBb280c) |
+
+- **Checked on-chain after the broadcast** (11 checks):
+  - every contract has code;
+  - each judge names its Vault, and each Vault knows its judges;
+  - `SummaMeter` and `MandateFacilitator` name `JudgeSumma`;
+  - the facilitator and `SummaLens` name the meter.
+- **The price map is the v0.15 map, row for row**, read back from the live `JudgeSumma`: (`testXRP`, `XRP/outflow`) → XRP/USD, and (`testFLR`, MockUSDT0) → USDT/USD.
+- **What it closes.** A stipend now goes only to the first address that sealed the exact request a filed proof answers, `commitLead` before paying for it (docs/v2/watch-pool.md). The mempool copier and the made-up-MIC request of claude/58 H1 hold nothing in these Vaults.
+- **Before the live deploy, on a Coston2 fork, the SDK (0.16.0) was checked against this bytecode:**
+  - paying too early is refused `CommittedTooLate`;
+  - a copier's seal is refused `AlreadyClaimed`;
+  - the holder re-sends without a new seal.
+- **What stays:** mandates and umbrellas bonded in the v0.15 `Vault` and `VaultSumma` keep watch pool v1 for ever (§8.2). New mandates name the v0.16 Vaults.
+
 ## Live on Coston2 (2026-09-24) — v0.15: the copier who earned nothing
 
 v0.14 as fixed after its adversarial review (CHANGELOG v0.15.0). `Vault` [`0xB15f5041F4aA2bc212832dfb0e59CD6c0e9a24aF`](https://coston2-explorer.flare.network/address/0xB15f5041F4aA2bc212832dfb0e59CD6c0e9a24aF), `JudgeEvm` [`0x463042fbFD04c723F430eC299aD4000D4d42cFf2`](https://coston2-explorer.flare.network/address/0x463042fbFD04c723F430eC299aD4000D4d42cFf2), `JudgeXrpl` [`0x9201272ee10B19177A04435195B3b29D9a765940`](https://coston2-explorer.flare.network/address/0x9201272ee10B19177A04435195B3b29D9a765940), `BondLens` [`0x960A0e68863B0BABBa05Ae2025E6b7e289D3Bf3D`](https://coston2-explorer.flare.network/address/0x960A0e68863B0BABBa05Ae2025E6b7e289D3Bf3D). Production timers.

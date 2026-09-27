@@ -17,7 +17,7 @@
 ![status](https://img.shields.io/badge/status-testnet%20·%20unaudited-lightgrey)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-[The problem](#the-problem-every-call-was-allowed) · [How it works](#how-it-works) · [A case, end to end](#a-case-end-to-end) · [What it can prove](#what-it-can-prove-and-where) · [Proven on-chain](#proven-on-chain--click-any-of-them) · [Watchers](#watchers-the-watch-pool-and-the-sentinel) · [Quickstart](#quickstart) · [Contracts](#contracts-v015-on-coston2) · [Limits](#limits-stated-up-front) · [FAQ](#faq) · [SPEC](SPEC.md)
+[The problem](#the-problem-every-call-was-allowed) · [How it works](#how-it-works) · [A case, end to end](#a-case-end-to-end) · [What it can prove](#what-it-can-prove-and-where) · [Proven on-chain](#proven-on-chain--click-any-of-them) · [Watchers](#watchers-the-watch-pool-and-the-sentinel) · [Quickstart](#quickstart) · [Contracts](#contracts-v016-on-coston2) · [Limits](#limits-stated-up-front) · [FAQ](#faq) · [SPEC](SPEC.md)
 
 </div>
 
@@ -102,15 +102,17 @@ sequenceDiagram
     P->>V: post(bond) · setWatchTerms · fundWatch
     loop each x402 settlement below the budget
         A-->>F: signs EIP-3009, a facilitator emits Transfer(agent → payee)
-        Wt->>V: requestAttestation(req) — pays the FDC fee, becomes requesterOf
+        Wt->>V: commitChallenge(seal) — seal = hash(watcher, 0, KIND_CLAIM, keccak256(req), salt)
+        Note over Wt: waits out commitLead (10 min)
+        Wt->>V: requestAttestation(req, salt) — pays the FDC fee, becomes claimantOf
         F-->>Wt: EVMTransaction proof, Merkle-checked against the Relay
         Wt->>J: fileErc20Outflow(proofs) — recorded on the docket
-        J->>V: stipend(deed keys) — paid to whoever paid for the attestation
+        J->>V: stipend(claim keys) — paid to whoever sealed and paid for that exact request
     end
     Note over Wt,J: the next deed would cross the budget
-    Wt->>V: commit(hash(case, salt)) — before any attestation makes it public
-    Note over Wt: waits out commitLead (10 min)
-    Wt->>V: requestAttestation(req)
+    Wt->>V: seal each request, then commit(hash(case, salt)) — before any attestation makes it public
+    Note over Wt: waits out commitLead (10 min), once for both
+    Wt->>V: requestAttestation(req, salt)
     F-->>Wt: proof
     Wt->>J: fileErc20Outflow(proofs, salt)
     J->>V: verdict(mandate, severity = 5 − 4)
@@ -232,7 +234,7 @@ flowchart LR
 
 <sub>Kind numbers are the ones SPEC v1.0 freezes in [`src/Kinds.sol`](src/Kinds.sol); they name a case in the commit–reveal preimage.</sub>
 
-Every challenge sits behind a commit–reveal gate. Dockets (`file*`) record deeds below the budget without a commitment, and the watch pool (§8.4) pays whoever paid for those attestations. Only the committed crossing convicts.
+Every challenge sits behind a commit–reveal gate. Dockets (`file*`) record deeds below the budget without a commitment, and the watch pool (§8.4) pays whoever sealed and paid for those attestations. Only the committed crossing convicts.
 
 ## Proven on-chain — click any of them
 
@@ -264,18 +266,18 @@ Every challenge type DELICTI defines has been executed on Coston2 at least once,
 
 ## Watchers, the watch pool and the sentinel
 
-Security needs one honest watcher, and anyone can be one. The hard part is getting someone to watch **an agent that behaves**, because a reward paid only on conviction pays nothing in exactly the case the protocol exists to produce. Lightning's watchtowers ran into this *deterrence paradox*. The fix in v0.14–v0.15 is a watch pool: the principal pays per new deed recorded, to whoever **paid** for that deed's attestation.
+Security needs one honest watcher, and anyone can be one. The hard part is getting someone to watch **an agent that behaves**, because a reward paid only on conviction pays nothing in exactly the case the protocol exists to produce. Lightning's watchtowers ran into this *deterrence paradox*. The fix since v0.14 is a watch pool: the principal pays per new deed recorded, to whoever **sealed and paid** for that deed's exact attestation request (watch pool v2, v0.16). A copier who files the same proofs, or lifts the request from the mempool, holds nothing.
 
 ```mermaid
 flowchart TB
     P([Principal]) -- "fundWatch · setWatchTerms<br/>(terms can only improve)" --> POOL[(Watch pool<br/>in the Vault)]
-    WT([Watcher]) -- "requestAttestation(req)<br/>fee → FdcHub" --> V[Vault]
-    V -- "requesterOf[deedKey] = watcher" --> V
+    WT([Watcher]) -- "commitChallenge(seal), then commitLead later:<br/>requestAttestation(req, salt) · fee → FdcHub" --> V[Vault]
+    V -- "claimantOf[keccak256(req)] = watcher" --> V
     WT -- "fileXrpOutflow / fileErc20Outflow" --> J[Judge]
     CP([Copier]):::bad -- "files the same proofs first" --> J
-    J -- "stipend(deedKeys)" --> POOL
+    J -- "stipend(claimKeys)" --> POOL
     POOL -- "perDeed × new, value-moving deeds" --> WT
-    POOL -. "nothing — it paid for nothing" .-> CP
+    POOL -. "nothing — it sealed nothing" .-> CP
     classDef bad fill:#3d1d1d,stroke:#f85149,color:#ffb3ad
 ```
 
@@ -354,7 +356,7 @@ forge test --fork-url coston2 --match-contract Coston2ForkTest -vv  # live Flare
 
 To deploy your own, run `forge script script/Deploy.s.sol --rpc-url coston2 --broadcast --private-key $PRIVATE_KEY`, then point `.env` at the new addresses.
 
-## Contracts (v0.15 on Coston2)
+## Contracts (v0.16 on Coston2)
 
 ```mermaid
 flowchart LR
@@ -365,7 +367,7 @@ flowchart LR
         AR[(AgentRefs)]
         CL[(CorroborationLog)]
     end
-    subgraph L15["Consequence layer v0.15: judges fixed at construction"]
+    subgraph L15["Consequence layer v0.16: judges fixed at construction"]
         V{{Vault}}
         JE[JudgeEvm]
         JX[JudgeXrpl]
@@ -376,7 +378,7 @@ flowchart LR
     JX --> MR & AL & AR
     BL -. reads .-> V
     FDC[[Flare FdcVerification<br/>+ Relay]] --> JE & JX
-    OLD["v0.10 – v0.14 Vaults<br/>stay live for the mandates that name them"]:::old -.-> MR
+    OLD["v0.10 – v0.15 Vaults<br/>stay live for the mandates that name them"]:::old -.-> MR
     classDef old fill:none,stroke:#8b949e,stroke-dasharray: 4 4,color:#8b949e
 ```
 
@@ -385,14 +387,14 @@ flowchart LR
 | `MandateRegistry` | Mandates, a delegation tree with monotonic narrowing, acknowledgement and revocation. No deployer, no admin key. | [`0x2c58fb05…263AA3`](https://coston2-explorer.flare.network/address/0x2c58fb0504377fef325DceB66219bC6302263AA3) |
 | `AnchorLog` | Per-mandate sequence of Merkle roots over receipts (witness 1), with `leavesURI`. | [`0xF2b7A266…Fa40a8`](https://coston2-explorer.flare.network/address/0xF2b7A2668e7430611c9b225ea7c966E489Fa40a8) |
 | `SpendMeter` | The running tally an effector reads before it acts, kept as `(timestamp, total)` checkpoints (SPEC §7.1). | [`0xa5e06ADc…576dE2`](https://coston2-explorer.flare.network/address/0xa5e06ADc76b96cc8c941B98FDA365f10a0576dE2) |
-| `Vault` | Holds every wei: bonds, proceeds, stakes, watch pools. It runs the commit–reveal gate and `verdict`, which only its judges can call (§8.2). Each deposit compensates whom its depositor names (§8.3). The watch pool pays whoever paid for an attestation through `requestAttestation` (§8.4). | [`0xB15f5041…9a24aF`](https://coston2-explorer.flare.network/address/0xB15f5041F4aA2bc212832dfb0e59CD6c0e9a24aF) |
-| `JudgeEvm` | §6.1 false payment, §6.2–6.3 overrun, §6.4 unanchored deed, §6.5 under-reported spend, §6.11 gross ERC-20 outflow on a docket. Holds no funds. | [`0x463042fb…4d42cFf2`](https://coston2-explorer.flare.network/address/0x463042fbFD04c723F430eC299aD4000D4d42cFf2) |
-| `JudgeXrpl` | §6.8 overrun over receipted payments, one-shot or on a docket. §6.10 gross XRP outflow on a docket that outlives the verifier. Holds no funds. | [`0x9201272e…9d765940`](https://coston2-explorer.flare.network/address/0x9201272ee10B19177A04435195B3b29D9a765940) |
+| `Vault` | Holds every wei: bonds, proceeds, stakes, watch pools. It runs the commit–reveal gate and `verdict`, which only its judges can call (§8.2). Each deposit compensates whom its depositor names (§8.3). The watch pool pays whoever sealed an attestation request `commitLead` before paying for it through `requestAttestation` (§8.4, watch pool v2). | [`0x76305Ef7…21b270`](https://coston2-explorer.flare.network/address/0x76305Ef760f394d547F14dcd1a7df88fEf21b270) |
+| `JudgeEvm` | §6.1 false payment, §6.2–6.3 overrun, §6.4 unanchored deed, §6.5 under-reported spend, §6.11 gross ERC-20 outflow on a docket. Holds no funds. | [`0x665478F3…2D48eE`](https://coston2-explorer.flare.network/address/0x665478F311A267D0855531fFd30498Eb292D48eE) |
+| `JudgeXrpl` | §6.8 overrun over receipted payments, one-shot or on a docket. §6.10 gross XRP outflow on a docket that outlives the verifier. Holds no funds. | [`0x9D4D47E2…D6a0D4`](https://coston2-explorer.flare.network/address/0x9D4D47E282e54F0317f23A94630cAd9107D6a0D4) |
 | `AgentRefs` | An XRPL account accepts a mandate (`prove`) or declares exclusivity (`proveExclusive`) with a memo. | [`0x6036B279…E0fca0`](https://coston2-explorer.flare.network/address/0x6036B279d6Fe4aB5DAcbea97162C5394B6E0fca0) |
 | `CorroborationLog` | Records deeds whose two witnesses agreed, once per deed per agent. This is the data a public score needs. | [`0xf51c8241…56ed89`](https://coston2-explorer.flare.network/address/0xf51c82410ad01239a1e708aa5c4c68a25c56ed89) |
-| `BondLens` | Stateless. Shows what a case would take before anyone pays for a single attestation. | [`0x960A0e68…89D3Bf3D`](https://coston2-explorer.flare.network/address/0x960A0e68863B0BABBa05Ae2025E6b7e289D3Bf3D) |
+| `BondLens` | Stateless. Shows what a case would take before anyone pays for a single attestation. | [`0xd3b2B775…aA76EF`](https://coston2-explorer.flare.network/address/0xd3b2B7751DD8456E476a752278F8d47A6baA76EF) |
 
-The Vaults of v0.14 [`0x9bF9e418…72566fE`](https://coston2-explorer.flare.network/address/0x9bF9e4186cFb569Fe5bf528e2859aA7B672566fE), v0.13 [`0x3e3316D2…5F55EE`](https://coston2-explorer.flare.network/address/0x3e3316D2Dd78d548DFBa2A777171F1E3e05F55EE), v0.12 [`0xFd09d395…93Ffae`](https://coston2-explorer.flare.network/address/0xFd09d39519F51Ccf12c57bd2D5cF8A71a593Ffae) and v0.11 [`0x40A149aC…AbDAAB`](https://coston2-explorer.flare.network/address/0x40A149aCdA2A3D2e299e0FaE4aAA695662AbDAAB), and the v0.10 `Bond` [`0x68004002…3cf65B`](https://coston2-explorer.flare.network/address/0x6800400225e03539c4B719f470cC2C8edC3cf65B), stay live for the mandates that name them. v0.13–v0.15 run with **production timers**: `commitLead` 10 min, `responseWindow` 24 h, `anchorGrace` 1 h, `meterGrace` 5 min. Every earlier deployment is listed in [docs/DEPLOYMENTS.md](docs/DEPLOYMENTS.md).
+The Vaults of v0.15 [`0xB15f5041…9a24aF`](https://coston2-explorer.flare.network/address/0xB15f5041F4aA2bc212832dfb0e59CD6c0e9a24aF), v0.14 [`0x9bF9e418…72566fE`](https://coston2-explorer.flare.network/address/0x9bF9e4186cFb569Fe5bf528e2859aA7B672566fE), v0.13 [`0x3e3316D2…5F55EE`](https://coston2-explorer.flare.network/address/0x3e3316D2Dd78d548DFBa2A777171F1E3e05F55EE), v0.12 [`0xFd09d395…93Ffae`](https://coston2-explorer.flare.network/address/0xFd09d39519F51Ccf12c57bd2D5cF8A71a593Ffae) and v0.11 [`0x40A149aC…AbDAAB`](https://coston2-explorer.flare.network/address/0x40A149aCdA2A3D2e299e0FaE4aAA695662AbDAAB), and the v0.10 `Bond` [`0x68004002…3cf65B`](https://coston2-explorer.flare.network/address/0x6800400225e03539c4B719f470cC2C8edC3cf65B), stay live for the mandates that name them. v0.13–v0.16 run with **production timers**: `commitLead` 10 min, `responseWindow` 24 h, `anchorGrace` 1 h, `meterGrace` 5 min. Every earlier deployment is listed in [docs/DEPLOYMENTS.md](docs/DEPLOYMENTS.md).
 
 ## How it got here
 
@@ -502,8 +504,8 @@ The effector is the final common pathway. A deed with no mandate is a muscle mov
 - [SPEC.md](SPEC.md): **v1.0, frozen**. Vocabulary, trust model, challenges and their invariants, bond economics, the watch pool, non-claims, metrics, and the XRPL credentials roadmap.
 - [CHANGELOG.md](CHANGELOG.md): every release, with the reasoning behind each decision.
 - [docs/amendments/v1.1-summa.md](docs/amendments/v1.1-summa.md): SUMMA, one dollar budget across every rail.
-- [docs/amendments/v1.2-conatus.md](docs/amendments/v1.2-conatus.md): Conatus, refused attempts on record and a tripwire across rails (v0.16, not deployed).
-- [docs/v2/watch-pool.md](docs/v2/watch-pool.md): watch pool v2, the seal (v0.16, not deployed).
+- [docs/amendments/v1.2-conatus.md](docs/amendments/v1.2-conatus.md): Conatus, refused attempts on record and a tripwire across rails (v0.16, deployed 2026-09-27).
+- [docs/v2/watch-pool.md](docs/v2/watch-pool.md): watch pool v2, the seal (v0.16, deployed 2026-09-27).
 - [docs/DEPLOYMENTS.md](docs/DEPLOYMENTS.md): every Coston2 deployment and live run since v0.1.
 - [docs/research/watchers.md](docs/research/watchers.md): who watches and why they would, drawn from seven earlier systems.
 - [sdk/README.md](sdk/README.md): the TypeScript SDK, the watchers and the sentinel.

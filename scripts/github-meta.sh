@@ -31,7 +31,7 @@ for tag in $(git tag -l 'v*.*.*' --sort=v:refname); do
   body=$(notes_for "$tag")
   if [ -z "$body" ]; then echo "  $tag: no CHANGELOG section, skipped"; continue; fi
   flag=--latest=false; [ "$tag" = "$latest" ] && flag=--latest
-  printf '%s\n\n---\nContracts, addresses and live transactions: [README](https://github.com/%s#contracts-v015-on-coston2) · [docs/DEPLOYMENTS.md](https://github.com/%s/blob/main/docs/DEPLOYMENTS.md). Testnet only, unaudited.\n' \
+  printf '%s\n\n---\nContracts, addresses and live transactions: [README](https://github.com/%s#contracts-v016-on-coston2) · [docs/DEPLOYMENTS.md](https://github.com/%s/blob/main/docs/DEPLOYMENTS.md). Testnet only, unaudited.\n' \
     "$body" "$REPO" "$REPO" > /tmp/delicti-notes.md
   gh release create "$tag" --repo "$REPO" --title "$(title_for "$tag")" --notes-file /tmp/delicti-notes.md --verify-tag $flag
   echo "  $tag: created"

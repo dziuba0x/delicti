@@ -24,7 +24,7 @@ Key terms:
 
 - [README](https://github.com/dziuba0x/delicti/blob/main/README.md): what DELICTI does, diagrams, every live transaction on Coston2, and the contract addresses.
 - [SPEC v1.0](https://github.com/dziuba0x/delicti/blob/main/SPEC.md): the normative specification. §3 mandates, §6 challenges (6.1 false payment, 6.2–6.3 overrun, 6.4 unanchored deed, 6.5 under-reported spend, 6.7 commit–reveal, 6.8 XRPL payments, 6.10 gross XRP outflow, 6.11 gross ERC-20/stablecoin outflow), §8 bond economics and the watch pool, §10 what DELICTI does not claim, §11 metrics and the public score.
-- [CHANGELOG](https://github.com/dziuba0x/delicti/blob/main/CHANGELOG.md): the reasoning behind every release, v0.1 to v0.15.
+- [CHANGELOG](https://github.com/dziuba0x/delicti/blob/main/CHANGELOG.md): the reasoning behind every release, v0.1 to v0.16.
 
 ## Code
 

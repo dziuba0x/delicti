@@ -1,10 +1,14 @@
 # Changelog
 
-## v0.16.0 — unreleased — watch pool v2 (the seal) and amendment v1.2 (Conatus)
+## v0.16.0 — 2026-09-27 — watch pool v2 (the seal) and amendment v1.2 (Conatus)
 
-Not deployed yet: the deploy script and the SDK support are ready (below). v0.15 mandates keep their rules for ever.
+Deployed on Coston2 on 2026-09-27 (docs/DEPLOYMENTS.md, `deployments/coston2-v0.16.json`).
+- **Addresses:** `Vault` `0x76305Ef7…21b270`, `VaultSumma` `0x274e8aa1…184E54`, `SummaMeter` `0x39aa9b12…1FaB1D`, `MandateFacilitator` `0xa3C41FfD…238b6B`.
+- **Sources:** verified on the explorer, a first for this project.
+- **SDK:** `@delicti-protocol/sdk` 0.16.0.
+- **v0.15:** mandates bonded there keep their rules for ever.
 
-### Deployment and SDK (prepared 2026-09-27)
+### Deployment and SDK
 
 - `script/DeployV016.s.sol`: the whole layer over the live core in one broadcast. It deploys `JudgeEvm`, `JudgeXrpl`, `Vault` and `BondLens`; then `JudgeSumma` and `VaultSumma`, with the v0.15 price map row for row (read back from the live `JudgeSumma`); then `SummaMeter` v1.2, `MandateFacilitator` v1.2 and `SummaLens`. The registry, anchor log, spend meter and `AgentRefs` are reused. It writes `deployments/<network>-v0.16.json`.
   - Rehearsed on a Coston2 fork held at Coston2's fees (`lancea/scripts/coston2-fork-proxy.mjs`): 19.97 M gas, 12.98 C2FLR at 650 gwei.
@@ -18,6 +22,10 @@ Not deployed yet: the deploy script and the SDK support are ready (below). v0.15
   - 5 new offline tests, 33 in all.
   - Run against the real v0.16 bytecode on the fork: paying before `commitLead` is refused `CommittedTooLate`; after it, `claimantOf` is the watcher; a copier's own seal is refused `AlreadyClaimed`; the holder re-sends without a new seal.
 - `abi.ts` regenerated from the v0.16 build.
+- **SDK 0.16.0, `networks.ts`:**
+  - the current deployment is v0.16, with `sealedClaims`;
+  - v0.15 moves into `history`, so its mandates are still read and watched through the unsealed path;
+  - `summa` is the v0.16 stack, and the new `summaHistory` keeps the v0.15 one.
 
 ### Watch pool v2: the seal
 

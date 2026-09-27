@@ -50,10 +50,16 @@ export interface DelictiNetwork {
     bondLens: Address;
   };
   /** SUMMA (SPEC amendment v1.1, kind 9): one dollar budget across rails, priced by FTSO. */
-  summa?: {
+  summa?: SummaStack;
+  /** Earlier SUMMA stacks, newest first: umbrellas bonded in their VaultSumma keep them (§8.2). */
+  summaHistory?: (SummaStack & { version: string })[];
+}
+
+/** One SUMMA deployment (amendment v1.1, and v1.2's tripwire and attempt register from v0.16). */
+export interface SummaStack {
     /** JudgeSumma: links rails under an umbrella, files deeds priced per round, convicts. */
     judge: Address;
-    /** VaultSumma: the v0.15 Vault bytecode with `judges = [judge]`; umbrellas name it in `Terms.bond`. */
+    /** VaultSumma: the Vault bytecode of its version with `judges = [judge]`; umbrellas name it in `Terms.bond`. */
     vault: Address;
     /** SummaMeter: the brake across rails (block-latency FTSO). */
     meter: Address;
@@ -61,10 +67,9 @@ export interface DelictiNetwork {
     facilitator: Address;
     /** SummaLens: the FLR bond read in dollars after the haircut; covers(k), topUpFor(k). */
     lens: Address;
-  };
 }
 
-/** v0.15 on Coston2 (2026-09-24), production timers. docs/DEPLOYMENTS.md. */
+/** v0.16 + amendment v1.2 on Coston2 (2026-09-27), production timers. docs/DEPLOYMENTS.md, deployments/coston2-v0.16.json. */
 export const coston2: DelictiNetwork = {
   name: "coston2",
   chainId: 114,
@@ -80,8 +85,10 @@ export const coston2: DelictiNetwork = {
     fdcSource: "testXRP",
     verifierChain: "xrp",
   },
-  features: ["erc20Docket", "xrpDocket", "paymentDocket", "watchPool", "paidRequests"],
+  features: ["erc20Docket", "xrpDocket", "paymentDocket", "watchPool", "paidRequests", "sealedClaims"],
   history: [
+    // v0.15: watch pool v1, stipends to whoever paid first, unsealed (claude/58 H1); its mandates keep it (§8.2)
+    { version: "v0.15", vault: "0xB15f5041F4aA2bc212832dfb0e59CD6c0e9a24aF", judgeEvm: "0x463042fbFD04c723F430eC299aD4000D4d42cFf2", judgeXrpl: "0x9201272ee10B19177A04435195B3b29D9a765940", features: ["erc20Docket", "xrpDocket", "paymentDocket", "watchPool", "paidRequests"] },
     // v0.14: stipends paid to the filer — superseded the same night (SPEC §8.4); kept for #13
     { version: "v0.14", vault: "0x9bF9e4186cFb569Fe5bf528e2859aA7B672566fE", judgeEvm: "0x361730A0D1e5886DfF3f7Ea4fC38832Ed29a2C36", judgeXrpl: "0xE9E6eD9E3ca7d005a37568E18A80226B4a14E688", features: ["erc20Docket", "xrpDocket", "paymentDocket", "watchPool"] },
     { version: "v0.13", vault: "0x3e3316D2Dd78d548DFBa2A777171F1E3e05F55EE", judgeEvm: "0x175a11C19Fee05DF390D915B2bD7bcF594a59720", judgeXrpl: "0x16Db5a2ba8b6C6B3cBaaCe95b0e9D78fa5Dd1D79", features: ["erc20Docket", "xrpDocket", "paymentDocket"] },
@@ -95,18 +102,22 @@ export const coston2: DelictiNetwork = {
     anchorLog: "0xF2b7A2668e7430611c9b225ea7c966E489Fa40a8",
     meter: "0xa5e06ADc76b96cc8c941B98FDA365f10a0576dE2",
     agentRefs: "0x6036B279d6Fe4aB5DAcbea97162C5394B6E0fca0",
-    vault: "0xB15f5041F4aA2bc212832dfb0e59CD6c0e9a24aF",
-    judgeEvm: "0x463042fbFD04c723F430eC299aD4000D4d42cFf2",
-    judgeXrpl: "0x9201272ee10B19177A04435195B3b29D9a765940",
-    bondLens: "0x960A0e68863B0BABBa05Ae2025E6b7e289D3Bf3D",
+    vault: "0x76305Ef760f394d547F14dcd1a7df88fEf21b270",
+    judgeEvm: "0x665478F311A267D0855531fFd30498Eb292D48eE",
+    judgeXrpl: "0x9D4D47E282e54F0317f23A94630cAd9107D6a0D4",
+    bondLens: "0xd3b2B7751DD8456E476a752278F8d47A6baA76EF",
   },
   summa: {
-    judge: "0x211EB7d798F528B4E66201496bE4Cf7f6A62f644",
-    vault: "0x8Dd62BE6Ee0689e3Eb5960F08a5356a57bD2F354",
-    meter: "0x6Bc63F3aBc6Fc3055DB9949bb4e14515321a4E0f",
-    facilitator: "0xBC545E2610EAf68956684c56Dd308c1988f9307B",
-    lens: "0xa0A5159b7c8271B2c2cefD52DC85697c954B268B",
+    judge: "0x947FE2b349Df501A330697D10795F1150FB0f3D6",
+    vault: "0x274e8aa149C0904E10b99c79017EB7EE74184E54",
+    meter: "0x39aa9b12CDe7bFc936456247DFb3eb78aA1FaB1D",
+    facilitator: "0xa3C41FfD3a89dbf78c0923a0E0223DaA69238b6B",
+    lens: "0x555309CAE4819A1F57e0988f570440D0EDBb280c",
   },
+  summaHistory: [
+    // v0.15 (2026-09-25): watch pool v1 in VaultSumma; the meter and facilitator from before the tripwire
+    { version: "v0.15", judge: "0x211EB7d798F528B4E66201496bE4Cf7f6A62f644", vault: "0x8Dd62BE6Ee0689e3Eb5960F08a5356a57bD2F354", meter: "0x6Bc63F3aBc6Fc3055DB9949bb4e14515321a4E0f", facilitator: "0xBC545E2610EAf68956684c56Dd308c1988f9307B", lens: "0xa0A5159b7c8271B2c2cefD52DC85697c954B268B" },
+  ],
 };
 
 /** The consequence layer a mandate's `bond` names: the current one or an earlier one. */

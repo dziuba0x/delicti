@@ -4,10 +4,10 @@
 
 **What this is: v2 of the watch pool (SPEC §8.4), v1 for everything else.** §14 freezes the rule "a stipend per new value-moving deed paid to whoever paid for its attestation through the Vault" and the `deedKey` encoding. This document changes that rule, so by §14's own terms it cannot be an amendment. It is v2 of that one section (P.6).
 
-**Status: implemented, tested, not deployed, unaudited.**
+**Status: implemented, tested, deployed on Coston2 (2026-09-27), unaudited.**
 - Implemented in `src/Vault.sol` (v0.16), `src/Deeds.sol`, and the three judges (`JudgeEvm`, `JudgeXrpl`, `JudgeSumma`).
 - Tests: the full suite passes, the invariant campaign seals every attestation it buys, and `test/FdcKey.t.sol` pins the new key to real Flare verifier data.
-- Nothing is deployed. Every mandate bonded in a v0.15 Vault keeps the v1 pool for ever (§8.2).
+- Deployed: `Vault` [`0x76305Ef7…21b270`](https://coston2-explorer.flare.network/address/0x76305Ef760f394d547F14dcd1a7df88fEf21b270) and `VaultSumma` [`0x274e8aa1…184E54`](https://coston2-explorer.flare.network/address/0x274e8aa149C0904E10b99c79017EB7EE74184E54) (P.8). Every mandate bonded in a v0.15 Vault keeps the v1 pool for ever (§8.2).
 
 ---
 
@@ -107,7 +107,12 @@ Each row is a named test in `test/WatchPool.t.sol` (`test_poolV2_*`). `test/Summ
 - **Umbrella:** `test/Summa.t.sol` `test_poolV2_umbrellaStipendsGoToTheSealedClaimant`, covering both rails.
 - **Books:** the invariant handler rebuilds each request from the very proof it will file, seals it `commitLead` in the past, and pays. The deep-state canary still reaches paid stipends. 15 invariants hold.
 
-## P.8 Deployment (prepared, not yet run)
+## P.8 Deployment (2026-09-27)
+
+Deployed on Coston2 by `script/DeployV016.s.sol`, with every source verified on the explorer. The record is in docs/DEPLOYMENTS.md and `deployments/coston2-v0.16.json`.
+- `Vault` [`0x76305Ef7…21b270`](https://coston2-explorer.flare.network/address/0x76305Ef760f394d547F14dcd1a7df88fEf21b270);
+- `VaultSumma` [`0x274e8aa1…184E54`](https://coston2-explorer.flare.network/address/0x274e8aa149C0904E10b99c79017EB7EE74184E54).
+
 
 **Contracts:** `script/DeployV016.s.sol` deploys, in one broadcast over the live core:
 - a new consequence layer: `Vault` + `JudgeEvm` + `JudgeXrpl` (+ `BondLens`);

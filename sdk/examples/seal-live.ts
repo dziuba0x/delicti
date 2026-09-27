@@ -7,12 +7,13 @@
  *   2. The agent pays three sellers 1 USDT0 each: three deeds below the budget.
  *   3. The watcher prepares the three EVMTransaction requests and SEALS them.
  *   4. Hole 2, the made-up MIC: an attacker seals the first deed's request with an invented MIC and,
- *      commitLead later, pays for it first. v0.15 keyed the stipend by (type, source, body): that request
- *      would have held it. Here it is a different claim key, which no proof will ever name.
+ *      commitLead after its own seal, pays for it first. v0.15 keyed the stipend by (type, source, body):
+ *      that request would have held it. Here it is a different claim key, which no proof will ever name.
  *   5. Hole 1, the mempool copier: as the watcher pays, a copier sends the watcher's own request bytes,
  *      once without a seal and once with a seal made that moment. Both are refused on-chain.
  *   6. The watcher pays (commitLead after sealing), waits for the FDC, files the docket. The stipends
- *      go to the watcher (StipendPaid), and the watcher claims them.
+ *      go to the watcher (StipendPaid), and the watcher claims them. By then the made-up request's round
+ *      is final, and the FDC attested nothing for it.
  *
  * Run from sdk/:  PRIVATE_KEY=0x… npx tsx examples/seal-live.ts     (about 20 minutes; ~1 C2FLR spent)
  * The run's keys go to ../.run/seal-<time>.json (git-ignored) before anything is funded; what is left
@@ -44,7 +45,18 @@ const token = parseAbi(["function mint(address,uint256)", "function transfer(add
 const log = (...a: unknown[]) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const C2 = (wei: bigint) => `${Number(formatEther(wei)).toFixed(4)} C2FLR`;
 const json = (d: unknown, s?: number) => JSON.stringify(d, (_, v) => (typeof v === "bigint" ? v.toString() : v), s);
-const short = (e: unknown) => String((e as { shortMessage?: string })?.shortMessage ?? (e as Error)?.message ?? e).split("\n")[0].slice(0, 200);
+/** The contract's custom error, when viem decoded one: its short message ("… reverted.") leaves the name out. */
+const revertName = (e: unknown): string | undefined => {
+  for (let x = e as { cause?: unknown; data?: { errorName?: string } } | undefined, i = 0; x && i < 8; x = x.cause as typeof x, i++) {
+    if (x.data?.errorName) return x.data.errorName;
+  }
+  return undefined;
+};
+const short = (e: unknown) => {
+  const first = String((e as { shortMessage?: string })?.shortMessage ?? (e as Error)?.message ?? e).split("\n")[0].slice(0, 200);
+  const name = revertName(e);
+  return name && !first.includes(name) ? `${first} (${name})` : first;
+};
 
 /** Send everything a key holds, less the gas of sending it, to `to`. */
 async function sweep(key: Hex, to: Address): Promise<bigint> {
@@ -131,7 +143,7 @@ const mined = async (hash: Hex, what: string) => {
 let id = 0n;
 let requests: Hex[] = [];
 let plan: Awaited<ReturnType<typeof sealClaims>>;
-let fake: { request: Hex; salt: Hex } | undefined;
+let fake: { request: Hex; salt: Hex; payableAt: bigint } | undefined;
 
 await stage("1. the mandate: MockUSDT0 ≤ 10, exclusive, bonded in the v0.16 Vault, with a watch pool", async () => {
   const have = await pc.getBalance({ address: principal.account.address });
@@ -189,25 +201,41 @@ await stage("3. the watcher prepares the three requests and seals them", async (
 await stage("4. hole 2: an attacker seals the first deed with a made-up MIC", async () => {
   const r = requests[0];
   const request = `${r.slice(0, 2 + 128)}${toHex(randomBytes(32)).slice(2)}${r.slice(2 + 192)}` as Hex; // type ‖ source ‖ MIC' ‖ body
-  const salt = randomSalt();
-  await mined(await attacker.writeContract({ address: dep.vault, abi: vaultAbi, functionName: "commitChallenge", args: [sealOf(attacker.account.address, request, salt)] }), "attacker seal");
-  fake = { request, salt };
-  log(`   same type, source and body as deed 1, a different MIC: claim key ${claimKeyOf(request)} (deed 1's is ${claimKeyOf(r)})`);
+  const salt = randomSalt(), seal = sealOf(attacker.account.address, request, salt);
+  // Coston2 put this seal 12 s after the watcher's first (2026-09-27); a fork mines at once, so its clock moves the same way
+  if (FORK) await sleepOrWarp(12_000);
+  await mined(await attacker.writeContract({ address: dep.vault, abi: vaultAbi, functionName: "commitChallenge", args: [seal] }), "attacker seal");
+  // every payer waits out its OWN seal: this one is younger than the watcher's, so it matures later than plan.payableAt
+  const [at, lead] = await Promise.all([
+    pc.readContract({ address: dep.vault, abi: vaultAbi, functionName: "committedAt", args: [seal] }),
+    pc.readContract({ address: dep.vault, abi: vaultAbi, functionName: "commitLead" }),
+  ]);
+  fake = { request, salt, payableAt: BigInt(at) + BigInt(lead) + 2n };
+  log(`   same type, source and body as deed 1, a different MIC: claim key ${claimKeyOf(request)} (deed 1's is ${claimKeyOf(r)}); payable from t=${fake.payableAt}`);
 }, false);
 
 await stage("5. commitLead later: the attacker pays first; a mempool copier tries the watcher's own bytes", async () => {
-  // wait out the seals (payClaims waits the same way for the watcher)
-  for (;;) { const now = (await pc.getBlock()).timestamp; if (now >= plan.payableAt) break; await sleepOrWarp(Number(plan.payableAt - now > 15n ? 15n : plan.payableAt - now) * 1000); }
-  if (fake) {
-    const round = await fdc.request(attacker as any, fake.request, { vault: dep.vault, salt: fake.salt });
-    results.attackerPaid = { claimKey: claimKeyOf(fake.request), round };
-    log(`   the attacker paid for its made-up request (round ${round}); claimantOf = attacker, but no proof will ever name that key`);
+  // wait out both parties' seals: the watcher's (payClaims waits the same way) and the attacker's, made after them
+  const until = fake && fake.payableAt > plan.payableAt ? fake.payableAt : plan.payableAt;
+  for (;;) { const now = (await pc.getBlock()).timestamp; if (now >= until) break; await sleepOrWarp(Number(until - now > 15n ? 15n : until - now) * 1000); }
+  const wrong: string[] = [];
+  if (fake) { // the attacker's payment and the copier's two tries are separate findings: one failing does not hide the others
+    try {
+      const round = await fdc.request(attacker as any, fake.request, { vault: dep.vault, salt: fake.salt });
+      const holder = String(await pc.readContract({ address: dep.vault, abi: vaultAbi, functionName: "claimantOf", args: [claimKeyOf(fake.request)] }));
+      results.attackerPaid = { claimKey: claimKeyOf(fake.request), round, claimant: holder };
+      log(`   the attacker paid for its made-up request (round ${round}); claimantOf(that key) = ${holder.toLowerCase() === attacker.account.address.toLowerCase() ? "the attacker" : holder}, a key no proof will name`);
+    } catch (e) {
+      results.attackerPaid = { error: short(e) };
+      wrong.push(`the attacker's payment: ${short(e)}`);
+      log(`   !! the attacker's payment: ${short(e)}`);
+    }
   }
   const [block, tip] = await Promise.all([pc.getBlock(), pc.estimateMaxPriorityFeePerGas()]);
   const fees = { gas: 300_000n, maxFeePerGas: 2n * (block.baseFeePerGas ?? 0n) + tip * 2n, maxPriorityFeePerGas: tip * 2n }; // a higher bid than the watcher's
   const copy = async (what: string, salt: Hex) => {
     const why = await pc.simulateContract({ account: attacker.account, address: dep.vault, abi: vaultAbi, functionName: "requestAttestation", args: [requests[0], salt], value: 1000n })
-      .then(() => "none", (e) => (e as any)?.cause?.data?.errorName ?? short(e));
+      .then(() => "none", (e) => revertName(e) ?? short(e));
     // sent anyway, with a set gas limit, so the refusal is on-chain for anyone to see
     const hash = await attacker.writeContract({ address: dep.vault, abi: vaultAbi, functionName: "requestAttestation", args: [requests[0], salt], value: 1000n, ...fees });
     const rc = await pc.waitForTransactionReceipt({ hash });
@@ -219,7 +247,8 @@ await stage("5. commitLead later: the attacker pays first; a mempool copier trie
   await mined(await attacker.writeContract({ address: dep.vault, abi: vaultAbi, functionName: "commitChallenge", args: [sealOf(attacker.account.address, requests[0], salt)] }), "copier seal");
   const fresh = await copy("a seal made this moment", salt);
   results.copier = { noSeal: bare, freshSeal: fresh };
-  if (bare.status !== "reverted" || fresh.status !== "reverted") throw new Error("a copier's request was accepted");
+  if (bare.status !== "reverted" || fresh.status !== "reverted") wrong.push("a copier's request was accepted");
+  if (wrong.length) throw new Error(wrong.join("; "));
 }, false);
 
 await stage("6. the watcher pays, waits for the FDC and files the docket", async () => {
@@ -237,12 +266,20 @@ await stage("6. the watcher pays, waits for the FDC and files the docket", async
   results.stipends = paid.map((e) => ({ claimKey: e.args.claimKey, to: e.args.claimant, paid: e.args.paid }));
   const toWatcher = paid.filter((e) => e.args.claimant.toLowerCase() === watcher.account.address.toLowerCase()).length;
   log(`   filed ${rc.transactionHash}: ${paid.length} stipend(s), ${toWatcher} to the watcher, ${paid.length - toWatcher} to anyone else`);
-  if (fake) log(`   the made-up request's key was paid: ${paid.some((e) => e.args.claimKey === claimKeyOf(fake!.request)) ? "!! yes" : "no"}`);
+  const madeUp = results.attackerPaid as { round?: bigint } | undefined;
+  let attested = false;
+  if (fake && madeUp?.round !== undefined) { // its round is no later than the watcher's, so it is final by now: the DA layer answers at once
+    attested = await fdc.proof(madeUp.round, fake.request, "EVMTransaction", 30_000).then(() => true, () => false);
+    results.madeUpAttested = attested;
+    log(`   the made-up request, round ${madeUp.round}: ${attested ? "!! the FDC attested it" : "the FDC attested nothing for it"}`);
+  }
+  if (fake) log(`   the made-up request's key was paid: ${paid.some((e) => e.args.claimKey === claimKeyOf(fake!.request)) ? "!! yes" : madeUp?.round !== undefined ? "no" : "no (the attacker never paid for it: see stage 5)"}`);
   const owed = await pc.readContract({ address: dep.vault, abi: vaultAbi, functionName: "owed", args: [watcher.account.address] });
   const claim = await mined(await watcher.writeContract({ address: dep.vault, abi: vaultAbi, functionName: "claim" }), "claim");
   results.claimed = { owed, tx: claim.transactionHash };
   log(`   the watcher claimed ${C2(owed as bigint)}: ${claim.transactionHash}`);
   if (toWatcher !== 3) throw new Error(`expected 3 stipends to the watcher, got ${toWatcher}`);
+  if (attested) throw new Error("the FDC attested a request with a made-up MIC");
 });
 
 await finish(failures.length ? 1 : 0);
